@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+fail=0
+
+ok()   { printf '✓ %s\n' "$1"; }
+bad()  { printf '✗ %s\n' "$1"; fail=1; }
+check_file() { [[ -f "$ROOT/$1" ]] && ok "$1" || bad "missing $1"; }
+
+printf 'AzerCoreOps preflight\nRoot: %s\n\n' "$ROOT"
+check_file CMakeLists.txt
+check_file src/mod_azercore_ops.cpp
+check_file src/mod_azercore_ops_loader.cpp
+check_file src/Manifest/AzerCoreOpsManifest.cpp
+check_file src/Protocol/ChatProtocol.cpp
+check_file src/Inspectors/Instance/InstanceInspector.cpp
+check_file src/Inspectors/Quest/QuestInspector.cpp
+check_file addon/AzerCoreOps/AzerCoreOps.lua
+check_file addon/AzerCoreOps/AzerCoreOps.toc
+
+if grep -q '#include "Chat.h"' "$ROOT/src/mod_azercore_ops.cpp"; then ok 'AzerothCore command API header'; else bad 'Chat.h missing from command registration'; fi
+if grep -q 'Acore::ChatCommands::Optional<uint8>' "$ROOT/src/Inspectors/Instance/InstanceInspector.h"; then ok 'Optional command argument is namespace-qualified'; else bad 'Optional<uint8> is not namespace-qualified'; fi
+if grep -q 'AZERCORE_OPS_CAPABILITIES' "$ROOT/src/azercoreops_build_info.h.in"; then ok 'capability metadata'; else bad 'capability metadata missing'; fi
+
+printf '\n'
+if [[ $fail -eq 0 ]]; then
+  printf 'Preflight passed. Ready for AzerothCore configure/build validation.\n'
+else
+  printf 'Preflight failed. Correct the items above before building.\n'
+fi
+exit "$fail"
