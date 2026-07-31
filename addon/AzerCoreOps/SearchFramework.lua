@@ -1,5 +1,5 @@
 -- AzerCore Ops Search Framework
--- AzerCore Ops Platform
+-- Project Renaissance / DP003-R1
 -- Shared parsing and normalization for workspace searches.
 
 AzerCoreOpsSearch = AzerCoreOpsSearch or {}

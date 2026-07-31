@@ -28,6 +28,7 @@ public:
             { "search", AzerCoreOps::QuestInspector::Search, rbac::RBAC_PERM_COMMAND_LOOKUP_QUEST, Console::No },
             { "info", AzerCoreOps::QuestInspector::Info, rbac::RBAC_PERM_COMMAND_LOOKUP_QUEST, Console::No },
             { "audit", AzerCoreOps::QuestInspector::Audit, rbac::RBAC_PERM_COMMAND_LOOKUP_QUEST, Console::No },
+            { "log", AzerCoreOps::QuestInspector::Log, rbac::RBAC_PERM_COMMAND_LOOKUP_QUEST, Console::No },
         };
         static ChatCommandTable azerCoreOpsTable =
         {

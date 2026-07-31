@@ -30,6 +30,8 @@ Use this checklist before tagging any AzerCore Ops release.
 - [ ] Quest search works by numeric ID and title.
 - [ ] Quest details render without malformed protocol output.
 - [ ] SELF and TARGET contexts work as expected.
+- [ ] Inspect Quest Log loads every active quest for the selected online player.
+- [ ] Target Quest Log handles target changes, refresh, empty logs, no target, copy, share, and export.
 - [ ] Group audit handles solo, party, and raid states safely.
 - [ ] Search history, activity log, copy, and export functions work.
 - [ ] Instance inspection commands still respond correctly.

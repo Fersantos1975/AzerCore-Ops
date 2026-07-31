@@ -1,5 +1,5 @@
 -- AzerCore Ops Report Framework
--- AzerCore Ops Platform
+-- Project Renaissance / DP003-R1
 -- Reusable in-addon report panels. Operational output stays in context.
 
 AzerCoreOpsReports = AzerCoreOpsReports or {}

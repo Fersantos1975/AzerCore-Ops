@@ -322,4 +322,47 @@ bool QuestInspector::Audit(ChatHandler* handler, uint32 questId)
     return true;
 }
 
+bool QuestInspector::Log(ChatHandler* handler)
+{
+    Player* player = handler->getSelectedPlayer();
+    if (!player)
+    {
+        Protocol::SendQuestError(handler, "Select an online player target before inspecting their quest log");
+        return true;
+    }
+    if (handler->HasLowerSecurity(player))
+    {
+        Protocol::SendQuestError(handler, "You cannot inspect the quest log of a player with higher security");
+        return true;
+    }
+
+    uint32 count = 0;
+    for (uint16 slot = 0; slot < MAX_QUEST_LOG_SIZE; ++slot)
+        if (player->GetQuestSlotQuestId(slot))
+            ++count;
+
+    Protocol::SendQuestLogBegin(handler, player->GetName(), count);
+    uint32 emitted = 0;
+    for (uint16 slot = 0; slot < MAX_QUEST_LOG_SIZE; ++slot)
+    {
+        uint32 questId = player->GetQuestSlotQuestId(slot);
+        if (!questId)
+            continue;
+
+        Quest const* quest = sObjectMgr->GetQuestTemplate(questId);
+        if (!quest)
+        {
+            Protocol::SendQuestLogEntry(handler, slot + 1, questId, "Unknown quest", "UNKNOWN", 0, 0, "Unknown", "UNKNOWN");
+            ++emitted;
+            continue;
+        }
+
+        Protocol::SendQuestLogEntry(handler, slot + 1, questId, quest->GetTitle(), QuestStatusName(player, quest),
+            quest->GetMinLevel(), quest->GetQuestLevel(), QuestTypeName(quest), QuestFaction(quest));
+        ++emitted;
+    }
+    Protocol::SendQuestLogEnd(handler, player->GetName(), emitted);
+    return true;
+}
+
 }

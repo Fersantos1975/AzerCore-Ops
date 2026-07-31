@@ -26,6 +26,9 @@ void SendQuestInfoEnd(ChatHandler* handler, std::uint32_t id, std::uint32_t chai
 void SendQuestAuditBegin(ChatHandler* handler, std::uint32_t id, std::string const& title, std::uint32_t members);
 void SendQuestAuditMember(ChatHandler* handler, std::string const& name, std::string const& result, std::string const& status, std::string const& eligibility, std::string const& reason);
 void SendQuestAuditEnd(ChatHandler* handler);
+void SendQuestLogBegin(ChatHandler* handler, std::string const& player, std::uint32_t count);
+void SendQuestLogEntry(ChatHandler* handler, std::uint32_t slot, std::uint32_t id, std::string const& title, std::string const& status, std::int32_t minLevel, std::int32_t level, std::string const& type, std::string const& faction);
+void SendQuestLogEnd(ChatHandler* handler, std::string const& player, std::uint32_t count);
 }
 
 #endif

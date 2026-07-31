@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.5.1 — Target Quest Log
+
+### Added
+
+- Server-side inspection of the selected online player's active quest log.
+- Structured `QUEST_LOG_BEGIN`, `QUEST_LOG_ENTRY`, and `QUEST_LOG_END` protocol messages.
+- Quest-log entry metadata for slot, ID, title, status, level, minimum level, type, and faction.
+- Addon Target Player report with loading, empty-log, error, copy, share, export, refresh, and target-change handling.
+- `QUEST_TARGET_LOG` module capability.
+
+### Updated
+
+- Synchronized the repository addon with the latest in-game-tested Quest workspace.
+- Renamed the former Eligibility workspace to Instance Access.
+- Added safe plain-text Quest References for the current client/core quest-link limitation.
+- Added saved-search history navigation and confirmed history deletion.
+
 ## 0.5.0 — Foundation Release
 
 ### Added

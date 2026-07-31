@@ -5,13 +5,14 @@
 
 AzerCore Ops Platform combines an AzerothCore C++ module with a World of Warcraft: Wrath of the Lich King 3.3.5a addon. Its flagship workspace, **Quest Intelligence**, provides quest inspection, contextual analysis, group auditing, history, diagnostics, and report export for administrators and Game Masters.
 
-> **Development status:** `0.5.0` foundation release. The source requires compilation and in-game validation against a supported AzerothCore checkout before production use.
+> **Development status:** `0.5.1` target Quest Log release candidate. The source requires compilation and in-game validation against a supported AzerothCore checkout before production use.
 
 ## Features
 
 - Quest search by ID or title
 - Quest details, eligibility, requirements, rewards, NPCs, and chain analysis
 - SELF and TARGET inspection contexts
+- Complete active Quest Log inspection for a selected online player
 - Group quest auditing
 - Search history and activity logging
 - Report copy and export workflows
