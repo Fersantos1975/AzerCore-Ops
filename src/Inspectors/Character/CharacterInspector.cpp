@@ -123,7 +123,7 @@ bool CharacterInspector::SaveTarget(ChatHandler* handler)
         Protocol::SendCharacterSaveResult(handler, player->GetName(), "DENIED", "Target has higher security");
         return true;
     }
-    player->SaveToDB();
+    player->SaveToDB(false, false);
     Protocol::SendCharacterSaveResult(handler, player->GetName(), "SUCCESS", "Character state persisted without logging the player out");
     return true;
 }
