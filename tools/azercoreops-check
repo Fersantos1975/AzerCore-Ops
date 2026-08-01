@@ -16,6 +16,7 @@ check_file src/Manifest/AzerCoreOpsManifest.cpp
 check_file src/Protocol/ChatProtocol.cpp
 check_file src/Inspectors/Instance/InstanceInspector.cpp
 check_file src/Inspectors/Quest/QuestInspector.cpp
+check_file src/Inspectors/Character/CharacterInspector.cpp
 check_file addon/AzerCoreOps/AzerCoreOps.lua
 check_file addon/AzerCoreOps/AzerCoreOps.toc
 

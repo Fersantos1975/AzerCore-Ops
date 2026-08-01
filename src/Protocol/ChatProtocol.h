@@ -36,6 +36,16 @@ void SendQuestAuditEnd(ChatHandler* handler);
 void SendQuestLogBegin(ChatHandler* handler, std::string const& player, std::uint32_t count);
 void SendQuestLogEntry(ChatHandler* handler, std::uint32_t slot, std::uint32_t id, std::string const& title, std::string const& status, std::int32_t minLevel, std::int32_t level, std::string const& type, std::string const& faction);
 void SendQuestLogEnd(ChatHandler* handler, std::string const& player, std::uint32_t count);
+void SendCharacterError(ChatHandler* handler, std::string const& reason);
+void SendCharacterBegin(ChatHandler* handler, std::string const& player, std::string const& mode);
+void SendCharacterOverview(ChatHandler* handler, std::string const& player, std::uint32_t level, std::uint32_t race, std::uint32_t playerClass, std::string const& faction, std::uint32_t guildId, std::string const& guid);
+void SendCharacterState(ChatHandler* handler, bool alive, bool combat, std::uint32_t health, std::uint32_t maxHealth, std::uint32_t powerType, std::uint32_t power, std::uint32_t maxPower);
+void SendCharacterLocation(ChatHandler* handler, std::uint32_t map, std::uint32_t zone, std::uint32_t area, std::uint32_t instance, std::uint32_t phase, float x, float y, float z, float orientation, bool authorized);
+void SendCharacterInventory(ChatHandler* handler, std::uint32_t used, std::uint32_t capacity, std::uint32_t equipped, std::uint32_t averageItemLevel);
+void SendCharacterProfession(ChatHandler* handler, std::uint32_t id, std::string const& name, std::string const& category, std::uint32_t value, std::uint32_t maximum);
+void SendCharacterRaid(ChatHandler* handler, std::string const& raid, std::string const& difficulty, std::string const& section, std::uint32_t achievement, bool complete);
+void SendCharacterEnd(ChatHandler* handler, std::string const& player);
+void SendCharacterSaveResult(ChatHandler* handler, std::string const& player, std::string const& result, std::string const& reason);
 }
 
 #endif

@@ -23,17 +23,26 @@
 
 ## Role-aware operating modes
 
-- Add Automatic, Player, and GM operating modes before the wider 0.6.x workspace expansion.
-- Default to Automatic and derive the effective mode from the module permissions handshake.
-- Always allow a GM to select the safer read-only Player Mode.
-- Never allow an addon setting to grant GM authority; the server remains authoritative for every command.
-- Hide mutation and administrative operations in Player Mode while retaining permitted inspection, readiness, and report tools.
-- Show a persistent PLAYER MODE or GM MODE indicator and immediately downgrade the interface if permissions are lost.
-- Maintain a documented feature/permission matrix and apply it through centralized UI state rather than per-frame polling.
+- Add Automatic, Player, and GM operating modes before the wider 0.6.x workspace expansion. *(Added in 0.5.3.)*
+- Default to Automatic and derive the effective mode from the module permissions handshake. *(Added in 0.5.3.)*
+- Always allow a GM to select the safer read-only Player Mode. *(Added in 0.5.3.)*
+- Never allow an addon setting to grant GM authority; the server remains authoritative for every command. *(Added in 0.5.3.)*
+- Hide mutation and administrative operations in Player Mode while retaining permitted inspection, readiness, and report tools. *(Added in 0.5.3.)*
+- Immediately downgrade the interface if permissions are lost. *(Added in 0.5.3; a persistent global mode badge remains under consideration.)*
+- Maintain a documented feature/permission matrix and apply it through centralized UI state rather than per-frame polling. *(Initial implementation added in 0.5.3.)*
+
+## 0.5.3 — Character Intelligence
+
+- Add role-aware Character inspection with Overview, Inventory, Professions, Raid Experience, and Technical Details.
+- Treat recorded raid achievements as experience evidence, never as proof of player mastery.
+- Keep Technical Details and target-save operations server-authorized and GM-only.
+- Clear stale target records immediately when the selected player changes or disappears.
+- Keep copied, shared, and exported Character reports free of sensitive technical identifiers.
+- Preserve self-only character saving while offering a separately confirmed GM target-save operation.
 
 ## Future intelligence workspaces
 
-- Character Intelligence
+- Character Intelligence *(initial workspace added in 0.5.3)*
 - Instance Intelligence
 - Group Intelligence
 - Guild Intelligence

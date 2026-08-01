@@ -1,6 +1,6 @@
-# AzerCore Ops Platform 0.5.2 — Instance Access
+# AzerCore Ops Platform 0.5.3 — Character Intelligence
 
-AzerCore Ops Platform 0.5.2 connects the completed Instance Access interface to a structured server-module backend while retaining the completed Quest Intelligence and Target Quest Log workflows.
+AzerCore Ops Platform 0.5.3 adds a role-aware Character Inspector while retaining the completed Instance Access, Quest Intelligence, and Target Quest Log workflows.
 
 ## Included
 
@@ -19,10 +19,13 @@ AzerCore Ops Platform 0.5.2 connects the completed Instance Access interface to 
 - Numbered quest chains with selected-quest position and player-specific status
 - Numbered Courier chunks for complete long-report delivery through Blizzard chat
 - Repository architecture, design-system documentation, contribution guidance, and release validation tooling
+- Server-authoritative Automatic, Player, and GM operation modes
+- Character Overview, Inventory, Professions, Raid Experience, restricted Technical Details, and Character Activity
+- Guarded target saving with structured success or denial results and no logout side effect
 
 ## Verification state
 
-The addon workspaces have passed Lua parsing and repository preflight validation. The combined 0.5.2 repository requires a clean AzerothCore compilation and the Instance Access smoke tests in `RELEASE-CHECKLIST.md` before publication.
+The addon workspaces have passed Lua parsing and repository preflight validation. The combined 0.5.3 repository still requires a clean AzerothCore compilation and the Character Intelligence smoke tests in `RELEASE-CHECKLIST.md` before publication.
 
 ## Known limitation
 

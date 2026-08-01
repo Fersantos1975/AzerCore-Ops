@@ -2,16 +2,26 @@
 
 #include "Chat.h"
 #include "Utilities/AzerCoreOpsText.h"
+#include "WorldSession.h"
 
 namespace AzerCoreOps::Protocol
 {
 void SendVersion(ChatHandler* handler, BuildInfo const& info)
 {
+    bool gm = handler && handler->GetSession() && handler->GetSession()->GetSecurity() >= SEC_GAMEMASTER;
+    std::string permissions = std::string("CHARACTER_MODE=") + (gm ? "GM" : "PLAYER") +
+        ";CHARACTER_TECHNICAL=" + (gm ? "GRANTED" : "RESTRICTED") +
+        ";CHARACTER_SAVE_TARGET=" + (gm ? "GRANTED" : "RESTRICTED");
+    std::string features = "CHARACTER:CHARACTER_INSPECT,CHARACTER_INVENTORY,CHARACTER_PROFESSIONS,CHARACTER_RAID_EXPERIENCE;INSTANCE:INSTANCE_SEARCH,INSTANCE_AUDIT,INSTANCE_STRUCTURED_BINDS;QUEST:QUEST_SEARCH,QUEST_INFO,QUEST_TARGET_LOG";
     handler->PSendSysMessage(
-        "AZERCORE_OPS|VERSION|module={}|protocol={}|release={}|capabilities={}|modulegit={}|moduledirty={}|core={}|coredate={}|coredirty={}|playerbots={}|playerbotsdirty={}|build={}|built={}",
-        info.moduleVersion, info.protocolVersion, info.releaseChannel, info.capabilities, info.moduleCommit, info.moduleWorkspace,
+        "AZERCORE_OPS|VERSION|module={}|protocol={}|capschema=1|release={}|capabilities={}|features={}|permissions={}|modulegit={}|moduledirty={}|core={}|coredate={}|coredirty={}|playerbots={}|playerbotsdirty={}|build={}|built={}",
+        info.moduleVersion, info.protocolVersion, info.releaseChannel, info.capabilities, features, permissions, info.moduleCommit, info.moduleWorkspace,
         info.coreCommit, info.coreDate, info.coreWorkspace, info.playerbotsCommit,
         info.playerbotsWorkspace, info.buildType, info.builtAt);
+    handler->PSendSysMessage("AZERCORE_OPS|CAPABILITIES|values={}|features={}", info.capabilities, features);
+    handler->PSendSysMessage("AZERCORE_OPS|PERMISSIONS|values={}", permissions);
+    handler->PSendSysMessage("AZERCORE_OPS|BUILD|modulegit={}|moduledirty={}|core={}|coredate={}|coredirty={}|playerbots={}|playerbotsdirty={}", info.moduleCommit, info.moduleWorkspace, info.coreCommit, info.coreDate, info.coreWorkspace, info.playerbotsCommit, info.playerbotsWorkspace);
+    handler->PSendSysMessage("AZERCORE_OPS|BUILD_EXT|build={}|built={}", info.buildType, info.builtAt);
 }
 
 void SendError(ChatHandler* handler, std::string const& reason) { handler->PSendSysMessage("AZERCORE_OPS|ERROR|reason={}", Clean(reason)); }
@@ -42,4 +52,14 @@ void SendQuestAuditEnd(ChatHandler* handler) { handler->SendSysMessage("AZERCORE
 void SendQuestLogBegin(ChatHandler* handler, std::string const& player, std::uint32_t count) { handler->PSendSysMessage("AZERCORE_OPS|QUEST_LOG_BEGIN|player={}|count={}", Clean(player), count); }
 void SendQuestLogEntry(ChatHandler* handler, std::uint32_t slot, std::uint32_t id, std::string const& title, std::string const& status, std::int32_t minLevel, std::int32_t level, std::string const& type, std::string const& faction) { handler->PSendSysMessage("AZERCORE_OPS|QUEST_LOG_ENTRY|slot={}|id={}|title={}|status={}|min={}|level={}|type={}|faction={}", slot, id, Clean(title), status, minLevel, level, Clean(type), faction); }
 void SendQuestLogEnd(ChatHandler* handler, std::string const& player, std::uint32_t count) { handler->PSendSysMessage("AZERCORE_OPS|QUEST_LOG_END|player={}|count={}", Clean(player), count); }
+void SendCharacterError(ChatHandler* handler, std::string const& reason) { if (handler) handler->PSendSysMessage("AZERCORE_OPS|CHARACTER_ERROR|reason={}", Clean(reason)); }
+void SendCharacterBegin(ChatHandler* handler, std::string const& player, std::string const& mode) { handler->PSendSysMessage("AZERCORE_OPS|CHARACTER_BEGIN|player={}|mode={}", Clean(player), mode); }
+void SendCharacterOverview(ChatHandler* handler, std::string const& player, std::uint32_t level, std::uint32_t race, std::uint32_t playerClass, std::string const& faction, std::uint32_t guildId, std::string const& guid) { handler->PSendSysMessage("AZERCORE_OPS|CHARACTER_OVERVIEW|player={}|level={}|race={}|class={}|faction={}|guild={}|guid={}", Clean(player), level, race, playerClass, faction, guildId, Clean(guid)); }
+void SendCharacterState(ChatHandler* handler, bool alive, bool combat, std::uint32_t health, std::uint32_t maxHealth, std::uint32_t powerType, std::uint32_t power, std::uint32_t maxPower) { handler->PSendSysMessage("AZERCORE_OPS|CHARACTER_STATE|alive={}|combat={}|health={}|maxhealth={}|powertype={}|power={}|maxpower={}", alive ? 1 : 0, combat ? 1 : 0, health, maxHealth, powerType, power, maxPower); }
+void SendCharacterLocation(ChatHandler* handler, std::uint32_t map, std::uint32_t zone, std::uint32_t area, std::uint32_t instance, std::uint32_t phase, float x, float y, float z, float orientation, bool authorized) { handler->PSendSysMessage("AZERCORE_OPS|CHARACTER_LOCATION|map={}|zone={}|area={}|instance={}|phase={}|x={:.2f}|y={:.2f}|z={:.2f}|o={:.2f}|authorized={}", map, zone, area, instance, phase, x, y, z, orientation, authorized ? 1 : 0); }
+void SendCharacterInventory(ChatHandler* handler, std::uint32_t used, std::uint32_t capacity, std::uint32_t equipped, std::uint32_t averageItemLevel) { handler->PSendSysMessage("AZERCORE_OPS|CHARACTER_INVENTORY|used={}|capacity={}|equipped={}|average={}", used, capacity, equipped, averageItemLevel); }
+void SendCharacterProfession(ChatHandler* handler, std::uint32_t id, std::string const& name, std::string const& category, std::uint32_t value, std::uint32_t maximum) { handler->PSendSysMessage("AZERCORE_OPS|CHARACTER_PROFESSION|id={}|name={}|category={}|value={}|maximum={}", id, Clean(name), category, value, maximum); }
+void SendCharacterRaid(ChatHandler* handler, std::string const& raid, std::string const& difficulty, std::string const& section, std::uint32_t achievement, bool complete) { handler->PSendSysMessage("AZERCORE_OPS|CHARACTER_RAID|raid={}|difficulty={}|section={}|achievement={}|complete={}", Clean(raid), Clean(difficulty), Clean(section), achievement, complete ? 1 : 0); }
+void SendCharacterEnd(ChatHandler* handler, std::string const& player) { handler->PSendSysMessage("AZERCORE_OPS|CHARACTER_END|player={}", Clean(player)); }
+void SendCharacterSaveResult(ChatHandler* handler, std::string const& player, std::string const& result, std::string const& reason) { handler->PSendSysMessage("AZERCORE_OPS|CHARACTER_SAVE_RESULT|player={}|result={}|reason={}", Clean(player), result, Clean(reason)); }
 }

@@ -41,6 +41,14 @@ Use this checklist before tagging any AzerCore Ops release.
 - [ ] Non-applicable bind selection explains why without selecting the bind.
 - [ ] Multi-select batch unbind requires confirmation and reports every success or failure in Bind Activity.
 - [ ] Post-unbind target reinspection confirms that successfully removed binds are gone.
+- [ ] Automatic mode follows the module permission handshake; Player Mode cannot expose GM-only operations.
+- [ ] Permission loss immediately downgrades the interface without an `OnUpdate` polling loop.
+- [ ] Character inspection populates Overview, Inventory, Professions, Raid Experience, and Technical Details.
+- [ ] Changing or clearing the selected target immediately removes stale Character records.
+- [ ] Technical identifiers and exact location remain unavailable in Player Mode and excluded from shared reports.
+- [ ] Raid Experience clearly labels achievements as recorded evidence rather than proof of mastery.
+- [ ] Save My Character remains self-only; Save Target requires GM authorization and confirmation.
+- [ ] Character copy, share, and export reports contain no account, email, IP, GUID, or exact-location data.
 
 ## Release publication
 

@@ -1,6 +1,6 @@
 local ADDON = ...
 
--- AzerCore Ops Platform 0.5.2-alpha2-instance-access-complete
+-- AzerCore Ops Platform 0.5.3-alpha1-character-intelligence
 -- Target: WoW 3.3.5a / AzerothCore. All server commands live here so that
 -- branch-specific command names can be changed without touching the UI.
 local CMD = {
@@ -23,6 +23,8 @@ local CMD = {
   questInfo = ".azercoreops quest info %d",
   questAudit = ".azercoreops quest audit %d",
   questLog = ".azercoreops quest log",
+  characterInspect = ".azercoreops character inspect",
+  characterSaveTarget = ".azercoreops character save",
   version = ".azercoreops version",
 }
 
@@ -55,6 +57,9 @@ local questUI={results={},rows={},info=nil,chain={},detailText=nil,chainText=nil
   history={},historyIndex=0,resultOffset=0,auditFilter="ALL",auditText=nil,auditChild=nil,questIdInternal=false,contextName=nil,contextKind="SELF",contextLabel=nil,lockedQuestId=nil,lockedQuestTitle=nil,activeWorkspace="DATABASE",targetQuestText=nil,targetQuestScroll=nil,targetQuestChild=nil,lockedLabel=nil,
   targetLogEntries={},targetLogActive=false,targetLogLoading=false,targetLogPlayer=nil,targetLogError=nil}
 local compatUI={data=nil,text=nil,informationText=nil,received={}}
+local characterUI={activity={},buttons={},viewButtons={},target=nil,identityFrame=nil,portrait=nil,nameText=nil,metaText=nil,
+  overviewText=nil,stateText=nil,locationText=nil,contextText=nil,statusText=nil,modeText=nil,Update=nil,Render=nil,Log=nil,
+  view="OVERVIEW",overviewPanels={},reportPanel=nil,reportText=nil,reportChild=nil,server={},capturePlayer=nil}
 local instanceUI={my={},target={},captureUntil=0,myRows={},targetRows={},myOffset=0,targetOffset=0,targetLabel=nil,
   selectedBind=nil,filter="ALL",filterButtons={},detailText=nil,summaryText=nil,myEmpty=nil,targetEmpty=nil,inspectionText=nil,
   inspectedPlayer=nil,inspectedAt=nil,statusText=nil,myScroll=nil,targetScroll=nil,detailScroll=nil,horizontals={},activity={},
@@ -67,15 +72,16 @@ local auditUI={search={},members={},searchRows={},memberRows={},filterButtons={}
 local exportFrame, exportEdit, exportActionButton
 local shareFrame, shareText, courierUI
 local ShowSelectableReport
+local EnsureShareFrame
 local ApplyPlayerTargetIdentity
 local defaults={
-  startMinimized=true,showMinimap=true,showMini=true,mbfCompatibility=true,scale=1,
+  startMinimized=true,showMinimap=true,showMini=true,mbfCompatibility=true,scale=1,roleMode="AUTOMATIC",
   confirmCommands=true,hideAuditChat=true,defaultDifficulty=0,
   auditTooltips=true,wrapAuditReasons=true,mouseWheelAudit=true,problemsFirst=false,
   rememberAuditFilter=true,autoReaudit=false,confirmResetSelected=true,
   warnNoTarget=true,compactAuditRows=false,auditFontSize=10,shiftClickInsert=true,
 }
-local ADDON_VERSION="0.5.2-alpha2-instance-access-complete"
+local ADDON_VERSION="0.5.3-alpha1-character-intelligence"
 local PROTOCOL_VERSION="1"
 local TESTED_CORE="190184a04539"
 local TESTED_PLAYERBOTS="ba46fcdecde3"
@@ -89,6 +95,14 @@ local function Settings()
     end
   end
   return AzerCoreOpsDB.settings
+end
+
+local function EffectiveCharacterMode()
+  local requested=tostring(Settings().roleMode or "AUTOMATIC"):upper()
+  local granted=tostring(Platform:PermissionFor("CHARACTER_MODE") or "PLAYER"):upper()
+  if requested=="PLAYER" then return "PLAYER" end
+  if requested=="GM" then return granted=="GM" and "GM" or "PLAYER" end
+  return granted=="GM" and "GM" or "PLAYER"
 end
 
 local function Print(msg, errorColor)
@@ -275,20 +289,212 @@ local function SelectTab(name)
   activeTab=name; AzerCoreOpsDB.activeTab=name
   for n,p in pairs(pages) do if n==name then p:Show() else p:Hide() end end
   for n,b in pairs(tabs) do b:SetBackdropColor(unpack(n==name and C.selected or C.button)); b:SetBackdropBorderColor(unpack(n==name and C.gold or C.border)) end
+  if name=="Character" and characterUI.Update then characterUI.Update() end
   SetStatus(name=="Teleport" and "Movement workspace" or name.." workspace")
 end
 
 local function BuildCharacter()
-  local p=NewPage("Character"); local h=Label(p,"Character commands"); h:SetPoint("TOPLEFT",18,-18)
-  AddCommandGrid(p,{
-    {"Revive",function() SendCommand(CMD.revive) end,"Revive selected player or yourself"},
-    {"Repair",function() SendCommand(CMD.repair) end,"Repair selected player's equipment"},
-    {"Summon",function() SendCommand(CMD.summon) end,"Summon selected player"},
-    {"Appear",function() SendCommand(CMD.appear) end,"Teleport to selected player"},
-    {"Combat Stop",function() SendCommand(CMD.combatStop) end,"Stop combat for target or yourself"},
-    {"Save",function() SendCommand(CMD.save) end,"Save your character"},
-  },-48)
-  local note=Label(p,"Commands use your current target when AzerothCore supports target selection.","GameFontHighlightSmall"); note:SetTextColor(unpack(C.white)); note:SetPoint("TOPLEFT",18,-145)
+  local p=NewPage("Character")
+  local header=CreateFrame("Frame",nil,p); header:SetPoint("TOPLEFT",10,-10); header:SetPoint("TOPRIGHT",-10,-10); header:SetHeight(52); Backdrop(header,C.bg)
+  local h=Label(header,"Character Inspector","GameFontNormalLarge"); h:SetPoint("TOPLEFT",12,-8)
+  local subtitle=header:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); subtitle:SetPoint("TOPLEFT",12,-31); subtitle:SetText("Character status, recovery and controlled GM operations"); subtitle:SetTextColor(unpack(C.white))
+  local mode=Label(header,"Mode: Player","GameFontNormalSmall"); mode:SetPoint("TOPRIGHT",-12,-17); characterUI.modeText=mode
+
+  local operations=CreateFrame("Frame",nil,p); operations:SetPoint("TOPLEFT",10,-70); operations:SetPoint("BOTTOMLEFT",10,36); operations:SetWidth(148); Backdrop(operations,C.panel)
+  local opTitle=Section(operations,"OPERATIONS",C.gold); opTitle:SetPoint("TOPLEFT",10,-10)
+
+  local workspace=CreateFrame("Frame",nil,p); workspace:SetPoint("TOPLEFT",166,-70); workspace:SetPoint("BOTTOMRIGHT",-10,36); Backdrop(workspace,C.panel)
+  local identity=CreateFrame("Frame",nil,workspace); identity:SetPoint("TOPLEFT",8,-8); identity:SetPoint("TOPRIGHT",-8,-8); identity:SetHeight(92); Backdrop(identity,C.panel); characterUI.identityFrame=identity
+  local identityHeading=Section(identity,"SELECTED TARGET",C.inspect); identityHeading:SetPoint("TOPLEFT",10,-9)
+  local portraitFrame=CreateFrame("Frame",nil,identity); portraitFrame:SetPoint("TOPLEFT",10,-28); portraitFrame:SetWidth(50); portraitFrame:SetHeight(50); Backdrop(portraitFrame,C.panel)
+  local portrait=portraitFrame:CreateTexture(nil,"ARTWORK"); portrait:SetPoint("TOPLEFT",3,-3); portrait:SetPoint("BOTTOMRIGHT",-3,3); characterUI.portrait=portrait
+  local nameText=identity:CreateFontString(nil,"OVERLAY","GameFontNormalLarge"); nameText:SetPoint("TOPLEFT",72,-31); nameText:SetTextColor(unpack(C.white)); characterUI.nameText=nameText
+  local metaText=identity:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); metaText:SetPoint("TOPLEFT",72,-56); metaText:SetPoint("BOTTOMRIGHT",-10,8); metaText:SetJustifyH("LEFT"); metaText:SetJustifyV("TOP"); metaText:SetTextColor(unpack(C.white)); characterUI.metaText=metaText
+
+  local tabBar=CreateFrame("Frame",nil,workspace); tabBar:SetPoint("TOPLEFT",8,-108); tabBar:SetPoint("TOPRIGHT",-8,-108); tabBar:SetHeight(28)
+  local function CharacterViewButton(label,view,width,x)
+    local b=Button(tabBar,label,width,24,function()
+      characterUI.view=view; if characterUI.Render then characterUI.Render() end
+    end); b:SetPoint("TOPLEFT",x,0); b:SetScript("OnLeave",function() if characterUI.Render then characterUI.Render() end; GameTooltip:Hide() end); characterUI.viewButtons[view]=b; return b
+  end
+  CharacterViewButton("Overview","OVERVIEW",76,0)
+  CharacterViewButton("Inventory","INVENTORY",76,80)
+  CharacterViewButton("Professions","PROFESSIONS",86,160)
+  CharacterViewButton("Raid Experience","RAID",112,250)
+  CharacterViewButton("Technical","TECHNICAL",82,366)
+
+  local overview=CreateFrame("Frame",nil,workspace); overview:SetPoint("TOPLEFT",8,-140); overview:SetPoint("TOPRIGHT",workspace,"TOP",-4,-140); overview:SetHeight(132); Backdrop(overview,C.panel)
+  local overviewHeading=Section(overview,"CHARACTER OVERVIEW",C.inspect); overviewHeading:SetPoint("TOPLEFT",10,-10)
+  local overviewText=overview:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); overviewText:SetPoint("TOPLEFT",10,-34); overviewText:SetPoint("BOTTOMRIGHT",-10,8); overviewText:SetJustifyH("LEFT"); overviewText:SetJustifyV("TOP"); overviewText:SetTextColor(unpack(C.white)); characterUI.overviewText=overviewText
+
+  local state=CreateFrame("Frame",nil,workspace); state:SetPoint("TOPLEFT",workspace,"TOP",4,-140); state:SetPoint("TOPRIGHT",-8,-140); state:SetHeight(132); Backdrop(state,C.panel)
+  local stateHeading=Section(state,"CURRENT STATE",C.diagnose); stateHeading:SetPoint("TOPLEFT",10,-10)
+  local stateText=state:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); stateText:SetPoint("TOPLEFT",10,-34); stateText:SetPoint("BOTTOMRIGHT",-10,8); stateText:SetJustifyH("LEFT"); stateText:SetJustifyV("TOP"); stateText:SetTextColor(unpack(C.white)); characterUI.stateText=stateText
+
+  local location=CreateFrame("Frame",nil,workspace); location:SetPoint("TOPLEFT",8,-280); location:SetPoint("TOPRIGHT",workspace,"TOP",-4,-280); location:SetPoint("BOTTOM",workspace,"BOTTOM",0,44); Backdrop(location,C.panel)
+  local locationHeading=Section(location,"LOCATION",C.diagnose); locationHeading:SetPoint("TOPLEFT",10,-10)
+  local locationText=location:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); locationText:SetPoint("TOPLEFT",10,-34); locationText:SetPoint("BOTTOMRIGHT",-10,8); locationText:SetJustifyH("LEFT"); locationText:SetJustifyV("TOP"); locationText:SetWordWrap(true); locationText:SetTextColor(unpack(C.white)); characterUI.locationText=locationText
+
+  local context=CreateFrame("Frame",nil,workspace); context:SetPoint("TOPLEFT",workspace,"TOP",4,-280); context:SetPoint("TOPRIGHT",-8,-280); context:SetPoint("BOTTOM",workspace,"BOTTOM",0,44); Backdrop(context,C.panel)
+  local contextHeading=Section(context,"SELECTION CONTEXT",C.operate); contextHeading:SetPoint("TOPLEFT",10,-10)
+  local contextText=context:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); contextText:SetPoint("TOPLEFT",10,-34); contextText:SetPoint("BOTTOMRIGHT",-10,8); contextText:SetJustifyH("LEFT"); contextText:SetJustifyV("TOP"); contextText:SetWordWrap(true); contextText:SetTextColor(unpack(C.white)); characterUI.contextText=contextText
+  characterUI.overviewPanels={overview,state,location,context}
+
+  local reportPanel=CreateFrame("Frame",nil,workspace); reportPanel:SetPoint("TOPLEFT",8,-140); reportPanel:SetPoint("BOTTOMRIGHT",-8,44); Backdrop(reportPanel,C.panel); reportPanel:Hide(); characterUI.reportPanel=reportPanel
+  local reportScroll=CreateFrame("ScrollFrame","AZERCORE_OPS_CharacterReportScroll",reportPanel,"UIPanelScrollFrameTemplate"); reportScroll:SetPoint("TOPLEFT",8,-8); reportScroll:SetPoint("BOTTOMRIGHT",-28,8); reportScroll:EnableMouseWheel(true)
+  local reportChild=CreateFrame("Frame",nil,reportScroll); reportChild:SetWidth(540); reportChild:SetHeight(360); reportScroll:SetScrollChild(reportChild); characterUI.reportChild=reportChild
+  local reportText=reportChild:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); reportText:SetPoint("TOPLEFT",4,-4); reportText:SetWidth(526); reportText:SetJustifyH("LEFT"); reportText:SetJustifyV("TOP"); reportText:SetWordWrap(true); reportText:SetTextColor(unpack(C.white)); characterUI.reportText=reportText
+  reportScroll:SetScript("OnMouseWheel",function(self,delta) self:SetVerticalScroll(math.max(0,self:GetVerticalScroll()-delta*45)) end)
+
+  local function CharacterReport()
+    local target=characterUI.target
+    local lines={"AzerCore Ops — Character Inspector","Generated: "..date("%Y-%m-%d %H:%M:%S"),"Target: "..(target and target.name or "None"),"",characterUI.overviewText:GetText() or "", "",characterUI.stateText:GetText() or "", "",characterUI.locationText:GetText() or "", "",characterUI.contextText:GetText() or ""}
+    local server=characterUI.server or {}
+    if server.inventory then local r=server.inventory; table.insert(lines,""); table.insert(lines,"INVENTORY SUMMARY"); table.insert(lines,string.format("Bag slots: %s / %s | Equipped: %s | Average item level: %s",r.used or "?",r.capacity or "?",r.equipped or "?",r.average or "?")) end
+    if server.professions and #server.professions>0 then table.insert(lines,""); table.insert(lines,"PROFESSIONS"); for _,r in ipairs(server.professions) do table.insert(lines,string.format("%s | %s | %s/%s",r.category or "Skill",r.name or "Unknown",r.value or "?",r.maximum or "?")) end end
+    if server.raid and #server.raid>0 then table.insert(lines,""); table.insert(lines,"RAID EXPERIENCE — RECORDED ACHIEVEMENTS"); for _,r in ipairs(server.raid) do table.insert(lines,string.format("%s | %s | %s | %s | Achievement %s",r.complete=="1" and "COMPLETED" or "NOT RECORDED",r.raid or "Raid",r.difficulty or "?",r.section or "Unknown section",r.achievement or "?")) end; table.insert(lines,"Achievement records indicate completion, not mastery of the current role.") end
+    return table.concat(lines,"\n"):gsub("|c%x%x%x%x%x%x%x%x",""):gsub("|r","")
+  end
+  local function LogCharacter(action,result)
+    table.insert(characterUI.activity,1,string.format("[%s] %-12s %s",date("%H:%M:%S"),action,result or "Submitted"))
+    while #characterUI.activity>80 do table.remove(characterUI.activity) end
+  end
+  characterUI.Log=LogCharacter
+  local function SelectedTarget()
+    if not UnitExists("target") or not UnitIsPlayer("target") then SetStatus("Select a player before using this Character operation.",true); return end
+    return UnitName("target")
+  end
+  local function RunTargetCommand(label,command,confirm)
+    local target=SelectedTarget(); if not target then return end
+    local result="Submitted for "..target.."; authoritative result awaits server-module integration."
+    local after=function() LogCharacter(label,result); SetStatus(label.." submitted for "..target..". Check the server response for confirmation.") end
+    if confirm then Confirm(command,nil,after) else SendCommand(command); after() end
+  end
+  local function OpButton(text,y,click,tip,requiresTarget,gmOnly)
+    local b=Button(operations,text,128,28,click,tip); b:SetPoint("TOPLEFT",10,y); b.requiresTarget=requiresTarget; b.gmOnly=gmOnly; characterUI.buttons[text]=b; return b
+  end
+  OpButton("Inspect Character",-34,function()
+    characterUI.Update(); characterUI.server={professions={},raid={}}; characterUI.capturePlayer=SelectedTarget()
+    if characterUI.capturePlayer then SendCommand(CMD.characterInspect); LogCharacter("Inspect","Requested authoritative Character data for "..characterUI.capturePlayer); characterUI.statusText:SetText("Loading module Character data for "..characterUI.capturePlayer.."...") end
+  end,"Refresh client-visible and module-authoritative information for the selected player",true,false)
+  OpButton("Revive",-70,function() RunTargetCommand("Revive",CMD.revive,true) end,"Revive the explicitly selected player",true,true)
+  OpButton("Repair Equipment",-106,function() RunTargetCommand("Repair",CMD.repair,true) end,"Repair the explicitly selected player's equipment",true,true)
+  OpButton("Summon",-142,function() RunTargetCommand("Summon",CMD.summon,true) end,"Summon the explicitly selected player to your location",true,true)
+  OpButton("Appear",-178,function() RunTargetCommand("Appear",CMD.appear,true) end,"Teleport your GM character to the explicitly selected player",true,true)
+  OpButton("Stop Combat",-214,function() RunTargetCommand("Stop Combat",CMD.combatStop,true) end,"Stop combat for the explicitly selected player when supported",true,true)
+  OpButton("Save My Character",-250,function() Confirm(CMD.save,nil,function() LogCharacter("Save","Submitted for "..(UnitName("player") or "self")); SetStatus("Save submitted for your character.") end) end,"Save your own character; this command does not use the selected target")
+  OpButton("Save Target",-286,function()
+    local target=SelectedTarget(); if not target then return end
+    Confirm(CMD.characterSaveTarget,true,function() LogCharacter("Save Target","Requested authoritative save for "..target); characterUI.statusText:SetText("Waiting for target-save verification for "..target.."...") end)
+  end,"Persist the selected online character without logging that player out",true,true)
+  OpButton("Character Activity",-334,function()
+    local lines={"AzerCore Ops — Character activity","Generated: "..date("%Y-%m-%d %H:%M:%S"),""}
+    if #characterUI.activity==0 then table.insert(lines,"No Character operations recorded in this session.") else for i=#characterUI.activity,1,-1 do table.insert(lines,characterUI.activity[i]) end end
+    ShowSelectableReport("Character activity and operation output",table.concat(lines,"\n"))
+  end,"Review Character operations attempted during this session")
+
+  local footer=CreateFrame("Frame",nil,workspace); footer:SetPoint("BOTTOMLEFT",8,8); footer:SetPoint("BOTTOMRIGHT",-8,8); footer:SetHeight(28); Backdrop(footer,C.bg)
+  characterUI.statusText=footer:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); characterUI.statusText:SetPoint("LEFT",8,0); characterUI.statusText:SetPoint("RIGHT",-190,0); characterUI.statusText:SetJustifyH("LEFT"); characterUI.statusText:SetTextColor(unpack(C.white))
+  Button(footer,"Copy",48,20,function() ShowSelectableReport("Copy Character report",CharacterReport()) end,"Open the complete Character report as selectable text"):SetPoint("RIGHT",-128,0)
+  Button(footer,"Share",54,20,function() local text=CharacterReport(); local f=EnsureShareFrame(); f:SetCapturedMessage(text,"CHARACTER",function() return CharacterReport(),"CHARACTER" end); f:Show(); f:Raise(); SetStatus("Courier opened with the Character report.") end,"Open Courier with the Character report"):SetPoint("RIGHT",-70,0)
+  Button(footer,"Export",62,20,function() ShowSelectableReport("Export Character report",CharacterReport()) end,"Export the complete Character report"):SetPoint("RIGHT",-4,0)
+
+  local function CharacterViewText(view)
+    local s=characterUI.server or {}
+    if not characterUI.target then return "Select and inspect a player to load this workspace." end
+    if view=="INVENTORY" then
+      local r=s.inventory
+      if not r then return "Inventory summary has not been loaded.\n\nSelect Inspect Character to request the module-authoritative summary." end
+      local used,capacity=tonumber(r.used) or 0,tonumber(r.capacity) or 0
+      return string.format("|cffffd100INVENTORY SUMMARY|r\n\nBag slots used: %d / %d\nFree bag slots: %d\nEquipped items: %s / %d\nAverage item level: %s\n\nThis summary deliberately excludes private item-level detail from shared reports.",used,capacity,math.max(0,capacity-used),r.equipped or "?",19,r.average or "?")
+    elseif view=="PROFESSIONS" then
+      local lines={"|cffffd100PROFESSIONS|r",""}; local rows=s.professions or {}
+      if #rows==0 then table.insert(lines,"No professions were reported. Select Inspect Character to refresh.")
+      else
+        table.sort(rows,function(a,b) if a.category==b.category then return tostring(a.name)<tostring(b.name) end return tostring(a.category)<tostring(b.category) end)
+        for _,r in ipairs(rows) do table.insert(lines,string.format("%-10s  %s — %s / %s",r.category or "Skill",r.name or "Unknown",r.value or "?",r.maximum or "?")) end
+      end
+      return table.concat(lines,"\n")
+    elseif view=="RAID" then
+      local lines={"|cffffd100RAID EXPERIENCE — RECORDED ACHIEVEMENTS|r","Achievements are evidence of recorded completion; they do not prove mastery of the current role.",""}; local rows=s.raid or {}
+      if #rows==0 then table.insert(lines,"No raid-experience records were reported. Select Inspect Character to refresh.")
+      else
+        for _,difficulty in ipairs({"10 Player","25 Player"}) do
+          table.insert(lines,"|cffffff55Icecrown Citadel — "..difficulty.."|r")
+          for _,r in ipairs(rows) do if r.difficulty==difficulty then table.insert(lines,string.format("%s  %s  [Achievement %s]",r.complete=="1" and "|cff55ff55COMPLETED|r" or "|cffaaaaaaNOT RECORDED|r",r.section or "Unknown",r.achievement or "?")) end end
+          table.insert(lines,"")
+        end
+      end
+      return table.concat(lines,"\n")
+    elseif view=="TECHNICAL" then
+      if EffectiveCharacterMode()~="GM" then return "|cffff5555RESTRICTED|r\n\nTechnical Character details require module-authorized GM mode." end
+      local o,l=s.overview or {},s.location or {}
+      return string.format("|cffffd100TECHNICAL DETAILS|r\n\nCharacter GUID (low): %s\nMap ID: %s\nZone ID: %s\nArea ID: %s\nInstance ID: %s\nPhase mask: %s\nPosition: %s, %s, %s\nOrientation: %s\n\nAccount, email and network identifiers are intentionally excluded.",o.guid or "Not loaded",l.map or "?",l.zone or "?",l.area or "?",l.instance or "?",l.phase or "?",l.x or "?",l.y or "?",l.z or "?",l.o or "?")
+    end
+    return ""
+  end
+
+  characterUI.Render=function()
+    local overviewMode=characterUI.view=="OVERVIEW"
+    for _,panel in ipairs(characterUI.overviewPanels) do if overviewMode then panel:Show() else panel:Hide() end end
+    if overviewMode then characterUI.reportPanel:Hide() else
+      characterUI.reportPanel:Show(); local text=CharacterViewText(characterUI.view); characterUI.reportText:SetText(text)
+      local lines=1; for _ in text:gmatch("\n") do lines=lines+1 end; local height=math.max(360,lines*16+18); characterUI.reportText:SetHeight(height); characterUI.reportChild:SetHeight(height+8)
+    end
+    for view,button in pairs(characterUI.viewButtons) do button:SetBackdropColor(unpack(view==characterUI.view and C.selected or C.button)); button:SetBackdropBorderColor(unpack(view==characterUI.view and C.gold or C.border)) end
+  end
+
+  characterUI.Update=function()
+    local identityData=ApplyPlayerTargetIdentity(characterUI.portrait,characterUI.identityFrame)
+    characterUI.target=identityData
+    local gmMode=EffectiveCharacterMode()=="GM"
+    characterUI.modeText:SetText("Mode: "..(gmMode and "GM" or "Player"))
+    for _,button in pairs(characterUI.buttons) do
+      if button.requiresTarget or button.gmOnly then
+        local enabled=(not button.requiresTarget or identityData) and (not button.gmOnly or gmMode)
+        if enabled then button:Enable(); button:SetNormalFontObject(GameFontNormalSmall); button:SetBackdropColor(unpack(C.button))
+        else button:Disable(); button:SetNormalFontObject(GameFontDisableSmall); button:SetBackdropColor(.08,.08,.08,1) end
+      end
+    end
+    local technicalButton=characterUI.viewButtons.TECHNICAL
+    if technicalButton then if gmMode then technicalButton:Enable(); technicalButton:SetNormalFontObject(GameFontNormalSmall) else technicalButton:Disable(); technicalButton:SetNormalFontObject(GameFontDisableSmall); if characterUI.view=="TECHNICAL" then characterUI.view="OVERVIEW" end end end
+    if not identityData then
+      characterUI.nameText:SetText("No player selected"); characterUI.metaText:SetText("Select a player target to inspect Character information.")
+      characterUI.overviewText:SetText("No Character information loaded.")
+      characterUI.stateText:SetText("No player state available.")
+      characterUI.locationText:SetText("No target location available.")
+      characterUI.contextText:SetText("Target-dependent operations are unavailable.\n\nSave My Character always applies to your own character.")
+      characterUI.statusText:SetText("No player selected")
+      characterUI.Render()
+      return
+    end
+    local name=identityData.name; local faction=UnitFactionGroup("target") or "Unknown"; local guild=identityData.guild or "None"
+    characterUI.nameText:SetText(name)
+    characterUI.metaText:SetText(string.format("Level %s %s %s\nGuild: %s",tostring(identityData.level),identityData.race or "Unknown",identityData.class or "Player",guild))
+    local relation=UnitIsUnit("target","player") and "Self" or (UnitInRaid("target") and "Raid member" or (UnitInParty("target") and "Party member" or "Outside your group"))
+    characterUI.overviewText:SetText(string.format("Name: %s\nLevel: %s\nRace: %s\nClass: %s\nFaction: %s\nGuild: %s\nRelationship: %s",name,tostring(identityData.level),identityData.race or "Unknown",identityData.class or "Player",faction,guild,relation))
+    local maximum=math.max(1,UnitHealthMax("target") or 1); local health=UnitHealth("target") or 0
+    local powerMaximum=math.max(1,UnitManaMax("target") or 1); local power=UnitMana("target") or 0
+    local life=UnitIsGhost("target") and "Ghost" or (UnitIsDead("target") and "Dead" or "Alive")
+    local connection=UnitIsConnected("target") and "Online" or "Offline"
+    local combat=UnitAffectingCombat("target") and "In combat" or "Not in combat"
+    local flags=(UnitIsAFK("target") and "AFK" or (UnitIsDND("target") and "DND" or "Available"))
+    characterUI.stateText:SetText(string.format("Connection: %s\nLife state: %s\nHealth: %d / %d  (%d%%)\nPower: %d / %d  (%d%%)\nCombat: %s\nPlayer flag: %s\nVisibility: %s",connection,life,health,maximum,math.floor(health/maximum*100+.5),power,powerMaximum,math.floor(power/powerMaximum*100+.5),combat,flags,UnitIsVisible("target") and "Visible" or "Not currently visible"))
+    if UnitIsUnit("target","player") then
+      characterUI.locationText:SetText(string.format("Zone: %s\nArea: %s\n\nExact map, coordinates, orientation and instance context require the planned Character module integration.",GetRealZoneText() or "Unknown",GetSubZoneText() or "Unknown"))
+    else
+      characterUI.locationText:SetText("Target location is not exposed reliably by the client.\n\nExact map, zone, coordinates, orientation and instance context require the planned Character module integration.")
+    end
+    characterUI.contextText:SetText(string.format("Selected target: %s\nContext: %s\n\nRevive, Repair Equipment, Summon, Appear and Stop Combat require this explicit target.\n\nSave My Character always applies to %s.",name,relation,UnitName("player") or "your character"))
+    characterUI.statusText:SetText("Client-visible Character state loaded for "..name)
+    local server=characterUI.server or {}
+    if server.location and server.location.authorized=="1" then
+      local l=server.location
+      characterUI.locationText:SetText(string.format("Map ID: %s\nZone ID: %s  |  Area ID: %s\nInstance ID: %s  |  Phase: %s\nCoordinates: %s, %s, %s\nOrientation: %s",l.map or "?",l.zone or "?",l.area or "?",l.instance or "?",l.phase or "?",l.x or "?",l.y or "?",l.z or "?",l.o or "?"))
+    end
+    characterUI.Render()
+  end
+  characterUI.Update()
 end
 
 local function BuildNPC()
@@ -1031,7 +1237,7 @@ local function CourierPrepareChat(channel,target,text,partIndex,partTotal)
   return false
 end
 
-local function EnsureShareFrame()
+EnsureShareFrame=function()
   if shareFrame then return shareFrame end
   local f=CreateFrame("Frame","AZERCORE_OPS_ShareFrame",UIParent)
   f:SetWidth(720); f:SetHeight(500); f:SetClampedToScreen(true)
@@ -2446,32 +2652,74 @@ end
 
 local function BuildOptions()
   local p=CreateFrame("Frame","AZERCORE_OPS_OptionsPanel",UIParent); p.name="AzerCore Ops"; optionsPanel=p
-  local title=p:CreateFontString(nil,"ARTWORK","GameFontNormalLarge"); title:SetPoint("TOPLEFT",16,-16); title:SetText("AzerCore Ops")
-  local version=p:CreateFontString(nil,"ARTWORK","GameFontHighlightSmall"); version:SetPoint("LEFT",title,"RIGHT",8,0); version:SetText(ADDON_VERSION)
-  local note=p:CreateFontString(nil,"ARTWORK","GameFontHighlightSmall"); note:SetPoint("TOPLEFT",title,"BOTTOMLEFT",0,-8); note:SetText("Settings are saved separately for each character.")
+  local function ScrollContent(panel,name,height)
+    local scroll=CreateFrame("ScrollFrame",name,panel,"UIPanelScrollFrameTemplate")
+    scroll:SetPoint("TOPLEFT",0,0); scroll:SetPoint("BOTTOMRIGHT",-28,22)
+    local child=CreateFrame("Frame",nil,scroll); child:SetWidth(640); child:SetHeight(height); scroll:SetScrollChild(child)
+    local horizontal=CreateFrame("Slider",name.."Horizontal",panel,"OptionsSliderTemplate")
+    horizontal:SetPoint("BOTTOMLEFT",18,4); horizontal:SetPoint("BOTTOMRIGHT",-18,4); horizontal:SetHeight(14); horizontal:SetValueStep(5); horizontal:SetValue(0)
+    _G[horizontal:GetName().."Low"]:SetText(""); _G[horizontal:GetName().."High"]:SetText(""); _G[horizontal:GetName().."Text"]:SetText("")
+    horizontal:SetScript("OnValueChanged",function(_,value) scroll:SetHorizontalScroll(value) end)
+    local function UpdateHorizontal()
+      local maximum=math.max(0,child:GetWidth()-scroll:GetWidth())
+      horizontal:SetMinMaxValues(0,maximum)
+      if maximum>0 then horizontal:Show() else horizontal:SetValue(0); horizontal:Hide() end
+    end
+    panel:SetScript("OnSizeChanged",UpdateHorizontal)
+    scroll:EnableMouseWheel(true)
+    scroll:SetScript("OnMouseWheel",function(self,delta)
+      local maximum=math.max(0,child:GetHeight()-self:GetHeight())
+      self:SetVerticalScroll(math.max(0,math.min(maximum,self:GetVerticalScroll()-delta*32)))
+    end)
+    return child,scroll,horizontal,UpdateHorizontal
+  end
+  local pc,pScroll,pHorizontal,pUpdateHorizontal=ScrollContent(p,"AZERCORE_OPS_OptionsScroll",505)
+  local title=pc:CreateFontString(nil,"ARTWORK","GameFontNormalLarge"); title:SetPoint("TOPLEFT",16,-16); title:SetText("AzerCore Ops")
+  local version=pc:CreateFontString(nil,"ARTWORK","GameFontHighlightSmall"); version:SetPoint("LEFT",title,"RIGHT",8,0); version:SetText(ADDON_VERSION)
+  local note=pc:CreateFontString(nil,"ARTWORK","GameFontHighlightSmall"); note:SetPoint("TOPLEFT",title,"BOTTOMLEFT",0,-8); note:SetText("Settings are saved separately for each character.")
   local controls={}
   local function Check(parent,store,name,label,key,y,tip)
     local c=CreateFrame("CheckButton","AZERCORE_OPS_Opt"..name,parent,"InterfaceOptionsCheckButtonTemplate"); c:SetPoint("TOPLEFT",16,y)
     _G[c:GetName().."Text"]:SetText(label); c.tooltipText=tip; c:SetScript("OnClick",function(self) Settings()[key]=self:GetChecked() and true or false; ApplySettings() end)
     store[key]=c; return c
   end
-  Check(p,controls,"StartMinimized","Start minimized after login or reload","startMinimized",-70,"Apply on the next login or /reload.")
-  Check(p,controls,"Minimap","Show AzerCoreOps minimap button","showMinimap",-102,"Show the AzerCoreOps button around the minimap.")
-  Check(p,controls,"Mini","Show floating AzerCoreOps button when minimized","showMini",-134,"Show the movable AzerCoreOps button when the main window is hidden.")
-  Check(p,controls,"MBF","Keep AzerCoreOps outside Minimap Button Frame","mbfCompatibility",-166,"Enabled: MBF cannot collect AzerCoreOps. Disabled: AzerCoreOps can be added to MBF with /mbf scan.")
-  Check(p,controls,"Confirm","Confirm destructive commands","confirmCommands",-198,"Ask before delete, remove, reset, reward, and other risky commands.")
-  Check(p,controls,"Chat","Hide AzerCore Ops command echoes from chat","hideAuditChat",-230,"Hide dot-command echoes sent by AzerCore Ops. Structured protocol traffic is always hidden.")
+  Check(pc,controls,"StartMinimized","Start minimized after login or reload","startMinimized",-70,"Apply on the next login or /reload.")
+  Check(pc,controls,"Minimap","Show AzerCoreOps minimap button","showMinimap",-102,"Show the AzerCoreOps button around the minimap.")
+  Check(pc,controls,"Mini","Show floating AzerCoreOps button when minimized","showMini",-134,"Show the movable AzerCoreOps button when the main window is hidden.")
+  Check(pc,controls,"MBF","Keep AzerCoreOps outside Minimap Button Frame","mbfCompatibility",-166,"Enabled: MBF cannot collect AzerCoreOps. Disabled: AzerCoreOps can be added to MBF with /mbf scan.")
+  Check(pc,controls,"Confirm","Confirm destructive commands","confirmCommands",-198,"Ask before delete, remove, reset, reward, and other risky commands.")
+  Check(pc,controls,"Chat","Hide AzerCore Ops command echoes from chat","hideAuditChat",-230,"Hide dot-command echoes sent by AzerCore Ops. Structured protocol traffic is always hidden.")
 
-  local scaleLabel=p:CreateFontString(nil,"ARTWORK","GameFontNormal"); scaleLabel:SetPoint("TOPLEFT",22,-278); scaleLabel:SetText("AzerCoreOps window scale")
-  local slider=CreateFrame("Slider","AZERCORE_OPS_OptScale",p,"OptionsSliderTemplate"); slider:SetPoint("TOPLEFT",22,-302); slider:SetWidth(240); slider:SetMinMaxValues(.75,1.35); slider:SetValueStep(.05)
+  local roleLabel=pc:CreateFontString(nil,"ARTWORK","GameFontNormal"); roleLabel:SetPoint("TOPLEFT",22,-278); roleLabel:SetText("Operation mode")
+  local roleButtons={}
+  local function UpdateRoleButtons()
+    local selected=tostring(Settings().roleMode or "AUTOMATIC"):upper(); local gmGranted=tostring(Platform:PermissionFor("CHARACTER_MODE") or "PLAYER"):upper()=="GM"
+    for role,button in pairs(roleButtons) do
+      local enabled=role~="GM" or gmGranted; if enabled then button:Enable(); button:SetNormalFontObject(GameFontNormalSmall) else button:Disable(); button:SetNormalFontObject(GameFontDisableSmall) end
+      button:SetBackdropColor(unpack(role==selected and C.selected or C.button)); button:SetBackdropBorderColor(unpack(role==selected and C.gold or C.border))
+    end
+  end
+  compatUI.roleButtons=roleButtons; compatUI.updateRoleButtons=UpdateRoleButtons
+  for index,definition in ipairs({{"AUTOMATIC","Automatic"},{"PLAYER","Player"},{"GM","GM"}}) do
+    local role,label=definition[1],definition[2]
+    local b=Button(pc,label,84,24,function()
+      if role=="GM" and tostring(Platform:PermissionFor("CHARACTER_MODE") or "PLAYER"):upper()~="GM" then SetStatus("GM mode is unavailable until the module advertises GM authorization.",true); return end
+      Settings().roleMode=role; UpdateRoleButtons(); if characterUI.Update then characterUI.Update() end; SetStatus("Operation mode set to "..label..". Effective Character mode: "..EffectiveCharacterMode()..".")
+    end,"Automatic follows module authorization; Player is always available; GM requires server authorization")
+    b:SetPoint("TOPLEFT",22+(index-1)*92,-298); b:SetScript("OnLeave",function(self) UpdateRoleButtons(); GameTooltip:Hide() end); roleButtons[role]=b
+  end
+  local roleHelp=pc:CreateFontString(nil,"ARTWORK","GameFontHighlightSmall"); roleHelp:SetPoint("TOPLEFT",22,-326); roleHelp:SetText("GM mode cannot be granted by the addon; the server module remains authoritative."); roleHelp:SetTextColor(unpack(C.muted))
+
+  local scaleLabel=pc:CreateFontString(nil,"ARTWORK","GameFontNormal"); scaleLabel:SetPoint("TOPLEFT",22,-356); scaleLabel:SetText("AzerCoreOps window scale")
+  local slider=CreateFrame("Slider","AZERCORE_OPS_OptScale",pc,"OptionsSliderTemplate"); slider:SetPoint("TOPLEFT",22,-380); slider:SetWidth(240); slider:SetMinMaxValues(.75,1.35); slider:SetValueStep(.05)
   _G[slider:GetName().."Low"]:SetText("75%"); _G[slider:GetName().."High"]:SetText("135%"); _G[slider:GetName().."Text"]:SetText("100%")
   slider:SetScript("OnValueChanged",function(self,value) value=math.floor(value*20+.5)/20; Settings().scale=value; _G[self:GetName().."Text"]:SetText(math.floor(value*100+.5).."%"); ApplySettings() end)
 
-  local resetPos=CreateFrame("Button",nil,p,"UIPanelButtonTemplate"); resetPos:SetWidth(135); resetPos:SetHeight(24); resetPos:SetText("Reset positions"); resetPos:SetPoint("TOPLEFT",16,-370); resetPos:SetScript("OnClick",ResetPositions)
-  local resetAll=CreateFrame("Button",nil,p,"UIPanelButtonTemplate"); resetAll:SetWidth(135); resetAll:SetHeight(24); resetAll:SetText("Restore defaults"); resetAll:SetPoint("LEFT",resetPos,"RIGHT",12,0)
+  local resetPos=CreateFrame("Button",nil,pc,"UIPanelButtonTemplate"); resetPos:SetWidth(135); resetPos:SetHeight(24); resetPos:SetText("Reset positions"); resetPos:SetPoint("TOPLEFT",16,-448); resetPos:SetScript("OnClick",ResetPositions)
+  local resetAll=CreateFrame("Button",nil,pc,"UIPanelButtonTemplate"); resetAll:SetWidth(135); resetAll:SetHeight(24); resetAll:SetText("Restore defaults"); resetAll:SetPoint("LEFT",resetPos,"RIGHT",12,0)
   resetAll:SetScript("OnClick",function() AzerCoreOpsDB.settings={}; AzerCoreOpsDB.auditFilter=nil; Settings(); slider:SetValue(Settings().scale); ApplySettings(); p:GetScript("OnShow")(p); Print("Settings restored to defaults.") end)
 
-  local diagnostics=CreateFrame("Frame",nil,p); diagnostics:SetPoint("TOPLEFT",340,-62); diagnostics:SetWidth(300); diagnostics:SetHeight(408); Backdrop(diagnostics,C.panel)
+  local diagnostics=CreateFrame("Frame",nil,pc); diagnostics:SetPoint("TOPLEFT",330,-62); diagnostics:SetWidth(290); diagnostics:SetHeight(382); Backdrop(diagnostics,C.panel)
   local diagTitle=Label(diagnostics,"Compatibility diagnostics"); diagTitle:SetPoint("TOPLEFT",10,-10)
   compatUI.text=diagnostics:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); compatUI.text:SetPoint("TOPLEFT",10,-38); compatUI.text:SetPoint("BOTTOMRIGHT",-10,44); compatUI.text:SetJustifyH("LEFT"); compatUI.text:SetJustifyV("TOP"); compatUI.text:SetWordWrap(true); compatUI.text:SetNonSpaceWrap(true); compatUI.text:SetTextColor(unpack(C.white))
   local check=CreateFrame("Button",nil,diagnostics,"UIPanelButtonTemplate"); check:SetWidth(150); check:SetHeight(24); check:SetText("Check compatibility"); check:SetPoint("BOTTOMLEFT",10,10); check:SetScript("OnClick",RequestCompatibility)
@@ -2479,38 +2727,39 @@ local function BuildOptions()
 
   p:SetScript("OnShow",function()
     local s=Settings(); for key,c in pairs(controls) do c:SetChecked(s[key] and true or false) end
-    slider:SetValue(s.scale)
+    slider:SetValue(s.scale); UpdateRoleButtons(); pScroll:SetVerticalScroll(0); pHorizontal:SetValue(0); pUpdateHorizontal()
   end)
   InterfaceOptions_AddCategory(p)
 
   local a=CreateFrame("Frame","AZERCORE_OPS_AuditOptionsPanel",UIParent); a.name="Audit & Instances"; a.parent="AzerCore Ops"
-  local at=a:CreateFontString(nil,"ARTWORK","GameFontNormalLarge"); at:SetPoint("TOPLEFT",16,-16); at:SetText("AzerCoreOps — Audit & Instances")
-  local an=a:CreateFontString(nil,"ARTWORK","GameFontHighlightSmall"); an:SetPoint("TOPLEFT",at,"BOTTOMLEFT",0,-8); an:SetText("Display, filtering, bind-reset safety, and instance defaults.")
+  local ac,aScroll,aHorizontal,aUpdateHorizontal=ScrollContent(a,"AZERCORE_OPS_AuditOptionsScroll",535)
+  local at=ac:CreateFontString(nil,"ARTWORK","GameFontNormalLarge"); at:SetPoint("TOPLEFT",16,-16); at:SetText("AzerCoreOps — Audit & Instances")
+  local an=ac:CreateFontString(nil,"ARTWORK","GameFontHighlightSmall"); an:SetPoint("TOPLEFT",at,"BOTTOMLEFT",0,-8); an:SetText("Display, filtering, bind-reset safety, and instance defaults.")
   local auditControls={}
-  Check(a,auditControls,"AuditTips","Show complete audit reason tooltips","auditTooltips",-70,"Show the complete diagnostic reason while hovering.")
-  Check(a,auditControls,"WrapAudit","Wrap long audit reasons","wrapAuditReasons",-102,"Use a narrower result canvas for easier reading.")
-  Check(a,auditControls,"AuditWheel","Enable mouse-wheel audit scrolling","mouseWheelAudit",-134,"Scroll raid results with the mouse wheel.")
-  Check(a,auditControls,"ProblemsFirst","Sort problems first","problemsFirst",-166,"Order FAIL, OFFLINE, WARN, then PASS.")
-  Check(a,auditControls,"RememberFilter","Remember the selected audit filter","rememberAuditFilter",-198,"Restore the last selected result filter.")
-  Check(a,auditControls,"AutoAudit","Automatically re-audit after a bind reset","autoReaudit",-230,"Repeat the last audit after an accepted bind reset.")
-  Check(a,auditControls,"ConfirmMapReset","Confirm a selected map reset","confirmResetSelected",-262,"Confirm before removing one map/difficulty bind.")
-  Check(a,auditControls,"WarnTarget","Warn when no player is selected","warnNoTarget",-294,"Prevent bind commands from accidentally applying to yourself.")
-  Check(a,auditControls,"CompactRows","Use compact audit result rows","compactAuditRows",-326,"Fit more member results into the audit view.")
-  Check(a,auditControls,"ShiftClick","Enable Shift-click link insertion","shiftClickInsert",-358,"With a AzerCoreOps field focused, Shift-click an item, quest, spell, or player link to insert it.")
+  Check(ac,auditControls,"AuditTips","Show complete audit reason tooltips","auditTooltips",-70,"Show the complete diagnostic reason while hovering.")
+  Check(ac,auditControls,"WrapAudit","Wrap long audit reasons","wrapAuditReasons",-102,"Use a narrower result canvas for easier reading.")
+  Check(ac,auditControls,"AuditWheel","Enable mouse-wheel audit scrolling","mouseWheelAudit",-134,"Scroll raid results with the mouse wheel.")
+  Check(ac,auditControls,"ProblemsFirst","Sort problems first","problemsFirst",-166,"Order FAIL, OFFLINE, WARN, then PASS.")
+  Check(ac,auditControls,"RememberFilter","Remember the selected audit filter","rememberAuditFilter",-198,"Restore the last selected result filter.")
+  Check(ac,auditControls,"AutoAudit","Automatically re-audit after selected binds are removed","autoReaudit",-230,"Repeat the last audit after an accepted bind removal.")
+  Check(ac,auditControls,"ConfirmMapReset","Confirm Unbind Selected","confirmResetSelected",-262,"Confirm before removing the explicitly selected instance binds.")
+  Check(ac,auditControls,"WarnTarget","Warn when no player is selected","warnNoTarget",-294,"Prevent bind commands from accidentally applying to yourself.")
+  Check(ac,auditControls,"CompactRows","Use compact audit result rows","compactAuditRows",-326,"Fit more member results into the audit view.")
+  Check(ac,auditControls,"ShiftClick","Enable Shift-click link insertion","shiftClickInsert",-358,"With a AzerCoreOps field focused, Shift-click an item, quest, spell, or player link to insert it.")
 
-  local diffLabel=a:CreateFontString(nil,"ARTWORK","GameFontNormal"); diffLabel:SetPoint("TOPLEFT",22,-438); diffLabel:SetText("Default instance difficulty")
-  local diff=CreateFrame("Slider","AZERCORE_OPS_OptDifficulty",a,"OptionsSliderTemplate"); diff:SetPoint("TOPLEFT",22,-462); diff:SetWidth(200); diff:SetMinMaxValues(0,3); diff:SetValueStep(1)
+  local diffLabel=ac:CreateFontString(nil,"ARTWORK","GameFontNormal"); diffLabel:SetPoint("TOPLEFT",22,-438); diffLabel:SetText("Default instance difficulty")
+  local diff=CreateFrame("Slider","AZERCORE_OPS_OptDifficulty",ac,"OptionsSliderTemplate"); diff:SetPoint("TOPLEFT",22,-462); diff:SetWidth(200); diff:SetMinMaxValues(0,3); diff:SetValueStep(1)
   _G[diff:GetName().."Low"]:SetText("0"); _G[diff:GetName().."High"]:SetText("3")
   diff:SetScript("OnValueChanged",function(self,value) value=math.floor(value+.5); Settings().defaultDifficulty=value; _G[self:GetName().."Text"]:SetText(tostring(value)); if auditUI.diffBox then auditUI.diffBox:SetText(tostring(value)) end end)
 
-  local fontLabel=a:CreateFontString(nil,"ARTWORK","GameFontNormal"); fontLabel:SetPoint("TOPLEFT",270,-438); fontLabel:SetText("Audit font size")
-  local font=CreateFrame("Slider","AZERCORE_OPS_OptAuditFont",a,"OptionsSliderTemplate"); font:SetPoint("TOPLEFT",270,-462); font:SetWidth(200); font:SetMinMaxValues(8,14); font:SetValueStep(1)
+  local fontLabel=ac:CreateFontString(nil,"ARTWORK","GameFontNormal"); fontLabel:SetPoint("TOPLEFT",270,-438); fontLabel:SetText("Audit font size")
+  local font=CreateFrame("Slider","AZERCORE_OPS_OptAuditFont",ac,"OptionsSliderTemplate"); font:SetPoint("TOPLEFT",270,-462); font:SetWidth(200); font:SetMinMaxValues(8,14); font:SetValueStep(1)
   _G[font:GetName().."Low"]:SetText("8"); _G[font:GetName().."High"]:SetText("14")
   font:SetScript("OnValueChanged",function(self,value) value=math.floor(value+.5); Settings().auditFontSize=value; _G[self:GetName().."Text"]:SetText(tostring(value)); ApplySettings() end)
 
   a:SetScript("OnShow",function()
     local s=Settings(); for key,c in pairs(auditControls) do c:SetChecked(s[key] and true or false) end
-    diff:SetValue(s.defaultDifficulty); font:SetValue(s.auditFontSize)
+    diff:SetValue(s.defaultDifficulty); font:SetValue(s.auditFontSize); aScroll:SetVerticalScroll(0); aHorizontal:SetValue(0); aUpdateHorizontal()
   end)
   InterfaceOptions_AddCategory(a)
 end
@@ -2702,12 +2951,33 @@ local function BuildUI()
   Button(main,"_",22,20,HideMain,"Minimize to floating button"):SetPoint("TOPRIGHT",-38,-10)
   Button(main,"X",22,20,HideMain,"Close"):SetPoint("TOPRIGHT",-10,-10)
 
+  local resizeGrip=CreateFrame("Button","AZERCORE_OPS_ResizeGrip",main)
+  resizeGrip:SetWidth(22); resizeGrip:SetHeight(22); resizeGrip:SetPoint("BOTTOMRIGHT",-2,2); resizeGrip:SetFrameLevel(main:GetFrameLevel()+20)
+  local gripTexture=resizeGrip:CreateTexture(nil,"OVERLAY"); gripTexture:SetTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Up"); gripTexture:SetAllPoints()
+  resizeGrip:RegisterForDrag("LeftButton")
+  resizeGrip:SetScript("OnEnter",function(self) gripTexture:SetTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Highlight"); GameTooltip:SetOwner(self,"ANCHOR_TOPLEFT"); GameTooltip:SetText("Resize AzerCore Ops"); GameTooltip:AddLine("Drag to scale the complete window between 75% and 135%.",1,1,1,true); GameTooltip:Show() end)
+  resizeGrip:SetScript("OnLeave",function() gripTexture:SetTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Up"); GameTooltip:Hide() end)
+  resizeGrip:SetScript("OnDragStart",function(self)
+    local px,py=GetCursorPosition(); local uiScale=UIParent:GetEffectiveScale()
+    self.startX=px/uiScale; self.startY=py/uiScale; self.startScale=Settings().scale or 1
+    self:SetScript("OnUpdate",function(grip)
+      local x,y=GetCursorPosition(); x=x/uiScale; y=y/uiScale
+      local delta=((x-grip.startX)/main:GetWidth()+(grip.startY-y)/main:GetHeight())/2
+      local value=math.max(.75,math.min(1.35,grip.startScale+delta)); value=math.floor(value*100+.5)/100
+      Settings().scale=value; main:SetScale(value); SetStatus("Window scale: "..math.floor(value*100+.5).."%")
+    end)
+  end)
+  resizeGrip:SetScript("OnDragStop",function(self)
+    self:SetScript("OnUpdate",nil); self.startX=nil; self.startY=nil; self.startScale=nil
+    local value=Settings().scale or 1; SetStatus("Window scale saved: "..math.floor(value*100+.5).."%")
+  end)
+
   local sidebar=CreateFrame("Frame",nil,main); sidebar:SetPoint("TOPLEFT",10,-48); sidebar:SetPoint("BOTTOMLEFT",10,32); sidebar:SetWidth(160); Backdrop(sidebar,C.panel)
   local navTitle=Label(sidebar,"NAVIGATION","GameFontNormalSmall"); navTitle:SetPoint("TOPLEFT",14,-14)
   local nav={
-    {"Dashboard","Dashboard"}, {"Instance Access","Instances"}, {"Character","Character"},
-    {"Quests","Quest"}, {"NPCs","NPC"}, {"Movement","Teleport"},
-    {"Items","Item"}, {"Courier","Courier"}, {"Information","Information"},
+    {"Dashboard","Dashboard"}, {"Character","Character"}, {"Quests","Quest"},
+    {"Instance Access","Instances"}, {"NPCs","NPC"}, {"Items","Item"},
+    {"Movement","Teleport"}, {"Courier","Courier"}, {"Information","Information"},
   }
   for i,item in ipairs(nav) do
     local label,pageName=item[1],item[2]
@@ -2743,6 +3013,8 @@ events:SetScript("OnEvent",function(_,event,arg1)
   elseif event=="PLAYER_ENTERING_WORLD" and not compatibilityRequested then compatibilityRequested=true; SendChatMessage(CMD.version,"SAY")
   elseif event=="UPDATE_INSTANCE_INFO" and activeTab=="Instances" and instanceUI.bindPage and instanceUI.bindPage:IsShown() then RefreshMyInstances()
   elseif event=="PLAYER_TARGET_CHANGED" then
+    characterUI.server={professions={},raid={}}; characterUI.capturePlayer=nil; characterUI.ignoreStream=false
+    if characterUI.Update then characterUI.Update() end
     UpdateInstanceTargetIdentity()
     After(.08,UpdateInstanceTargetIdentity)
     if activeTab=="Instances" and instanceUI.bindPage and instanceUI.bindPage:IsShown() then
@@ -2775,10 +3047,12 @@ events:SetScript("OnEvent",function(_,event,arg1)
     elseif kind=="CAPABILITIES" then
       compatUI.data=compatUI.data or {}; compatUI.received.CAPABILITIES=true
       compatUI.data.capabilities=f.values or ""; compatUI.data.features=f.features or ""
+      Platform:ApplyVersion(compatUI.data)
       RenderCompatibility(); SetStatus("Capability registry loaded; reading permissions...")
     elseif kind=="PERMISSIONS" then
       compatUI.data=compatUI.data or {}; compatUI.received.PERMISSIONS=true
       compatUI.data.permissions=f.values or ""
+      Platform:ApplyVersion(compatUI.data); if compatUI.updateRoleButtons then compatUI.updateRoleButtons() end; if characterUI.Update then characterUI.Update() end
       RenderCompatibility(); SetStatus("Permission registry loaded; reading build information...")
     elseif kind=="BUILD" then
       compatUI.data=compatUI.data or {}; compatUI.received.BUILD=true
@@ -2790,6 +3064,29 @@ events:SetScript("OnEvent",function(_,event,arg1)
       RenderCompatibility()
       local state=Platform:Compatibility(PROTOCOL_VERSION)
       SetStatus(state=="compatible" and "Platform ready: fully compatible." or state=="limited" and "Platform ready with limited compatibility." or "Platform compatibility check completed.",state=="incompatible")
+    elseif kind=="CHARACTER_BEGIN" then
+      local selected=UnitExists("target") and UnitIsPlayer("target") and UnitName("target") or nil
+      characterUI.ignoreStream=not selected or selected~=f.player
+      if not characterUI.ignoreStream then characterUI.capturePlayer=f.player; characterUI.server={begin=f,professions={},raid={}}; characterUI.statusText:SetText("Receiving Character data for "..tostring(f.player).."...") end
+    elseif kind=="CHARACTER_OVERVIEW" then
+      if not characterUI.ignoreStream then characterUI.server.overview=f end
+    elseif kind=="CHARACTER_STATE" then
+      if not characterUI.ignoreStream then characterUI.server.state=f end
+    elseif kind=="CHARACTER_LOCATION" then
+      if not characterUI.ignoreStream then characterUI.server.location=f end
+    elseif kind=="CHARACTER_INVENTORY" then
+      if not characterUI.ignoreStream then characterUI.server.inventory=f end
+    elseif kind=="CHARACTER_PROFESSION" then
+      if not characterUI.ignoreStream then table.insert(characterUI.server.professions,f) end
+    elseif kind=="CHARACTER_RAID" then
+      if not characterUI.ignoreStream then table.insert(characterUI.server.raid,f) end
+    elseif kind=="CHARACTER_END" then
+      if not characterUI.ignoreStream and f.player==characterUI.capturePlayer then characterUI.Update(); characterUI.Log("Inspect","Authoritative Character data loaded for "..tostring(f.player)); characterUI.statusText:SetText("Module Character data loaded for "..tostring(f.player)) end
+      characterUI.ignoreStream=false
+    elseif kind=="CHARACTER_SAVE_RESULT" then
+      local success=tostring(f.result):upper()=="SUCCESS"; characterUI.Log("Save Target",tostring(f.result).." — "..tostring(f.player)..": "..tostring(f.reason)); SetStatus((success and "Target saved: " or "Target save failed: ")..tostring(f.player).." — "..tostring(f.reason),not success)
+    elseif kind=="CHARACTER_ERROR" then
+      characterUI.Log("Character","ERROR — "..tostring(f.reason)); SetStatus(f.reason or "Character inspection failed",true)
     elseif kind=="ERROR" then
       SetStatus(f.reason or "AzerCore Ops server-module error",true)
     elseif kind=="QUEST_SEARCH" then
