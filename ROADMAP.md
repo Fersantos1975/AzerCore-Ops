@@ -7,10 +7,14 @@
 - Complete objectives, requirements, rewards, NPC, and richer diagnostics payloads.
 - Replace visible chat transport with a dedicated addon communication channel.
 - Stabilize target-context and group-audit handling.
+- Present complete quest chains in sequence with the selected quest's position and every linked quest's player-specific status. *(Added in 0.5.1 alpha testing.)*
 - Add compile and field-test verification.
 
 ## 0.6.0 — Quest Log integration
 
+- Introduce the centralized UI State Manager for consistent, event-driven
+  navigation, workspace, filter, and selection highlighting without permanent
+  `OnUpdate` polling.
 - Extend target Quest Log inspection with live objective progress and richer diagnostics.
 - Open and highlight the selected quest in Blizzard's Quest Log.
 - Synchronize selection between AzerCore Ops and the Blizzard Quest Log.

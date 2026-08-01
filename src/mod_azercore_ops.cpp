@@ -22,6 +22,8 @@ public:
         {
             { "search", AzerCoreOps::InstanceInspector::Search, rbac::RBAC_PERM_COMMAND_LOOKUP_MAP, Console::No },
             { "audit", AzerCoreOps::InstanceInspector::Audit, rbac::RBAC_PERM_COMMAND_INSTANCE_LISTBINDS, Console::No },
+            { "binds", AzerCoreOps::InstanceInspector::Binds, rbac::RBAC_PERM_COMMAND_INSTANCE_LISTBINDS, Console::No },
+            { "unbind", AzerCoreOps::InstanceInspector::Unbind, rbac::RBAC_PERM_COMMAND_INSTANCE_UNBIND, Console::No },
         };
         static ChatCommandTable questTable =
         {

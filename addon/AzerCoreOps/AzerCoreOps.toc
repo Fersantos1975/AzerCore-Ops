@@ -2,7 +2,7 @@
 ## Title: |cffffd100AzerCore Ops|r
 ## Notes: Professional operations platform for AzerothCore administrators and Game Masters.
 ## Author: Fersantos
-## Version: 0.5.1-alpha1-target-quest-log
+## Version: 0.5.2-alpha1-instance-module-sync
 ## SavedVariablesPerCharacter: AzerCoreOpsDB
 
 DesignSystem.lua

@@ -4,6 +4,7 @@
 #include "DBCStores.h"
 #include "DisableMgr.h"
 #include "Group.h"
+#include "GameTime.h"
 #include "InstanceSaveMgr.h"
 #include "InstanceScript.h"
 #include "MapMgr.h"
@@ -15,7 +16,10 @@
 #include "Util.h"
 #include "World.h"
 
+#include <algorithm>
+#include <cctype>
 #include <sstream>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -79,6 +83,49 @@ struct AuditResult
     }
 };
 
+struct BindSnapshot
+{
+    uint32 id{0};
+    bool permanent{false};
+    bool extended{false};
+    bool canReset{false};
+    uint32 encounterMask{0};
+    uint32 bossTotal{0};
+    uint32 bossDefeated{0};
+};
+
+std::vector<DungeonEncounter const*> EncountersFor(uint32 mapId, Difficulty difficulty)
+{
+    DungeonEncounterList const* source = nullptr;
+    if ((mapId == 631 || mapId == 724) && (difficulty == RAID_DIFFICULTY_10MAN_HEROIC || difficulty == RAID_DIFFICULTY_25MAN_HEROIC))
+        source = sObjectMgr->GetDungeonEncounterList(mapId, difficulty == RAID_DIFFICULTY_10MAN_HEROIC ? RAID_DIFFICULTY_10MAN_NORMAL : RAID_DIFFICULTY_25MAN_NORMAL);
+    else
+        source = sObjectMgr->GetDungeonEncounterList(mapId, IsSharedDifficultyMap(mapId) ? Difficulty(difficulty % 2) : difficulty);
+    std::vector<DungeonEncounter const*> result;
+    if (source) result.assign(source->begin(), source->end());
+    std::sort(result.begin(), result.end(), [](DungeonEncounter const* a, DungeonEncounter const* b) { return a->dbcEntry->encounterIndex < b->dbcEntry->encounterIndex; });
+    return result;
+}
+
+BindSnapshot SnapshotBind(InstancePlayerBind const* bind)
+{
+    BindSnapshot snapshot;
+    if (!bind || !bind->save) return snapshot;
+    snapshot.id = bind->save->GetInstanceId();
+    snapshot.permanent = bind->perm;
+    snapshot.extended = bind->extended;
+    snapshot.canReset = bind->save->CanReset();
+    snapshot.encounterMask = bind->save->GetCompletedEncounterMask();
+    std::set<uint32> indexes;
+    for (DungeonEncounter const* encounter : EncountersFor(bind->save->GetMapId(), bind->save->GetDifficulty()))
+        if (encounter && encounter->dbcEntry && indexes.insert(encounter->dbcEntry->encounterIndex).second)
+        {
+            ++snapshot.bossTotal;
+            if (encounter->dbcEntry->encounterIndex < 32 && (snapshot.encounterMask & (1u << encounter->dbcEntry->encounterIndex))) ++snapshot.bossDefeated;
+        }
+    return snapshot;
+}
+
 bool AppliesTo(Player* player, ProgressionRequirement const* requirement)
 {
     return requirement->faction == TEAM_NEUTRAL || requirement->faction == player->GetTeamId(true);
@@ -137,7 +184,7 @@ uint32 ReferenceInstanceId(Player* requester, uint32 mapId, Difficulty difficult
     return 0;
 }
 
-void AuditPlayer(Player* player, Player* requester, Player* leader, MapEntry const* entry, Difficulty difficulty, uint32 referenceId, AuditResult& audit)
+BindSnapshot AuditPlayer(Player* player, Player* requester, Player* leader, MapEntry const* entry, Difficulty difficulty, uint32 referenceId, AuditResult& audit)
 {
     uint32 mapId = entry->MapID;
 
@@ -164,9 +211,12 @@ void AuditPlayer(Player* player, Player* requester, Player* leader, MapEntry con
     CheckAccessRequirements(player, leader, sObjectMgr->GetAccessRequirement(mapId, difficulty), audit);
 
     InstancePlayerBind* bind = sInstanceSaveMgr->PlayerGetBoundInstance(player->GetGUID(), mapId, difficulty);
-    uint32 playerBindId = bind && bind->save ? bind->save->GetInstanceId() : 0;
+    BindSnapshot snapshot = SnapshotBind(bind);
+    uint32 playerBindId = snapshot.id;
     if (bind && bind->perm && referenceId && playerBindId != referenceId)
         audit.Fail("Permanent lockout conflict: player ID " + std::to_string(playerBindId) + ", requester ID " + std::to_string(referenceId));
+    else if (playerBindId && referenceId && playerBindId != referenceId)
+        audit.Warn("Different temporary instance ID: player ID " + std::to_string(playerBindId) + ", requester ID " + std::to_string(referenceId));
     else if (playerBindId && referenceId && playerBindId == referenceId)
         audit.Warn("Already bound to requester's instance ID " + std::to_string(referenceId));
     else if (playerBindId && !referenceId)
@@ -201,6 +251,7 @@ void AuditPlayer(Player* player, Player* requester, Player* leader, MapEntry con
     }
     else
         audit.Warn("Currently outside target map (on map " + std::to_string(player->GetMapId()) + ")");
+    return snapshot;
 }
 }
 
@@ -230,6 +281,77 @@ bool InstanceInspector::Search(ChatHandler* handler, Tail search)
     return true;
 }
 
+bool InstanceInspector::Binds(ChatHandler* handler, Tail scopeArg)
+{
+    std::string scope(scopeArg);
+    std::transform(scope.begin(), scope.end(), scope.begin(), [](unsigned char c) { return char(std::tolower(c)); });
+    Player* player = scope == "target" ? handler->getSelectedPlayer() : handler->GetSession()->GetPlayer();
+    if (!player) { Protocol::SendError(handler, "Select an online player before inspecting target binds"); return true; }
+    if (handler->HasLowerSecurity(player)) { Protocol::SendError(handler, "You cannot inspect binds for a player with higher security"); return true; }
+    scope = scope == "target" ? "TARGET" : "SELF";
+    uint32 count = 0;
+    for (uint8 i = 0; i < MAX_DIFFICULTY; ++i) count += sInstanceSaveMgr->PlayerGetBoundInstances(player->GetGUID(), Difficulty(i)).size();
+    Protocol::SendBindBegin(handler, player->GetName(), scope, count);
+    uint32 emitted = 0;
+    for (uint8 i = 0; i < MAX_DIFFICULTY; ++i)
+        for (auto const& [mapId, bind] : sInstanceSaveMgr->PlayerGetBoundInstances(player->GetGUID(), Difficulty(i)))
+        {
+            if (!bind.save) continue;
+            InstanceSave const* save = bind.save;
+            MapEntry const* entry = sMapStore.LookupEntry(mapId);
+            uint32 resetTime = bind.extended ? save->GetExtendedResetTime() : save->GetResetTime();
+            uint32 now = uint32(GameTime::GetGameTime().count());
+            bool applicable = player->GetMapId() != mapId;
+            std::string reason = applicable ? (bind.perm ? "Permanent bind; GM unbind will discard this character lockout" : "Bind may be unbound") : "Player is currently inside this map; leave the instance before unbinding";
+            BindSnapshot snapshot = SnapshotBind(&bind);
+            Protocol::SendBindEntry(handler, mapId, entry ? LocalizedMapName(entry, handler) : ("Map " + std::to_string(mapId)), entry && entry->IsRaid() ? "raid" : "dungeon", snapshot.id, uint32(save->GetDifficulty()), snapshot.permanent, snapshot.extended, snapshot.canReset, applicable, resetTime >= now ? resetTime - now : 0, snapshot.encounterMask, snapshot.bossTotal, snapshot.bossDefeated, reason);
+            std::set<uint32> sent;
+            for (DungeonEncounter const* encounter : EncountersFor(mapId, save->GetDifficulty()))
+            {
+                if (!encounter || !encounter->dbcEntry || !sent.insert(encounter->dbcEntry->encounterIndex).second) continue;
+                uint32 index = encounter->dbcEntry->encounterIndex;
+                char const* name = encounter->dbcEntry->encounterName[0];
+                Protocol::SendBindBoss(handler, mapId, snapshot.id, uint32(save->GetDifficulty()), index, index < 32 && (snapshot.encounterMask & (1u << index)) != 0, name ? name : "Unknown boss");
+            }
+            ++emitted;
+        }
+    Protocol::SendBindEnd(handler, player->GetName(), emitted);
+    return true;
+}
+
+bool InstanceInspector::Unbind(ChatHandler* handler, Tail selectionsArg)
+{
+    Player* player = handler->getSelectedPlayer();
+    if (!player) { Protocol::SendError(handler, "Select an online player before unbinding instances"); return true; }
+    if (handler->HasLowerSecurity(player)) { Protocol::SendError(handler, "You cannot change binds for a player with higher security"); return true; }
+    struct Selection { uint32 map; uint32 difficulty; uint32 instance; };
+    std::vector<Selection> selections;
+    std::stringstream stream{std::string(selectionsArg)};
+    std::string token;
+    while (std::getline(stream, token, ','))
+    {
+        Selection selection{}; char first = 0, second = 0; std::stringstream item(token);
+        if ((item >> selection.map >> first >> selection.difficulty >> second >> selection.instance) && first == ':' && second == ':' && selection.map && selection.difficulty < MAX_DIFFICULTY && selection.instance) selections.push_back(selection);
+    }
+    if (selections.empty()) { Protocol::SendError(handler, "No valid bind selections supplied; expected map:difficulty:instance entries"); return true; }
+    std::string operation = std::to_string(GameTime::GetGameTime().count()) + "-" + player->GetName();
+    Protocol::SendUnbindBegin(handler, operation, player->GetName(), selections.size());
+    uint32 succeeded = 0, failed = 0;
+    for (Selection const& selection : selections)
+    {
+        Difficulty difficulty = Difficulty(selection.difficulty);
+        InstancePlayerBind* bind = sInstanceSaveMgr->PlayerGetBoundInstance(player->GetGUID(), selection.map, difficulty);
+        if (!bind || !bind->save) { Protocol::SendUnbindResult(handler, operation, selection.map, selection.difficulty, selection.instance, "FAILED", "Bind no longer exists; refresh and try again"); ++failed; continue; }
+        if (bind->save->GetInstanceId() != selection.instance) { Protocol::SendUnbindResult(handler, operation, selection.map, selection.difficulty, selection.instance, "FAILED", "Instance ID changed since selection; no action taken"); ++failed; continue; }
+        if (player->GetMapId() == selection.map) { Protocol::SendUnbindResult(handler, operation, selection.map, selection.difficulty, selection.instance, "FAILED", "Player is currently inside this map"); ++failed; continue; }
+        sInstanceSaveMgr->PlayerUnbindInstance(player->GetGUID(), selection.map, difficulty, true, player);
+        if (sInstanceSaveMgr->PlayerGetBoundInstance(player->GetGUID(), selection.map, difficulty)) { Protocol::SendUnbindResult(handler, operation, selection.map, selection.difficulty, selection.instance, "FAILED", "Server verification found the bind still present"); ++failed; }
+        else { Protocol::SendUnbindResult(handler, operation, selection.map, selection.difficulty, selection.instance, "SUCCESS", "Bind removed and verified"); ++succeeded; }
+    }
+    Protocol::SendUnbindEnd(handler, operation, succeeded, failed);
+    return true;
+}
+
 bool InstanceInspector::Audit(ChatHandler* handler, uint32 mapId, Acore::ChatCommands::Optional<uint8> difficultyArg)
 {
     Player* requester = handler->GetSession()->GetPlayer();
@@ -253,13 +375,13 @@ bool InstanceInspector::Audit(ChatHandler* handler, uint32 mapId, Acore::ChatCom
     {
         if (!player)
         {
-            Protocol::SendInstanceMember(handler, fallbackName, "OFFLINE", 0, 0, 0, "Player is offline");
+            Protocol::SendInstanceMember(handler, fallbackName, "OFFLINE", 0, 0, 0, 0, false, false, false, 0, 0, 0, "Player is offline");
             return;
         }
 
         AuditResult audit;
-        AuditPlayer(player, requester, leader, entry, difficulty, referenceId, audit);
-        Protocol::SendInstanceMember(handler, player->GetName(), audit.Result(), player->GetMapId(), player->GetInstanceId(), player->GetPhaseMask(), audit.Reasons());
+        BindSnapshot bind = AuditPlayer(player, requester, leader, entry, difficulty, referenceId, audit);
+        Protocol::SendInstanceMember(handler, player->GetName(), audit.Result(), player->GetMapId(), player->GetInstanceId(), player->GetPhaseMask(), bind.id, bind.permanent, bind.extended, bind.canReset, bind.encounterMask, bind.bossTotal, bind.bossDefeated, audit.Reasons());
     };
 
     if (group)

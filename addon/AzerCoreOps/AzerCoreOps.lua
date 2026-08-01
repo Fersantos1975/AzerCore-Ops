@@ -1,6 +1,6 @@
 local ADDON = ...
 
--- AzerCore Ops Platform 0.5.1-alpha1-target-quest-log
+-- AzerCore Ops Platform 0.5.2-alpha1-instance-module-sync
 -- Target: WoW 3.3.5a / AzerothCore. All server commands live here so that
 -- branch-specific command names can be changed without touching the UI.
 local CMD = {
@@ -14,9 +14,9 @@ local CMD = {
   questReward = ".quest reward %d", questRemove = ".quest remove %d",
   gps = ".gps", tele = ".tele %s", itemLookup = ".lookup item %s",
   itemAdd = ".additem %d %d", itemRemove = ".additem %d -%d",
-  instanceList = ".instance listbinds",
-  instanceUnbind = ".instance unbind %s %d",
-  instanceUnbindAll = ".instance unbind all",
+  instanceBindsSelf = ".azercoreops instance binds self",
+  instanceBindsTarget = ".azercoreops instance binds target",
+  instanceUnbind = ".azercoreops instance unbind %s",
   auditSearch = ".azercoreops instance search %s",
   auditGroup = ".azercoreops instance audit %d %d",
   questSearch = ".azercoreops quest search %s",
@@ -55,8 +55,13 @@ local questUI={results={},rows={},info=nil,chain={},detailText=nil,chainText=nil
   history={},historyIndex=0,resultOffset=0,auditFilter="ALL",auditText=nil,auditChild=nil,questIdInternal=false,contextName=nil,contextKind="SELF",contextLabel=nil,lockedQuestId=nil,lockedQuestTitle=nil,activeWorkspace="DATABASE",targetQuestText=nil,targetQuestScroll=nil,targetQuestChild=nil,lockedLabel=nil,
   targetLogEntries={},targetLogActive=false,targetLogLoading=false,targetLogPlayer=nil,targetLogError=nil}
 local compatUI={data=nil,text=nil,informationText=nil,received={}}
-local instanceUI={my={},target={},captureUntil=0,myRows={},targetRows={},myOffset=0,targetOffset=0,mapBox=nil,diffBox=nil,targetLabel=nil}
-local auditUI={search={},members={},searchRows={},memberRows={},filterButtons={},filtered={},mapBox=nil,diffBox=nil,summary=nil,scroll=nil,scrollChild=nil,horizontal=nil,filter="ALL",lastMap=nil,lastDifficulty=nil,reportEdit=nil}
+local instanceUI={my={},target={},captureUntil=0,myRows={},targetRows={},myOffset=0,targetOffset=0,targetLabel=nil,
+  selectedBind=nil,filter="ALL",filterButtons={},detailText=nil,summaryText=nil,myEmpty=nil,targetEmpty=nil,inspectionText=nil,
+  inspectedPlayer=nil,inspectedAt=nil,statusText=nil,myScroll=nil,targetScroll=nil,detailScroll=nil,horizontals={},activity={},
+  view="OVERVIEW",viewButtons={},myHeading=nil,targetHeader=nil,autoInspect=false,bindPage=nil,bindScope=nil,unbindOperation=nil}
+local auditUI={search={},members={},searchRows={},memberRows={},filterButtons={},filtered={},mapBox=nil,diffBox=nil,summary=nil,scroll=nil,scrollChild=nil,horizontal=nil,filter="ALL",lastMap=nil,lastDifficulty=nil,reportEdit=nil,
+  searchOffset=0,selectedMap=nil,selectedName=nil,selectedType=nil,selectedMaxPlayers=nil,difficulty=0,difficultyLabel="Normal",lockedText=nil,difficultyButton=nil,difficultyMenu=nil,historyIndex=0,searchBox=nil,
+  referenceId=0,expectedMembers=0,display={},groupVerdict="NOT AUDITED",groupReason="Run Group Audit",generatedAt=nil,stale=false}
 local exportFrame, exportEdit, exportActionButton
 local shareFrame, shareText, courierUI
 local ShowSelectableReport
@@ -67,7 +72,7 @@ local defaults={
   rememberAuditFilter=true,autoReaudit=false,confirmResetSelected=true,confirmResetAll=true,
   warnNoTarget=true,compactAuditRows=false,auditFontSize=10,shiftClickInsert=true,
 }
-local ADDON_VERSION="0.5.1-alpha1-target-quest-log"
+local ADDON_VERSION="0.5.2-alpha1-instance-module-sync"
 local PROTOCOL_VERSION="1"
 local TESTED_CORE="ceeb3116ebed"
 local TESTED_PLAYERBOTS="3fa1c1e49f8f"
@@ -132,6 +137,13 @@ end
 local function Label(parent, text, template)
   local x=parent:CreateFontString(nil,"OVERLAY",template or "GameFontNormal")
   x:SetText(text); x:SetTextColor(unpack(C.gold)); return x
+end
+
+-- Shared section heading used by every workspace. Keep this outside individual
+-- builders so new pages do not accidentally depend on Quest-local helpers.
+local function Section(parent,text,color)
+  local h=parent:CreateFontString(nil,"OVERLAY","GameFontNormalSmall")
+  h:SetText(text); h:SetTextColor(unpack(color or C.gold)); return h
 end
 
 local function Button(parent, text, w, h, click, tip)
@@ -205,6 +217,7 @@ local pendingCommand, pendingAfter
 StaticPopupDialogs["AZERCORE_OPS_CONFIRM"]={text="Execute this command?\n%s",button1=YES,button2=NO,timeout=0,whileDead=1,hideOnEscape=1,
   OnAccept=function() if pendingCommand then SendCommand(pendingCommand); pendingCommand=nil; local after=pendingAfter; pendingAfter=nil; if after then after() end end end,
   OnCancel=function() pendingCommand=nil; pendingAfter=nil end}
+StaticPopupDialogs["AZERCORE_OPS_BIND_NOT_APPLICABLE"]={text="This bind cannot be removed now.\n\n%s",button1=OKAY,timeout=0,whileDead=1,hideOnEscape=1}
 local function Confirm(cmd, enabled, after)
   if enabled==nil then enabled=Settings().confirmCommands end
   if not enabled then SendCommand(cmd); if after then after() end; return end
@@ -258,7 +271,7 @@ end
 local function SelectTab(name)
   activeTab=name; AzerCoreOpsDB.activeTab=name
   for n,p in pairs(pages) do if n==name then p:Show() else p:Hide() end end
-  for n,b in pairs(tabs) do b:SetBackdropColor(unpack(n==name and C.selected or C.button)) end
+  for n,b in pairs(tabs) do b:SetBackdropColor(unpack(n==name and C.selected or C.button)); b:SetBackdropBorderColor(unpack(n==name and C.gold or C.border)) end
   SetStatus(name=="Teleport" and "Movement workspace" or name.." workspace")
 end
 
@@ -367,6 +380,72 @@ local function IsQuestPositive(value)
   return v=="AVAILABLE" or v=="ACTIVE" or v=="COMPLETE" or v=="REWARDED" or v=="PASS" or v=="ELIGIBLE"
 end
 
+local function QuestChainState(entry)
+  local status=tostring(entry and entry.status or "NONE"):upper()
+  local eligibility=tostring(entry and entry.eligibility or "UNKNOWN"):upper()
+  if status~="" and status~="NONE" and status~="UNKNOWN" then return status end
+  return eligibility~="" and eligibility or "UNKNOWN"
+end
+
+local function QuestChainStateText(entry,formatted)
+  local state=QuestChainState(entry)
+  if not formatted then return "["..state.."]" end
+  if state=="REWARDED" or state=="COMPLETE" or state=="AVAILABLE" then return "|cff55ff55["..state.."]|r" end
+  if state=="ACTIVE" then return "|cffffff55[ACTIVE]|r" end
+  if state=="FAILED" or state=="BLOCKED" or state=="INELIGIBLE" then return "|cffff5555["..state.."]|r" end
+  return "|cffaaaaaa["..state.."]|r"
+end
+
+local function OrderedQuestChain(q)
+  if not q then return {},0 end
+  local previous,nextQuests={},{}
+  for arrival,entry in ipairs(questUI.chain or {}) do
+    entry._chainArrival=arrival
+    if tostring(entry.direction or ""):upper()=="PREVIOUS" then table.insert(previous,entry) else table.insert(nextQuests,entry) end
+  end
+  table.sort(previous,function(a,b)
+    local ad,bd=tonumber(a.depth) or 0,tonumber(b.depth) or 0
+    if ad==bd then return (a._chainArrival or 0)<(b._chainArrival or 0) end
+    return ad>bd
+  end)
+  table.sort(nextQuests,function(a,b)
+    local ad,bd=tonumber(a.depth) or 0,tonumber(b.depth) or 0
+    if ad==bd then return (a._chainArrival or 0)<(b._chainArrival or 0) end
+    return ad<bd
+  end)
+  local ordered={}
+  for _,entry in ipairs(previous) do table.insert(ordered,entry) end
+  local selected={id=q.id,title=q.title,status=q.status,eligibility=q.eligibility,reason=q.reason,selected=true,direction="SELECTED"}
+  table.insert(ordered,selected)
+  local selectedIndex=#ordered
+  for _,entry in ipairs(nextQuests) do table.insert(ordered,entry) end
+  return ordered,selectedIndex
+end
+
+local function QuestChainLines(q,formatted,includeReasons)
+  local ordered,selectedIndex=OrderedQuestChain(q)
+  local lines={}
+  local function heading(text) return formatted and ("|cffffd100"..text.."|r") or text end
+  local rewarded,complete,active,available,blocked=0,0,0,0,0
+  for _,entry in ipairs(ordered) do
+    local state=QuestChainState(entry)
+    if state=="REWARDED" then rewarded=rewarded+1 elseif state=="COMPLETE" then complete=complete+1 elseif state=="ACTIVE" then active=active+1 elseif state=="AVAILABLE" then available=available+1 elseif state=="BLOCKED" or state=="FAILED" or state=="INELIGIBLE" then blocked=blocked+1 end
+  end
+  table.insert(lines,heading(string.format("QUEST CHAIN — %d QUEST%s",#ordered,#ordered==1 and "" or "S")))
+  table.insert(lines,string.format("Selected quest: %d of %d",selectedIndex,#ordered))
+  table.insert(lines,string.format("Progress: %d rewarded • %d complete • %d active • %d available • %d blocked",rewarded,complete,active,available,blocked))
+  table.insert(lines,"")
+  for index,entry in ipairs(ordered) do
+    local selected=entry.selected and (formatted and " |cffffd100[SELECTED]|r" or " [SELECTED]") or ""
+    local alternative=tostring(entry.required or ""):lower()=="alternative" and (formatted and " |cffffff55[ALTERNATIVE]|r" or " [ALTERNATIVE]") or ""
+    local title=entry.title or "Unknown quest"
+    if formatted and entry.selected then title="|cffffd100"..title.."|r" end
+    table.insert(lines,string.format("%02d. %s%s%s  %s [%s]",index,QuestChainStateText(entry,formatted),selected,alternative,title,entry.id or "?"))
+    if includeReasons and entry.reason and entry.reason~="" then table.insert(lines,"    "..entry.reason) end
+  end
+  return lines
+end
+
 local function TargetQuestReport(q, formatted)
   if not q then return nil end
   local status=tostring(q.status or "NONE"):upper()
@@ -419,6 +498,9 @@ local function TargetQuestReport(q, formatted)
 
   table.insert(lines,heading("WHY"))
   table.insert(lines,value(reason))
+  table.insert(lines,"")
+
+  for _,line in ipairs(QuestChainLines(q,formatted,false)) do table.insert(lines,line) end
   table.insert(lines,"")
 
   table.insert(lines,heading("REQUIREMENTS"))
@@ -543,14 +625,7 @@ local function RenderQuest()
     table.insert(detailLines,string.format("Starts at: |cffffffff%s|r",q.starters or "Not listed"))
     table.insert(detailLines,string.format("Ends at: |cffffffff%s|r",q.enders or "Not listed"))
     table.insert(detailLines,"")
-    table.insert(detailLines,"|cffffd100Quest chain|r")
-    if #questUI.chain==0 then table.insert(detailLines,"No linked prerequisite/next quests reported.") end
-    for _,r in ipairs(questUI.chain) do
-      local arrow=r.direction=="NEXT" and "->" or "<-"
-      local state=r.status=="REWARDED" and "|cff55ff55[REWARDED]|r" or (r.status=="COMPLETE" and "|cff55ff55[COMPLETE]|r" or (r.status=="ACTIVE" and "|cffffff55[ACTIVE]|r" or (r.eligibility=="AVAILABLE" and "|cff55ff55[AVAILABLE]|r" or "|cffff7777[BLOCKED]|r")))
-      table.insert(detailLines,string.format("%s %s %s [%s]",state,arrow,r.title or "Unknown",r.id or "?"))
-      if r.reason and r.reason~="" then table.insert(detailLines,"   "..r.reason) end
-    end
+    for _,line in ipairs(QuestChainLines(q,true,true)) do table.insert(detailLines,line) end
   else
     table.insert(detailLines,"Select a search result, enter a partial title, or enter a Quest ID and press Search.")
   end
@@ -807,9 +882,7 @@ local function QuestReportText()
     for _,key in ipairs(keys) do table.insert(lines,string.format("%s: %s",key,tostring(q[key]))) end
   end
   table.insert(lines,"")
-  table.insert(lines,"Quest chain")
-  if #questUI.chain==0 then table.insert(lines,"No linked quests reported.") end
-  for _,r in ipairs(questUI.chain) do table.insert(lines,string.format("%s | %s [%s] | status=%s | eligibility=%s | reason=%s",r.direction or "?",r.title or "Unknown",r.id or "?",r.status or "?",r.eligibility or "?",r.reason or "")) end
+  if questUI.info then for _,line in ipairs(QuestChainLines(questUI.info,false,true)) do table.insert(lines,line) end end
   table.insert(lines,"")
   table.insert(lines,"Group analysis")
   if #questUI.auditMembers==0 then table.insert(lines,"No group audit results.") end
@@ -823,9 +896,8 @@ local function QuestDetailsReportText()
   local lines={"AzerCore Ops — Quest information",string.format("Generated: %s",date("%Y-%m-%d %H:%M:%S")),"",string.format("Quest: %s [%s]",q.title or "Unknown",q.id or "?")}
   local keys={}; for key in pairs(q) do table.insert(keys,key) end; table.sort(keys)
   for _,key in ipairs(keys) do table.insert(lines,string.format("%s: %s",key,tostring(q[key]))) end
-  table.insert(lines,""); table.insert(lines,"Quest chain")
-  if #questUI.chain==0 then table.insert(lines,"No linked quests reported.") end
-  for _,r in ipairs(questUI.chain) do table.insert(lines,string.format("%s | %s [%s] | status=%s | eligibility=%s | reason=%s",r.direction or "?",r.title or "Unknown",r.id or "?",r.status or "?",r.eligibility or "?",r.reason or "")) end
+  table.insert(lines,"")
+  for _,line in ipairs(QuestChainLines(q,false,true)) do table.insert(lines,line) end
   return table.concat(lines,"\n")
 end
 
@@ -894,17 +966,40 @@ local function CourierChatPrefix(channel,target)
   return ""
 end
 
-local function CourierPrepareChat(channel,target,text)
+local function CourierSplitChatText(channel,target,text)
   text=CourierNormalizeText(text):gsub("[\n]+"," | "):gsub("%s+"," ")
   -- In WoW chat, a single pipe starts a colour/link escape sequence.
   -- Courier reports use pipes as plain-text separators, so escape every pipe
   -- before placing the message in Blizzard's chat edit box.
   text=text:gsub("|","||")
-  if text=="" then SetStatus("Courier message is empty.",true); return false end
+  if text=="" then return nil,"Courier message is empty." end
+  if channel=="WHISPER" and (not target or target=="") then return nil,"Target a player before posting a Whisper." end
+  local prefix=CourierChatPrefix(channel,target)
+  -- Reserve enough room for a [part/total] label. Splitting the already escaped
+  -- text guarantees that a literal report pipe cannot become a chat escape.
+  local limit=math.max(40,255-string.len(prefix)-12)
+  local parts={}
+  while string.len(text)>limit do
+    local cut=limit
+    local window=string.sub(text,1,limit)
+    local lastSpace=window:match("^.*()%s")
+    if lastSpace and lastSpace>math.floor(limit*0.55) then cut=lastSpace-1 end
+    local trailing=string.match(string.sub(text,1,cut),"(|+)$") or ""
+    if (string.len(trailing)%2)==1 then cut=cut-1 end
+    if cut<1 then cut=limit end
+    table.insert(parts,string.sub(text,1,cut):match("^%s*(.-)%s*$"))
+    text=string.sub(text,cut+1):match("^%s*(.-)%s*$") or ""
+  end
+  if text~="" then table.insert(parts,text) end
+  local total=#parts
+  for index,part in ipairs(parts) do parts[index]=string.format("[%d/%d] %s",index,total,part) end
+  return parts
+end
+
+local function CourierPrepareChat(channel,target,text,partIndex,partTotal)
+  if not text or text=="" then SetStatus("Courier message is empty.",true); return false end
   if channel=="WHISPER" and (not target or target=="") then SetStatus("Target a player before posting a Whisper.",true); return false end
   local prefix=CourierChatPrefix(channel,target)
-  local limit=255-string.len(prefix)
-  if string.len(text)>limit then text=string.sub(text,1,math.max(1,limit-3)).."..." end
   ChatFrame_OpenChat(prefix..text,DEFAULT_CHAT_FRAME)
   local edit=ChatEdit_GetActiveWindow and ChatEdit_GetActiveWindow()
   if edit then
@@ -925,7 +1020,8 @@ local function CourierPrepareChat(channel,target,text)
       if elapsedTotal>=0.15 then self:SetScript("OnUpdate",nil); self:Hide() end
     end)
 
-    SetStatus("Courier prepared for "..(channel=="WHISPER" and ("Whisper to "..target) or channel)..". Press Enter in Blizzard chat to send.")
+    local partStatus=(partIndex and partTotal) and string.format(" Part %d of %d is ready.",partIndex,partTotal) or ""
+    SetStatus("Courier prepared for "..(channel=="WHISPER" and ("Whisper to "..target) or channel).."."..partStatus.." Press Enter in Blizzard chat to send.")
     return true
   end
   SetStatus("Could not activate the Blizzard chat input.",true)
@@ -1021,7 +1117,8 @@ local function EnsureShareFrame()
     setLocal(text~="" and ((f.locked and "Message captured and locked." or "Live message updated.")) or "Message is empty.",text=="")
   end
   local function capture()
-    local text,kind,err=CourierCurrentReportText()
+    local provider=f.reportProvider or CourierCurrentReportText
+    local text,kind,err=provider()
     if not text then setLocal(err or "No report is ready.",true); SetStatus(err or "No report is ready.",true); return end
     applyMessage(text,kind,true)
   end
@@ -1050,9 +1147,13 @@ local function EnsureShareFrame()
       if not (UnitExists("target") and UnitIsPlayer("target")) then setLocal("Whisper requires a player target.",true); return end
       target=UnitName("target")
     end
-    if CourierPrepareChat(f.destination,target,f.message) then
+    local parts,err=CourierSplitChatText(f.destination,target,f.message)
+    if not parts then setLocal(err,true); SetStatus(err,true); return end
+    f.chatParts=parts; f.chatPartIndex=1; f.chatTarget=target
+    if CourierPrepareChat(f.destination,target,parts[1],1,#parts) then
       f.postPending=true
       refreshHighlights()
+      setLocal(string.format("Courier part 1 of %d is ready. Press Enter in Blizzard chat; the next part will be prepared automatically.",#parts))
     end
   end
   local function clear()
@@ -1081,10 +1182,12 @@ local function EnsureShareFrame()
   function f:RefreshLive()
     refreshTarget()
     if self.locked then return end
-    local text,kind=CourierCurrentReportText()
+    local provider=self.reportProvider or CourierCurrentReportText
+    local text,kind=provider()
     if text then applyMessage(text,kind,false) else setLocal("Waiting for the current target inspection...") end
   end
-  function f:SetCapturedMessage(text,kind)
+  function f:SetCapturedMessage(text,kind,provider)
+    self.reportProvider=provider
     refreshTarget(); applyMessage(text,kind,true); refreshHighlights()
   end
 
@@ -1099,9 +1202,31 @@ local function EnsureShareFrame()
   f:SetScript("OnEvent",function(self,event,message,sender)
     if not self.postPending then return end
     if event=="CHAT_MSG_WHISPER_INFORM" or senderIsPlayer(sender) then
-      self.postPending=false
-      refreshHighlights()
-      setLocal("Message sent. "..(self.destination=="WHISPER" and "Whisper" or self.destination).." remains selected.")
+      local parts=self.chatParts or {}
+      local sent=self.chatPartIndex or 1
+      if sent<#parts then
+        self.chatPartIndex=sent+1
+        local nextIndex=self.chatPartIndex
+        setLocal(string.format("Part %d of %d sent. Preparing part %d...",sent,#parts,nextIndex))
+        -- Wait until Blizzard has finished closing the chat box used for the
+        -- previous part before opening and focusing the continuation.
+        local continuation=CreateFrame("Frame")
+        local elapsedTotal=0
+        continuation:SetScript("OnUpdate",function(frame,elapsed)
+          elapsedTotal=elapsedTotal+(elapsed or 0)
+          if elapsedTotal<0.08 then return end
+          frame:SetScript("OnUpdate",nil); frame:Hide()
+          if self.postPending and self.chatParts==parts and self.chatPartIndex==nextIndex then
+            if CourierPrepareChat(self.destination,self.chatTarget,parts[nextIndex],nextIndex,#parts) then
+              setLocal(string.format("Part %d of %d sent. Part %d is ready; press Enter again.",sent,#parts,nextIndex))
+            end
+          end
+        end)
+      else
+        self.postPending=false; self.chatParts=nil; self.chatPartIndex=nil; self.chatTarget=nil
+        refreshHighlights()
+        setLocal(string.format("Complete Courier sent in %d part%s. %s remains selected.",math.max(1,#parts),#parts==1 and "" or "s",self.destination=="WHISPER" and "Whisper" or self.destination))
+      end
     end
   end)
 
@@ -1122,7 +1247,7 @@ local function ShareTargetQuestReport()
   local text,kind,err=CourierCurrentReportText()
   if not text then SetStatus(err or "Current quest report is not ready.",true); return end
   local f=EnsureShareFrame()
-  f:SetCapturedMessage(text,kind)
+  f:SetCapturedMessage(text,kind,nil)
   f:Show(); f:Raise()
   SetStatus("Courier opened with a locked report. Unlock only when live target updates are required.")
 end
@@ -1224,10 +1349,6 @@ local function BuildQuest()
   local p=NewPage("Quest")
   QuestHistory()
 
-  local function Section(parent,text,color)
-    local h=parent:CreateFontString(nil,"OVERLAY","GameFontNormalSmall")
-    h:SetText(text); h:SetTextColor(unpack(color or C.gold)); return h
-  end
   local function RunSelectedCommand(template,confirm)
     local id=SelectedQuestId()
     if not id then SetStatus("Select or inspect a quest first.",true); return end
@@ -1494,82 +1615,368 @@ local function MyHasInstance(id)
   return false
 end
 
-local function BindRow(parent,y,click)
-  local row=CreateFrame("Button",nil,parent); row:SetPoint("TOPLEFT",7,y); row:SetPoint("TOPRIGHT",-7,y); row:SetHeight(41)
+local function BindDifficultyName(id)
+  id=tonumber(id)
+  return ({[0]="Normal",[1]="Heroic / 25 Player Normal",[2]="10 Player Heroic",[3]="25 Player Heroic"})[id] or ("Difficulty "..tostring(id or "?"))
+end
+
+local function BindResettable(r)
+  local value=tostring(r and (r.canReset or r.locked) or ""):lower()
+  return value=="yes" or value=="true" or value=="1"
+end
+
+local function BindPermanent(r)
+  local value=tostring(r and (r.perm or r.permanent) or ""):lower()
+  return value=="yes" or value=="true" or value=="1"
+end
+
+local function BindApplicable(r) return tostring(r and r.applicable or "1")=="1" or r and r.applicable==true end
+local function SelectedTargetBinds()
+  local out={}; for _,r in ipairs(instanceUI.target or {}) do if r.selected then table.insert(out,r) end end; return out
+end
+local function UnbindSelectionCommands(rows)
+  local commands,chunk={},{}
+  local function flush() if #chunk>0 then table.insert(commands,string.format(CMD.instanceUnbind,table.concat(chunk,","))); chunk={} end end
+  for _,r in ipairs(rows or {}) do
+    local spec=string.format("%s:%s:%s",tostring(r.map),tostring(tonumber(r.difficulty) or 0),tostring(r.instance))
+    local candidate=table.concat(chunk,","); if candidate~="" then candidate=candidate.."," end; candidate=candidate..spec
+    if string.len(string.format(CMD.instanceUnbind,candidate))>210 then flush() end
+    table.insert(chunk,spec)
+  end
+  flush(); return commands
+end
+local function ConfirmUnbindRows(rows,enabled)
+  local commands=UnbindSelectionCommands(rows); if #commands==0 then return end
+  instanceUI.pendingUnbindCommands=#commands
+  local function sendRemaining(index)
+    if index>#commands then return end
+    SendCommand(commands[index]); After(.25,function() sendRemaining(index+1) end)
+  end
+  Confirm(commands[1],enabled,function() sendRemaining(2) end)
+end
+local function BossProgress(r)
+  local total,defeated=tonumber(r and r.bosstotal) or 0,tonumber(r and r.bossdefeated) or 0
+  return total>0 and string.format("Bosses %d/%d",defeated,total) or "Boss names unavailable"
+end
+
+local function BindVisible(r)
+  local filter=instanceUI.filter or "ALL"
+  if filter=="ALL" then return true end
+  if filter=="RAID" then return r.isRaid or (tonumber(r.difficulty) or 0)>=2 end
+  if filter=="DUNGEON" then return not (r.isRaid or (tonumber(r.difficulty) or 0)>=2) end
+  if filter=="PERMANENT" then return BindPermanent(r) end
+  if filter=="RESETTABLE" then return BindResettable(r) end
+  return true
+end
+
+local function FilterBinds(source)
+  local out={}; for _,r in ipairs(source or {}) do if BindVisible(r) and (instanceUI.view~="LOCKED" or BindPermanent(r)) then table.insert(out,r) end end; return out
+end
+
+local function BindComparison(r)
+  if not r then return "No comparison" end
+  if MyHasInstance(r.instance) then return "SAME AS MINE" end
+  for _,mine in ipairs(instanceUI.my or {}) do if tonumber(mine.map)==tonumber(r.map) then return "DIFFERENT ID" end end
+  return "NO PERSONAL BIND"
+end
+
+local function BindReportText(selectedOnly)
+  local lines={"AZERCORE OPS — BINDS / RESET",""}
+  if instanceUI.inspectedPlayer then table.insert(lines,"Target: "..instanceUI.inspectedPlayer) end
+  local function add(title,rows)
+    table.insert(lines,""); table.insert(lines,title.." ("..#rows..")")
+    if #rows==0 then table.insert(lines,"No binds found") end
+    for i,r in ipairs(rows) do
+      table.insert(lines,string.format("%02d. %s | Map %s | Instance %s | %s | %s | Reset %s | Resettable %s | %s | Mask %s",i,r.name or "Unknown",r.map or "?",r.instance or r.id or "?",r.difficultyName or r.difficulty or "?",BindPermanent(r) and "Permanent" or "Temporary",r.ttr or ShortTime(r.reset),BindResettable(r) and "Yes" or "No",BossProgress(r),r.encountermask or "0"))
+      for _,boss in ipairs(r.bosses or {}) do table.insert(lines,string.format("    %s %s",tostring(boss.defeated)=="1" and "DEFEATED" or "REMAINING",boss.name or "Unknown boss")) end
+    end
+  end
+  local locked=instanceUI.view=="LOCKED"; local myTitle=locked and "MY LOCKED BINDS" or "MY BINDS"; local targetTitle=locked and "TARGET LOCKED BINDS" or "TARGET BINDS"
+  if selectedOnly and instanceUI.selectedBind then add("SELECTED BIND",{instanceUI.selectedBind}) else
+    add(myTitle,FilterBinds(instanceUI.my)); add(targetTitle,FilterBinds(instanceUI.target)); if instanceUI.selectedBind then add("SELECTED BIND DETAILS",{instanceUI.selectedBind}) end
+  end
+  return table.concat(lines,"\n")
+end
+
+local function LogBindActivity(text,kind)
+  instanceUI.activity=instanceUI.activity or {}; table.insert(instanceUI.activity,1,{time=date("%H:%M:%S"),kind=kind or "STATUS",text=tostring(text or "")})
+  while #instanceUI.activity>80 do table.remove(instanceUI.activity) end
+end
+
+local function BindActivityText()
+  local lines={"AzerCore Ops — Bind activity and module output",string.format("Generated: %s",date("%Y-%m-%d %H:%M:%S")),""}
+  if #instanceUI.activity==0 then table.insert(lines,"No bind activity recorded in this session.") end
+  for i=#instanceUI.activity,1,-1 do local r=instanceUI.activity[i]; table.insert(lines,string.format("[%s] %-8s %s",r.time,r.kind,r.text)) end
+  return table.concat(lines,"\n")
+end
+
+local function ShowBindActivity()
+  ShowSelectableReport("Bind activity and module output",BindActivityText(),"Clear",function()
+    instanceUI.activity={}
+    local cleared="AzerCore Ops — Bind activity and module output\nGenerated: "..date("%Y-%m-%d %H:%M:%S").."\n\nBind activity cleared.\nNo bind activity recorded in this session."
+    if exportEdit then exportEdit:SetText(cleared); exportEdit:SetHeight(310); exportEdit:SetFocus(); exportEdit:HighlightText() end
+    SetStatus("Bind activity cleared.")
+  end)
+end
+
+local function CopyBindReport() ShowSelectableReport("Copy Binds / Reset report",BindReportText(false)) end
+local function ExportBindReport() ShowSelectableReport("Export Binds / Reset report",BindReportText(false)) end
+local function ShareBindReport()
+  local text=BindReportText(false); local f=EnsureShareFrame(); f:SetCapturedMessage(text,"INSTANCE BINDS",function() return BindReportText(false),"INSTANCE BINDS" end); f:Show(); f:Raise(); SetStatus("Courier opened with the Binds / Reset report.")
+end
+
+local function UpdateBindControls()
+  local function normalized(name) local base=tostring(name or ""):match("^[^-]+") or ""; return base:lower() end
+  local selectedTarget=SelectedPlayerName(); local targetCurrent=selectedTarget and normalized(instanceUI.inspectedPlayer)==normalized(selectedTarget)
+  local function state(button,enabled)
+    if not button then return end
+    if enabled then button:Enable(); button:SetAlpha(1); button:SetBackdropColor(unpack(C.button)); button:SetBackdropBorderColor(unpack(C.border))
+    else button:Disable(); button:SetAlpha(.45); button:SetBackdropColor(unpack(C.bg)); button:SetBackdropBorderColor(unpack(C.border)) end
+  end
+  state(instanceUI.inspectButton,selectedTarget~=nil)
+  if instanceUI.inspectButton and selectedTarget and instanceUI.autoInspect then instanceUI.inspectButton:SetBackdropColor(unpack(C.selected)); instanceUI.inspectButton:SetBackdropBorderColor(unpack(C.gold)) end
+  state(instanceUI.unbindSelectedButton,targetCurrent and #SelectedTargetBinds()>0)
+  state(instanceUI.unbindAllButton,targetCurrent and #(instanceUI.target or {})>0)
+end
+
+local function BindRow(parent,y,click,checkClick)
+  local row=CreateFrame("Button",nil,parent); row:SetPoint("TOPLEFT",2,y); row:SetWidth(290); row:SetHeight(58)
   row:SetBackdrop({bgFile="Interface\\Buttons\\WHITE8X8"}); row:SetBackdropColor(.075,.08,.095,.96)
-  row.text=row:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); row.text:SetPoint("TOPLEFT",6,-4); row.text:SetPoint("BOTTOMRIGHT",-6,3); row.text:SetJustifyH("LEFT"); row.text:SetJustifyV("TOP"); row.text:SetTextColor(unpack(C.white))
-  row:SetScript("OnClick",click); row:Hide(); return row
+  row.text=row:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); row.text:SetPoint("TOPLEFT",6,-4); row.text:SetPoint("BOTTOMRIGHT",-6,3); row.text:SetJustifyH("LEFT"); row.text:SetJustifyV("TOP"); row.text:SetWordWrap(false); row.text:SetTextColor(unpack(C.white))
+  row:SetScript("OnClick",click)
+  if checkClick then
+    row.check=CreateFrame("CheckButton",nil,row,"UICheckButtonTemplate"); row.check:SetPoint("TOPRIGHT",2,2); row.check:SetWidth(22); row.check:SetHeight(22)
+    row.check:SetScript("OnClick",function(self) checkClick(row,self:GetChecked()) end)
+  end
+  row:Hide(); return row
 end
 
 local function RenderInstances()
-  if instanceUI.targetLabel then instanceUI.targetLabel:SetText("Selected player: |cffffffff"..(SelectedPlayerName() or "none").."|r") end
+  local selectedName=SelectedPlayerName() or "none"; local targetName=instanceUI.inspectedPlayer or selectedName; local lockedView=instanceUI.view=="LOCKED"
+  if instanceUI.targetLabel then instanceUI.targetLabel:SetText((lockedView and "TARGET LOCKED BINDS — " or "TARGET BINDS — ").."|cffffffff"..targetName.."|r") end
+  if instanceUI.myHeading then instanceUI.myHeading:SetText(lockedView and "MY LOCKED BINDS" or "MY BINDS") end
+  if instanceUI.targetHeader then instanceUI.targetHeader:SetText("Selected target: |cffffffff"..selectedName.."|r") end
+  local mine=FilterBinds(instanceUI.my); local target=FilterBinds(instanceUI.target)
   for i,row in ipairs(instanceUI.myRows) do
-    local r=instanceUI.my[instanceUI.myOffset+i]
+    local r=mine[instanceUI.myOffset+i]
     if r then
-      local state=r.locked and "|cff55ff55Locked|r" or "|cffffff55Available|r"; if r.extended then state=state.." Extended" end
-      row.data=r; row.text:SetText(string.format("%s |cffaaaaaa[%s]|r\nID %s  •  %s  •  resets %s",r.name,r.difficulty,r.id,state,ShortTime(r.reset))); row:Show()
+      local state=BindPermanent(r) and "Permanent" or "Temporary"
+      row.data=r; row.text:SetText(string.format("|cffffcc33%s|r\nMap %s  •  ID %s  •  %s\n%s  •  Reset %s  •  Resettable %s",r.name or "Unknown",r.map or "?",r.instance or r.id or "?",r.difficultyName or r.difficulty or "?",state,r.ttr or ShortTime(r.reset),BindResettable(r) and "Yes" or "No")); row:Show()
     else row.data=nil; row:Hide() end
   end
   for i,row in ipairs(instanceUI.targetRows) do
-    local r=instanceUI.target[instanceUI.targetOffset+i]
+    local r=target[instanceUI.targetOffset+i]
     if r then
-      local match=MyHasInstance(r.instance) and "|cff55ff55SAME AS MINE|r" or "|cffffff55DIFFERENT / NOT MINE|r"
-      row.data=r; row.text:SetText(string.format("Map %d  •  ID %d  •  Difficulty %d\n%s  •  can reset: %s  •  TTR %s",r.map,r.instance,r.difficulty,match,r.canReset,r.ttr)); row:Show()
-    else row.data=nil; row:Hide() end
+      local match=BindComparison(r); local color=match=="SAME AS MINE" and "|cff55ff55" or (match=="DIFFERENT ID" and "|cffff8844" or "|cffaaaaaa")
+      row.data=r; row.text:SetText(string.format("|cffffcc33%s|r\nMap %s  •  ID %s  •  %s\n%s%s|r  •  %s",r.name or ("Map "..tostring(r.map or "?")),r.map or "?",r.instance or "?",r.difficultyName or BindDifficultyName(r.difficulty),color,match,BossProgress(r))); row:SetBackdropColor(unpack(instanceUI.selectedBind==r and C.selected or C.button)); if row.check then row.check:SetChecked(r.selected and true or false) end; row:Show()
+    else row.data=nil; if row.check then row.check:SetChecked(false) end; row:Hide() end
   end
+  if instanceUI.myEmpty then if #mine==0 then instanceUI.myEmpty:Show() else instanceUI.myEmpty:Hide() end end
+  if instanceUI.targetEmpty then if #target==0 then instanceUI.targetEmpty:Show() else instanceUI.targetEmpty:Hide() end end
+  local total=#mine+#target; local permanent,temporary,resettable=0,0,0
+  for _,set in ipairs({mine,target}) do for _,r in ipairs(set) do if BindPermanent(r) then permanent=permanent+1 else temporary=temporary+1 end; if BindResettable(r) then resettable=resettable+1 end end end
+  if instanceUI.summaryText then instanceUI.summaryText:SetText(string.format("Total  %d        Permanent  %d        Temporary  %d        Resettable  %d",total,permanent,temporary,resettable)) end
+  for name,b in pairs(instanceUI.filterButtons) do b:SetBackdropColor(unpack(name==instanceUI.filter and C.selected or C.button)); b:SetBackdropBorderColor(unpack(name==instanceUI.filter and C.gold or C.border)) end
+  for name,b in pairs(instanceUI.viewButtons) do local active=(name==instanceUI.view); b:SetBackdropColor(unpack(active and C.selected or C.button)); b:SetBackdropBorderColor(unpack(active and C.gold or C.border)) end
+  if instanceUI.detailText then
+    local r=instanceUI.selectedBind
+    if r then
+      local bossLines={BossProgress(r).."  •  Encounter mask "..tostring(r.encountermask or 0)}; for _,boss in ipairs(r.bosses or {}) do table.insert(bossLines,(tostring(boss.defeated)=="1" and "[DEFEATED] " or "[REMAINING] ")..(boss.name or "Unknown boss")) end
+      instanceUI.detailText:SetText(string.format("|cffffcc33Player|r\n%s\n\n|cffffcc33Instance|r\n%s\n\n|cffffcc33Identifiers|r\nMap ID        %s\nInstance ID   %s\n\n|cffffcc33Details|r\nDifficulty    %s\nStatus        %s\nReset in      %s\nCan reset     %s\nApplicable    %s\nReason        %s\n\n|cffffcc33Encounter progress|r\n%s\n\n|cffffcc33Comparison|r\n%s",instanceUI.inspectedPlayer or SelectedPlayerName() or "Target",r.name or "Unknown",r.map or "?",r.instance or r.id or "?",r.difficultyName or BindDifficultyName(r.difficulty),BindPermanent(r) and "Permanent" or "Temporary",r.ttr or ShortTime(r.reset),BindResettable(r) and "Yes" or "No",BindApplicable(r) and "Yes" or "No",r.reason or "Not reported",table.concat(bossLines,"\n"),BindComparison(r)))
+    else instanceUI.detailText:SetText("Select a target bind to inspect its complete details.") end
+  end
+  if instanceUI.inspectionText then instanceUI.inspectionText:SetText(instanceUI.inspectedPlayer and ("Inspected: "..instanceUI.inspectedPlayer.."  •  "..(instanceUI.inspectedAt or "just now")) or "No target inspected") end
+  if instanceUI.statusText then
+    local scope=lockedView and "My Locked Binds" or "My Binds"; if instanceUI.inspectedPlayer then scope=scope.." + "..(lockedView and "Target Locked Binds" or "Target Binds").." — "..instanceUI.inspectedPlayer end
+    instanceUI.statusText:SetText("Report: "..scope)
+  end
+  UpdateBindControls()
 end
 
 local function RefreshMyInstances(skipRequest)
-  instanceUI.my={}; instanceUI.myOffset=0; if not skipRequest then RequestRaidInfo() end
-  local total=GetNumSavedInstances() or 0
-  for i=1,total do
-    local name,id,reset,difficulty,locked,extended,_,isRaid,maxPlayers,difficultyName=GetSavedInstanceInfo(i)
-    table.insert(instanceUI.my,{name=name or "Unknown",id=id or "?",reset=reset,difficulty=difficultyName or tostring(difficulty or "?"),difficultyId=difficulty,locked=locked,extended=extended,isRaid=isRaid,maxPlayers=maxPlayers})
-  end
-  RenderInstances(); SetStatus(total.." personal lockout(s) found")
+  instanceUI.my={}; instanceUI.myOffset=0; instanceUI.bindScope="SELF"; RenderInstances(); SendCommand(CMD.instanceBindsSelf); SetStatus("Collecting structured personal binds...")
 end
 
-local function InspectTargetInstances()
+local function InspectTargetInstances(activateMode)
+  if activateMode then instanceUI.autoInspect=true end
   if not RequireSelectedPlayer() then return end
-  instanceUI.target={}; instanceUI.targetOffset=0; instanceUI.captureUntil=GetTime()+5; RenderInstances(); SendCommand(CMD.instanceList); SetStatus("Collecting binds for "..SelectedPlayerName().."...")
+  instanceUI.target={}; instanceUI.targetOffset=0; instanceUI.selectedBind=nil; instanceUI.inspectedPlayer=SelectedPlayerName(); instanceUI.inspectedAt=date("%H:%M:%S"); instanceUI.bindScope="TARGET"; RenderInstances(); LogBindActivity("Inspecting target "..instanceUI.inspectedPlayer,"INSPECT"); SendCommand(CMD.instanceBindsTarget); SetStatus("Collecting structured binds for "..instanceUI.inspectedPlayer.."...")
 end
 
-local function FilteredAuditMembers()
-  local out={}
-  for _,r in ipairs(auditUI.members) do if auditUI.filter=="ALL" or r.result==auditUI.filter then table.insert(out,r) end end
-  if Settings().problemsFirst then
-    local rank={FAIL=1,OFFLINE=2,WARN=3,PASS=4}
-    table.sort(out,function(a,b) local ar=rank[a.result] or 5; local br=rank[b.result] or 5; if ar==br then return (a.name or "")<(b.name or "") end; return ar<br end)
+local function BindSystemChatFilter(_,event,message)
+  if event~="CHAT_MSG_SYSTEM" or not instanceUI.captureUntil or GetTime()>instanceUI.captureUntil then return false end
+  local plain=tostring(message or ""):gsub("|c%x%x%x%x%x%x%x%x",""):gsub("|r","")
+  if plain:match("map:%s*%d+,%s*inst:%s*%d+") or plain:lower():match("player binds:%s*%d+") then return true end
+  return false
+end
+ChatFrame_AddMessageEventFilter("CHAT_MSG_SYSTEM",BindSystemChatFilter)
+
+local RenderAudit
+
+local function InstanceHistory()
+  AzerCoreOpsDB.instanceSearchHistory=AzerCoreOpsDB.instanceSearchHistory or {}
+  return AzerCoreOpsDB.instanceSearchHistory
+end
+
+local function PushInstanceHistory(query,mapId,name,instanceType,maxPlayers)
+  query=tostring(query or ""):match("^%s*(.-)%s*$")
+  if query=="" and not mapId then return end
+  local history=InstanceHistory(); local key=tostring(mapId or "").."|"..query
+  for i=#history,1,-1 do
+    local e=history[i]; if tostring(e.map or "").."|"..tostring(e.query or "")==key then table.remove(history,i) end
   end
+  table.insert(history,1,{query=query,map=tonumber(mapId),name=name,type=instanceType,max=tonumber(maxPlayers)})
+  while #history>50 do table.remove(history) end
+  auditUI.historyIndex=0
+end
+
+local function ShowInstanceHistory(delta)
+  local history=InstanceHistory(); if #history==0 then SetStatus("Instance search history is empty.",true); return end
+  auditUI.historyIndex=math.max(1,math.min(#history,(auditUI.historyIndex or 0)+delta))
+  local entry=history[auditUI.historyIndex]
+  if auditUI.searchBox then auditUI.searchBox:SetText(entry.query or entry.name or entry.map or ""); auditUI.searchBox:SetFocus(); auditUI.searchBox:HighlightText() end
+  if entry.map then
+    auditUI.selectedMap=entry.map; auditUI.selectedName=entry.name; auditUI.selectedType=entry.type; auditUI.selectedMaxPlayers=entry.max
+    auditUI.difficulty=0; auditUI.difficultyLabel=(entry.type=="raid" and "10-player Normal" or "Normal")
+    if auditUI.difficultyButton then auditUI.difficultyButton:SetText(auditUI.difficultyLabel.."  v") end
+  end
+  RenderAudit(); SetStatus("Saved instance search "..auditUI.historyIndex.." of "..#history)
+end
+
+local function ShowSavedInstanceHistory()
+  local history=InstanceHistory(); if #history==0 then SetStatus("Instance search history is empty.",true); return end
+  local lines={"AzerCore Ops saved instance searches",""}
+  for i,e in ipairs(history) do table.insert(lines,string.format("%02d. %s%s",i,e.query or e.name or "Instance",e.map and string.format("  [Map ID: %d]",e.map) or "")) end
+  ShowSelectableReport("Saved instance search history",table.concat(lines,"\n"),"Delete History",function() StaticPopup_Show("AZERCORE_OPS_CLEAR_INSTANCE_HISTORY") end)
+end
+
+StaticPopupDialogs["AZERCORE_OPS_CLEAR_INSTANCE_HISTORY"]={
+  text="Delete all saved Instance Access search history?\n\nThis cannot be undone.",button1=YES,button2=NO,timeout=0,whileDead=1,hideOnEscape=1,
+  OnAccept=function() AzerCoreOpsDB.instanceSearchHistory={}; auditUI.historyIndex=0; if exportFrame then exportFrame:Hide() end; SetStatus("Saved instance search history deleted.") end
+}
+
+local function PrepareAuditMember(r)
+  local raw=tostring(r.reason or "No details"); local reference=tonumber(auditUI.referenceId) or 0
+  local same=raw:match("Already bound to requester's instance ID (%d+)")
+  local playerConflict,requesterConflict=raw:match("Permanent lockout conflict: player ID (%d+), requester ID (%d+)")
+  local noReference=raw:match("Player has instance ID (%d+); requester has no reference ID")
+  local insideDifferent=raw:match("Currently inside different instance ID (%d+)")
+  local temporaryPlayer,temporaryRequester=raw:match("Different temporary instance ID: player ID (%d+), requester ID (%d+)")
+  r.bindId=tonumber(r.bind or playerConflict or temporaryPlayer or same or noReference or insideDifferent) or 0
+  if r.bindId==0 and tonumber(r.map)==tonumber(auditUI.lastMap) then r.bindId=tonumber(r.instance) or 0 end
+  r.referenceId=tonumber(requesterConflict or temporaryRequester) or reference
+  r.outsideMap=tonumber(raw:match("Currently outside target map %(on map (%d+)%)"))
+  r.permanentConflict=playerConflict~=nil or (tostring(r.permanent)=="1" and r.bindId>0 and reference>0 and r.bindId~=reference)
+  local structuredMismatch=r.bindId>0 and reference>0 and r.bindId~=reference
+  if r.result=="OFFLINE" then r.verdict="OFFLINE"
+  elseif playerConflict or temporaryPlayer or structuredMismatch or insideDifferent or noReference then r.verdict="CONFLICT"
+  elseif r.result=="FAIL" then r.verdict="BLOCKED"
+  else r.verdict="GRANTED" end
+
+  local friendly=raw
+  friendly=friendly:gsub("Missing quest (%d+) %[(.-)%]%s*%-?%s*[^;]*","Quest %1 [%2] must be rewarded/turned in")
+  friendly=friendly:gsub("Leader missing quest (%d+) %[(.-)%]%s*%-?%s*[^;]*","Leader must reward/turn in Quest %1 [%2]")
+  friendly=friendly:gsub("Already bound to requester's instance ID (%d+)","Same as group Instance ID %1")
+  friendly=friendly:gsub("Currently outside target map %(on map (%d+)%)","Outside the instance (map %1)")
+  if tonumber(r.bosstotal) and tonumber(r.bosstotal)>0 then friendly=friendly..string.format("; Boss progress %s/%s",r.bossdefeated or 0,r.bosstotal) end
+  if r.verdict=="GRANTED" then
+    if r.bindId==0 and reference>0 then friendly="No personal bind; will join group Instance ID "..reference..(r.outsideMap and ("; Outside the instance (map "..r.outsideMap..")") or "") end
+    r.displayReason="Access granted; "..friendly
+  elseif r.verdict=="CONFLICT" then
+    if r.permanentConflict then r.displayReason=string.format("Instance ID conflict: player %s, group %s; Permanent bind cannot be reset; the complete group cannot raid this saved instance together",r.bindId,r.referenceId)
+    elseif noReference then r.displayReason="Instance ID "..r.bindId.." exists but the group has no reference ID; choose the intended group save and re-audit"
+    else r.displayReason="Instance ID conflict; "..friendly end
+  elseif r.verdict=="BLOCKED" then r.displayReason="Access blocked; "..friendly
+  else r.displayReason="Player is offline; live bind and access data unavailable" end
+  return r
+end
+
+local function FilteredAuditMembers(filterOverride)
+  local activeFilter=filterOverride or auditUI.filter
+  local out={}
+  for _,r in ipairs(auditUI.members) do
+    PrepareAuditMember(r)
+    local include=activeFilter=="ALL"
+      or (activeFilter=="CAN_JOIN" and r.verdict=="GRANTED")
+      or (activeFilter=="CANNOT_JOIN" and (r.verdict=="BLOCKED" or r.verdict=="CONFLICT"))
+      or (activeFilter=="OFFLINE" and r.verdict=="OFFLINE")
+      or (activeFilter=="SAME_ID" and r.bindId>0 and r.bindId==auditUI.referenceId)
+      or (activeFilter=="DIFFERENT_ID" and r.verdict=="CONFLICT")
+      or (activeFilter=="NO_BIND" and r.verdict~="OFFLINE" and r.bindId==0)
+    if include then table.insert(out,r) end
+  end
+  table.sort(out,function(a,b)
+    local ar=(a.bindId>0 and a.bindId==auditUI.referenceId and 0) or (a.bindId>0 and a.bindId) or (a.verdict=="OFFLINE" and 99999998 or 99999997)
+    local br=(b.bindId>0 and b.bindId==auditUI.referenceId and 0) or (b.bindId>0 and b.bindId) or (b.verdict=="OFFLINE" and 99999998 or 99999997)
+    if ar==br then return (a.name or "")<(b.name or "") end; return ar<br
+  end)
   return out
 end
 
-local function RenderAudit()
+local function ComputeGroupVerdict()
+  local issue,permanent,offline=false,false,0
+  for _,r in ipairs(auditUI.members) do PrepareAuditMember(r); if r.verdict=="BLOCKED" or r.verdict=="CONFLICT" then issue=true end; if r.permanentConflict then permanent=true end; if r.verdict=="OFFLINE" then offline=offline+1 end end
+  if permanent then auditUI.groupVerdict="GROUP CANNOT PROCEED"; auditUI.groupReason="Permanent Instance ID conflict"
+  elseif issue then auditUI.groupVerdict="ACTION REQUIRED"; auditUI.groupReason="Resolve blocked access or Instance ID conflicts"
+  else auditUI.groupVerdict="GROUP READY"; auditUI.groupReason="All inspected online members can enter together" end
+  if offline>0 then auditUI.groupReason=auditUI.groupReason.."; "..offline.." offline member(s) not inspected" end
+end
+
+local function BuildAuditDisplay(members)
+  local groups,order={},{ }
+  for _,r in ipairs(members) do
+    local key,label
+    if r.verdict=="OFFLINE" then key="OFFLINE"; label="OFFLINE / NOT INSPECTED"
+    elseif r.bindId>0 then key="ID:"..r.bindId; label="INSTANCE ID "..r.bindId..(r.bindId==auditUI.referenceId and " — GROUP REFERENCE" or "")
+    else key="NO_BIND"; label="NO PERSONAL BIND"..((auditUI.referenceId or 0)>0 and (" — WILL JOIN ID "..auditUI.referenceId) or "") end
+    if not groups[key] then groups[key]={label=label,rows={}}; table.insert(order,key) end; table.insert(groups[key].rows,r)
+  end
+  local display={}; for _,key in ipairs(order) do local g=groups[key]; table.insert(display,{isHeader=true,label=g.label.." — "..#g.rows.." PLAYER"..(#g.rows==1 and "" or "S")}); for _,r in ipairs(g.rows) do table.insert(display,r) end end
+  return display
+end
+
+RenderAudit=function()
   for i,row in ipairs(auditUI.searchRows) do
-    local r=auditUI.search[i]
-    if r then row.id=tonumber(r.map); row.label:SetText(string.format("%s — Map %s (%s)",r.name or "Unknown",r.map or "?",r.type or "instance")); row:Show() else row:Hide() end
+    local r=auditUI.search[(auditUI.searchOffset or 0)+i]
+    if r then
+      row.id=tonumber(r.map); row.data=r
+      row.label:SetText(string.format("%s  %s",r.map or "?",r.name or "Unknown")); row:Show()
+      row:SetBackdropColor(unpack(tonumber(r.map)==tonumber(auditUI.selectedMap) and C.selected or C.button))
+      row:SetBackdropBorderColor(unpack(tonumber(r.map)==tonumber(auditUI.selectedMap) and C.gold or C.border))
+    else row.id=nil; row.data=nil; row:Hide() end
   end
-  auditUI.filtered=FilteredAuditMembers()
-  local rowHeight=Settings().compactAuditRows and 28 or 40
-  local contentWidth=Settings().wrapAuditReasons and 610 or 1050
-  if auditUI.scrollChild then auditUI.scrollChild:SetWidth(contentWidth); auditUI.scrollChild:SetHeight(math.max(1,#auditUI.filtered)*rowHeight) end
-  local reportLines={}
-  for _,r in ipairs(auditUI.filtered) do
-    local color=r.result=="PASS" and "|cff55ff55" or (r.result=="WARN" and "|cffffff55" or (r.result=="OFFLINE" and "|cffaaaaaa" or "|cffff5555"))
-    table.insert(reportLines,color..(r.result or "?").."|r  "..(r.name or "Unknown"))
-    table.insert(reportLines,"|cffdddddd"..(r.reason or "").."|r")
-    table.insert(reportLines,"")
+  auditUI.filtered=FilteredAuditMembers(); if #auditUI.members>0 then ComputeGroupVerdict() end; auditUI.display=BuildAuditDisplay(auditUI.filtered)
+  local rowHeight=Settings().compactAuditRows and 24 or 28
+  if auditUI.scrollChild then auditUI.scrollChild:SetWidth(820); auditUI.scrollChild:SetHeight(math.max(1,#auditUI.display)*rowHeight) end
+  for i,row in ipairs(auditUI.memberRows) do
+    local r=auditUI.display[i]
+    if r then
+      row.data=r.isHeader and nil or r; row:SetPoint("TOPLEFT",0,-(i-1)*rowHeight); row:SetPoint("TOPRIGHT",0,-(i-1)*rowHeight); row:SetHeight(rowHeight-1)
+      if r.isHeader then row.status:SetText(""); row.name:SetText(""); row.reason:SetText(""); row.header:SetText(r.label); row.header:Show(); row:SetBackdropColor(.035,.04,.05,1)
+      else
+        row.header:Hide(); row:SetBackdropColor(.075,.08,.095,.96)
+        local color=r.verdict=="GRANTED" and C.resolve or (r.verdict=="CONFLICT" and C.diagnose or (r.verdict=="OFFLINE" and C.muted or C.red))
+        row.status:SetText(r.verdict or "?"); row.status:SetTextColor(unpack(color)); row.name:SetText(r.name or "Unknown"); row.reason:SetText("ID "..(r.bindId>0 and r.bindId or "—").."  •  "..(r.displayReason or r.reason or "No reason"))
+      end
+      row:Show()
+    else row.data=nil; row:Hide() end
   end
-  if auditUI.reportEdit then
-    local text=table.concat(reportLines,"\n"); local h=math.max(1,#reportLines*15+10)
-    auditUI.reportEdit:SetFont("Fonts\\FRIZQT__.TTF",Settings().auditFontSize or 10); auditUI.reportEdit:SetText(text); auditUI.reportEdit:SetHeight(h)
-    auditUI.scrollChild:SetHeight(h)
-  end
-  for _,row in ipairs(auditUI.memberRows) do row:Hide() end
   if auditUI.scroll then auditUI.scroll:SetVerticalScroll(0); auditUI.scroll:SetHorizontalScroll(0) end
-  if auditUI.horizontal then auditUI.horizontal:SetMinMaxValues(0,math.max(0,contentWidth-365)); auditUI.horizontal:SetValue(0) end
-  if auditUI.summary then auditUI.summary:SetText(string.format("Showing %d of %d",#auditUI.filtered,#auditUI.members)) end
+  if auditUI.horizontal then auditUI.horizontal:SetValue(0) end
+  if auditUI.summary then
+    local stale=auditUI.stale and "  •  STALE — RE-AUDIT" or ""; auditUI.summary:SetText(string.format("%s  •  Showing %d of %d%s",auditUI.groupVerdict,#auditUI.filtered,#auditUI.members,stale))
+    auditUI.summary:SetTextColor(unpack(auditUI.groupVerdict=="GROUP READY" and C.resolve or (auditUI.groupVerdict=="GROUP CANNOT PROCEED" and C.red or C.diagnose)))
+  end
   for name,button in pairs(auditUI.filterButtons) do button:SetBackdropColor(unpack(name==auditUI.filter and C.selected or C.button)) end
+  if auditUI.lockedText then
+    if auditUI.selectedMap then
+      local maximum=tonumber(auditUI.selectedMaxPlayers) or 0
+      if maximum<1 then maximum=(auditUI.selectedType=="raid" and 25 or 5) end
+      auditUI.lockedText:SetText(string.format("|cffffd100%s|r\n\nMap ID: %s\nType: %s\nMaximum players: %s",auditUI.selectedName or "Unknown",auditUI.selectedMap,auditUI.selectedType or "Instance",maximum))
+    else
+      auditUI.lockedText:SetText("|cffaaaaaaNo instance locked.|r\n\nSelect an instance match to lock it into the workspace.")
+    end
+  end
 end
 
 ShowSelectableReport=function(title, report, actionLabel, actionFn)
@@ -1595,94 +2002,263 @@ ShowSelectableReport=function(title, report, actionLabel, actionFn)
   exportEdit:SetText(report or ""); exportEdit:SetHeight(math.max(310,select(2,(report or ""):gsub("\n","\n"))*16+40)); exportFrame:Show(); exportEdit:SetFocus(); exportEdit:HighlightText()
 end
 
-local function ShowAuditExport()
+local function InstanceAuditReportText()
   if #auditUI.members==0 then SetStatus("Run an instance audit before exporting.",true); return end
-  local lines={"AzerCoreOps instance audit",string.format("Map: %s  Difficulty: %s",auditUI.lastMap or "?",auditUI.lastDifficulty or "?"),""}
-  for _,r in ipairs(auditUI.members) do table.insert(lines,string.format("%s | %s | %s",r.result or "?",r.name or "Unknown",r.reason or "No reason")) end
-  ShowSelectableReport("AzerCoreOps instance audit",table.concat(lines,"\n"))
+  local lines={"AzerCore Ops — Instance access group audit",string.format("Generated: %s",auditUI.generatedAt or date("%Y-%m-%d %H:%M:%S")),string.format("Instance: %s",auditUI.selectedName or "Unknown"),string.format("Map ID: %s  |  Difficulty: %s",auditUI.lastMap or "?",auditUI.difficultyLabel or auditUI.lastDifficulty or "?"),string.format("Reference Instance ID: %s",(auditUI.referenceId or 0)>0 and auditUI.referenceId or "None"),string.format("Group verdict: %s",auditUI.groupVerdict),"Reason: "..tostring(auditUI.groupReason or "No group summary"),auditUI.stale and "Snapshot status: STALE — run Re-audit" or "Snapshot status: Current",""}
+  local members=FilteredAuditMembers("ALL"); local display=BuildAuditDisplay(members)
+  for _,r in ipairs(display) do
+    if r.isHeader then table.insert(lines,r.label); table.insert(lines,string.rep("-",math.min(72,#r.label)))
+    else table.insert(lines,string.format("%-9s | %-16s | Bind ID %-6s | %s",r.verdict or "?",r.name or "Unknown",r.bindId>0 and r.bindId or "—",r.displayReason or r.reason or "No reason")) end
+  end
+  if auditUI.groupVerdict~="GROUP READY" then
+    table.insert(lines,""); table.insert(lines,"POSSIBLE NEXT STEPS")
+    table.insert(lines,"1. Resolve BLOCKED quest, level, item or achievement requirements, then re-audit.")
+    table.insert(lines,"2. In Binds / Reset, select only incompatible resettable binds and review the batch preview.")
+    table.insert(lines,"3. Do not reset permanent binds; wait for reset, change the roster, or separate incompatible Instance ID groups.")
+    table.insert(lines,"4. Reinspect binds and run Group Audit again before entering.")
+  end
+  return table.concat(lines,"\n")
+end
+
+local function ShowAuditExport()
+  local text=InstanceAuditReportText(); if not text then return end
+  ShowSelectableReport("AzerCore Ops Instance access audit",text)
+end
+
+local function ShowAuditCopy()
+  local text=InstanceAuditReportText(); if not text then return end
+  ShowSelectableReport("Copy Instance access audit",text)
+end
+
+local function ShareAuditReport()
+  local text=InstanceAuditReportText(); if not text then return end
+  local f=EnsureShareFrame(); f:SetCapturedMessage(text,"INSTANCE",function() return InstanceAuditReportText(),"INSTANCE" end); f:Show(); f:Raise()
+  SetStatus("Courier opened with the locked Instance Access report.")
 end
 
 local function AuditResultRow(parent)
-  local row=CreateFrame("Button",nil,parent); row:SetHeight(38)
+  local row=CreateFrame("Button",nil,parent); row:SetHeight(27)
   row:SetBackdrop({bgFile="Interface\\Buttons\\WHITE8X8"}); row:SetBackdropColor(.075,.08,.095,.96)
-  row.text=row:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); row.text:SetPoint("TOPLEFT",7,-4); row.text:SetPoint("BOTTOMRIGHT",-7,3); row.text:SetJustifyH("LEFT"); row.text:SetJustifyV("TOP")
-  row:SetScript("OnEnter",function(self) if Settings().auditTooltips and self.data then GameTooltip:SetOwner(self,"ANCHOR_RIGHT"); GameTooltip:SetText((self.data.result or "?").." — "..(self.data.name or "Unknown"),1,.82,0); GameTooltip:AddLine(self.data.reason or "No details",1,1,1,true); GameTooltip:Show() end end)
+  row.status=row:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); row.status:SetPoint("LEFT",6,0); row.status:SetWidth(66); row.status:SetJustifyH("LEFT")
+  row.name=row:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); row.name:SetPoint("LEFT",row.status,"RIGHT",6,0); row.name:SetWidth(92); row.name:SetJustifyH("LEFT"); row.name:SetTextColor(unpack(C.white))
+  row.reason=row:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); row.reason:SetPoint("LEFT",row.name,"RIGHT",6,0); row.reason:SetPoint("RIGHT",-6,0); row.reason:SetJustifyH("LEFT"); row.reason:SetTextColor(unpack(C.white)); row.reason:SetWordWrap(false)
+  row.header=row:CreateFontString(nil,"OVERLAY","GameFontNormalSmall"); row.header:SetPoint("LEFT",8,0); row.header:SetPoint("RIGHT",-8,0); row.header:SetJustifyH("LEFT"); row.header:SetTextColor(unpack(C.gold)); row.header:Hide()
+  row:SetScript("OnEnter",function(self) if Settings().auditTooltips and self.data then GameTooltip:SetOwner(self,"ANCHOR_RIGHT"); GameTooltip:SetText((self.data.verdict or self.data.result or "?").." — "..(self.data.name or "Unknown"),1,.82,0); GameTooltip:AddLine(self.data.displayReason or self.data.reason or "No details",1,1,1,true); GameTooltip:AddLine("Raw module result: "..tostring(self.data.result or "?"),.65,.65,.65,true); GameTooltip:Show() end end)
   row:SetScript("OnLeave",function() GameTooltip:Hide() end); row:Hide(); return row
 end
 
 local function BuildInstances()
   local p=NewPage("Instances")
-  local auditPage=CreateFrame("Frame",nil,p); auditPage:SetPoint("TOPLEFT",0,-36); auditPage:SetPoint("BOTTOMRIGHT")
-  local bindPage=CreateFrame("Frame",nil,p); bindPage:SetPoint("TOPLEFT",0,-36); bindPage:SetPoint("BOTTOMRIGHT"); bindPage:Hide()
-  local auditTab=Button(p,"Instance Access",140,24,function() auditPage:Show(); bindPage:Hide() end,"Check group and raid access to an instance"); auditTab:SetPoint("TOPLEFT",12,-7)
-  local bindTab=Button(p,"Binds / Reset",120,24,function() bindPage:Show(); auditPage:Hide(); RenderInstances() end,"Inspect and safely remove instance binds"); bindTab:SetPoint("LEFT",auditTab,"RIGHT",8,0)
+  local header=CreateFrame("Frame",nil,p); header:SetPoint("TOPLEFT",10,-8); header:SetPoint("TOPRIGHT",-10,-8); header:SetHeight(48); Backdrop(header,C.bg)
+  local title=Label(header,"Instance Access","GameFontNormalLarge"); title:SetPoint("TOPLEFT",12,-8)
+  local subtitle=header:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); subtitle:SetPoint("TOPLEFT",12,-28); subtitle:SetTextColor(unpack(C.white)); subtitle:SetText("Instance eligibility, prerequisites and group diagnostics")
+  local context=header:CreateFontString(nil,"OVERLAY","GameFontNormal"); context:SetPoint("RIGHT",-14,0); context:SetTextColor(unpack(C.gold)); context:SetText("Group Audit")
 
-  local searchBox=AddField(auditPage,"Instance title",12,-5,225,false)
-  Button(auditPage,"Search",70,24,function()
-    local title=NonEmpty(searchBox,"an instance title")
-    if title then auditUI.search={}; RenderAudit(); SendCommand(string.format(CMD.auditSearch,title)); SetStatus("Searching server instance maps...") end
-  end,"Requires mod-azercore-ops"):SetPoint("TOPLEFT",247,-22)
-  auditUI.mapBox=AddField(auditPage,"Map ID",330,-5,70,true)
-  auditUI.diffBox=AddField(auditPage,"Difficulty",415,-5,65,true); auditUI.diffBox:SetText(tostring(Settings().defaultDifficulty))
+  local auditPage=CreateFrame("Frame",nil,p); auditPage:SetPoint("TOPLEFT",0,-94); auditPage:SetPoint("BOTTOMRIGHT")
+  local bindPage=CreateFrame("Frame",nil,p); bindPage:SetPoint("TOPLEFT",0,-94); bindPage:SetPoint("BOTTOMRIGHT"); bindPage:Hide(); instanceUI.bindPage=bindPage
+  local auditTab,bindTab
+  local function ShowInstanceMode(mode)
+    local access=mode=="ACCESS"; if access then auditPage:Show(); bindPage:Hide() else auditPage:Hide(); bindPage:Show() end
+    if access then instanceUI.autoInspect=false end
+    auditTab:SetBackdropColor(unpack(access and C.selected or C.button)); auditTab:SetBackdropBorderColor(unpack(access and C.gold or C.border))
+    bindTab:SetBackdropColor(unpack(not access and C.selected or C.button)); bindTab:SetBackdropBorderColor(unpack(not access and C.gold or C.border))
+    context:SetText(access and "Group Audit" or "Binds / Reset")
+    if not access then RenderInstances() end
+  end
+  auditTab=Button(p,"Instance Access",140,24,function() ShowInstanceMode("ACCESS") end,"Check group and raid access to an instance"); auditTab:SetPoint("TOPLEFT",12,-65)
+  bindTab=Button(p,"Binds / Reset",120,24,function() ShowInstanceMode("BINDS") end,"Inspect and safely remove instance binds"); bindTab:SetPoint("LEFT",auditTab,"RIGHT",8,0)
+  auditTab:SetScript("OnLeave",function(self) self:SetBackdropColor(unpack(auditPage:IsShown() and C.selected or C.button)); self:SetBackdropBorderColor(unpack(auditPage:IsShown() and C.gold or C.border)); GameTooltip:Hide() end)
+  bindTab:SetScript("OnLeave",function(self) self:SetBackdropColor(unpack(bindPage:IsShown() and C.selected or C.button)); self:SetBackdropBorderColor(unpack(bindPage:IsShown() and C.gold or C.border)); GameTooltip:Hide() end)
+
+  StaticPopupDialogs["AZERCORE_OPS_INSTANCE_SEARCH_HELP"]={
+    text="Instance Search Help\n\nSearch using an exact Map ID, for example: 668\n\nOr enter a partial or complete instance title, for example: Halls or Halls of Reflection.\n\nSearch is not case-sensitive. Press Enter or click Search.",
+    button1=OKAY,timeout=0,whileDead=1,hideOnEscape=1,preferredIndex=3,
+  }
+
+  local searchLabel=Section(auditPage,"Instance title or Map ID",C.gold); searchLabel:SetPoint("TOPLEFT",12,-5)
+  Button(auditPage,"?",22,20,function() StaticPopup_Show("AZERCORE_OPS_INSTANCE_SEARCH_HELP") end,"How to search by instance title or Map ID"):SetPoint("TOPLEFT",172,-1)
+  local searchBox=Edit(auditPage,305,false); searchBox:SetPoint("TOPLEFT",12,-23); searchBox.azerCoreOpsPlain=true; auditUI.searchBox=searchBox
+  local function SearchInstances()
+    local query=NonEmpty(searchBox,"an instance title or Map ID")
+    if query then PushInstanceHistory(query); auditUI.search={}; auditUI.searchOffset=0; RenderAudit(); SendCommand(string.format(CMD.auditSearch,query)); SetStatus("Searching server instance maps...") end
+  end
+  Button(auditPage,"Search",70,24,SearchInstances,"Search by partial title or exact Map ID"):SetPoint("TOPLEFT",325,-23)
+  searchBox:SetScript("OnEnterPressed",function(self) self:ClearFocus(); SearchInstances() end)
+
+  local function ClearInstanceWorkspace()
+    searchBox:SetText(""); auditUI.search={}; auditUI.searchOffset=0; auditUI.selectedMap=nil; auditUI.selectedName=nil; auditUI.selectedType=nil; auditUI.selectedMaxPlayers=nil
+    auditUI.members={}; auditUI.filtered={}; auditUI.display={}; auditUI.lastMap=nil; auditUI.lastDifficulty=nil; auditUI.difficulty=0; auditUI.difficultyLabel="Normal"; auditUI.filter="ALL"; auditUI.referenceId=0; auditUI.generatedAt=nil; auditUI.stale=false; auditUI.groupVerdict="NOT AUDITED"; auditUI.groupReason="Run Group Audit"
+    if auditUI.difficultyButton then auditUI.difficultyButton:SetText("Normal  v") end
+    RenderAudit(); SetStatus("Instance Access workspace cleared.")
+  end
+  Button(auditPage,"Clear Workspace",108,24,ClearInstanceWorkspace,"Clear the search, locked instance and audit results"):SetPoint("TOPLEFT",403,-23)
+
   local function RunAudit()
-    local map=PositiveId(auditUI.mapBox,"map"); local diff=tonumber(auditUI.diffBox:GetText())
-    if not map or not diff or diff<0 or diff>3 then SetStatus("Difficulty must be 0, 1, 2, or 3.",true); return end
-    auditUI.lastMap=map; auditUI.lastDifficulty=diff; auditUI.members={}; RenderAudit(); SendCommand(string.format(CMD.auditGroup,map,diff)); SetStatus("Auditing group on the server...")
-  end
-  Button(auditPage,"Audit Group",100,24,RunAudit,"Check every group or raid member"):SetPoint("TOPLEFT",495,-22)
-
-  local searchPanel=CreateFrame("Frame",nil,auditPage); searchPanel:SetPoint("TOPLEFT",12,-59); searchPanel:SetWidth(190); searchPanel:SetHeight(307); Backdrop(searchPanel,C.panel)
-  local sh=Label(searchPanel,"Instance matches","GameFontNormalSmall"); sh:SetPoint("TOPLEFT",8,-7)
-  for i=1,8 do
-    local row=Button(searchPanel,"",174,27,function(self) if self.id then auditUI.mapBox:SetText(self.id); SetStatus("Selected map "..self.id) end end)
-    row.label=row:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); row.label:SetPoint("LEFT",6,0); row.label:SetPoint("RIGHT",-6,0); row.label:SetJustifyH("LEFT"); row.label:SetTextColor(unpack(C.gold))
-    row:SetPoint("TOPLEFT",8,-27-(i-1)*30); row:Hide(); auditUI.searchRows[i]=row
+    local map=tonumber(auditUI.selectedMap); local diff=tonumber(auditUI.difficulty)
+    if not map then SetStatus("Search for and lock an instance before auditing the group.",true); return end
+    auditUI.lastMap=map; auditUI.lastDifficulty=diff; auditUI.members={}; auditUI.display={}; auditUI.generatedAt=nil; auditUI.stale=false; auditUI.groupVerdict="AUDITING"; auditUI.groupReason="Collecting live group access data"; RenderAudit(); SendCommand(string.format(CMD.auditGroup,map,diff)); SetStatus("Auditing group access to "..(auditUI.selectedName or ("map "..map)).."...")
   end
 
-  local resultPanel=CreateFrame("Frame",nil,auditPage); resultPanel:SetPoint("TOPLEFT",210,-59); resultPanel:SetPoint("BOTTOMRIGHT",-12,10); Backdrop(resultPanel,C.panel)
-  local rh=Label(resultPanel,"Group access and visibility","GameFontNormalSmall"); rh:SetPoint("TOPLEFT",8,-7)
-  auditUI.summary=resultPanel:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); auditUI.summary:SetPoint("TOPRIGHT",-164,-7); auditUI.summary:SetTextColor(unpack(C.white))
-  local filterNames={"ALL","FAIL","WARN","PASS","OFFLINE"}
-  for i,name in ipairs(filterNames) do
-    local filterName=name
-    local filterButton=Button(resultPanel,filterName,54,18,function() auditUI.filter=filterName; if Settings().rememberAuditFilter then AzerCoreOpsDB.auditFilter=filterName end; RenderAudit() end,"Show "..filterName.." results")
-    filterButton:SetPoint("TOPLEFT",8+(i-1)*58,-27); auditUI.filterButtons[filterName]=filterButton
+  local searchPanel=CreateFrame("Frame",nil,auditPage); searchPanel:SetPoint("TOPLEFT",12,-57); searchPanel:SetPoint("BOTTOMLEFT",12,10); searchPanel:SetWidth(215); Backdrop(searchPanel,C.panel)
+  local sh=Section(searchPanel,"INSTANCE MATCHES",C.gold); sh:SetPoint("TOPLEFT",8,-8)
+  local function ScrollInstanceMatches(delta)
+    local maxOffset=math.max(0,#auditUI.search-5); auditUI.searchOffset=math.max(0,math.min(maxOffset,(auditUI.searchOffset or 0)+delta)); RenderAudit()
+  end
+  Button(searchPanel,"^",18,18,function() ScrollInstanceMatches(-1) end,"Scroll matches up"):SetPoint("TOPRIGHT",-4,-28)
+  Button(searchPanel,"v",18,18,function() ScrollInstanceMatches(1) end,"Scroll matches down"):SetPoint("TOPRIGHT",-4,-225)
+  searchPanel:EnableMouseWheel(true); searchPanel:SetScript("OnMouseWheel",function(_,delta) ScrollInstanceMatches(delta>0 and -1 or 1) end)
+  for i=1,5 do
+    local row=Button(searchPanel,"",183,38,function(self)
+      local r=self.data; if not r then return end
+      auditUI.selectedMap=tonumber(r.map); auditUI.selectedName=r.name; auditUI.selectedType=r.type; auditUI.selectedMaxPlayers=r.max; auditUI.difficulty=0; auditUI.difficultyLabel=(r.type=="raid" and "10-player Normal" or "Normal")
+      if #auditUI.members>0 and tonumber(auditUI.lastMap)~=tonumber(r.map) then auditUI.stale=true end
+      if auditUI.difficultyButton then auditUI.difficultyButton:SetText(auditUI.difficultyLabel.."  v") end
+      searchBox:SetText(r.name or tostring(r.map)); PushInstanceHistory(searchBox:GetText(),r.map,r.name,r.type,r.max); RenderAudit(); SetStatus("Locked "..(r.name or "instance").." — Map "..tostring(r.map))
+    end)
+    row.label=row:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); row.label:SetPoint("TOPLEFT",6,-3); row.label:SetPoint("BOTTOMRIGHT",-6,3); row.label:SetJustifyH("LEFT"); row.label:SetJustifyV("TOP"); row.label:SetWordWrap(true); row.label:SetTextColor(unpack(C.gold))
+    row:SetScript("OnLeave",function(self) local selected=tonumber(self.id)==tonumber(auditUI.selectedMap); self:SetBackdropColor(unpack(selected and C.selected or C.button)); self:SetBackdropBorderColor(unpack(selected and C.gold or C.border)); GameTooltip:Hide() end)
+    row:SetPoint("TOPLEFT",8,-29-(i-1)*40); row:Hide(); auditUI.searchRows[i]=row
+  end
+  local locked=CreateFrame("Frame",nil,searchPanel); locked:SetPoint("TOPLEFT",7,-249); locked:SetPoint("BOTTOMRIGHT",-7,7); Backdrop(locked,C.bg)
+  local lh=Section(locked,"LOCKED INSTANCE",C.gold); lh:SetPoint("TOPLEFT",8,-8)
+  auditUI.lockedText=locked:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); auditUI.lockedText:SetPoint("TOPLEFT",8,-34); auditUI.lockedText:SetPoint("BOTTOMRIGHT",-8,38); auditUI.lockedText:SetJustifyH("LEFT"); auditUI.lockedText:SetJustifyV("TOP"); auditUI.lockedText:SetWordWrap(true); auditUI.lockedText:SetTextColor(unpack(C.white))
+  Button(locked,"History",68,22,ShowSavedInstanceHistory,"Open saved instance searches and Map IDs"):SetPoint("BOTTOMLEFT",8,8)
+  Button(locked,"<",24,22,function() ShowInstanceHistory(1) end,"Previous saved instance search"):SetPoint("BOTTOMLEFT",80,8)
+  Button(locked,">",24,22,function() ShowInstanceHistory(-1) end,"Next saved instance search"):SetPoint("BOTTOMLEFT",108,8)
+
+  local resultPanel=CreateFrame("Frame",nil,auditPage); resultPanel:SetPoint("TOPLEFT",235,-57); resultPanel:SetPoint("BOTTOMRIGHT",-12,10); Backdrop(resultPanel,C.panel)
+  local rh=Section(resultPanel,"GROUP ACCESS",C.gold); rh:SetPoint("TOPLEFT",10,-10)
+
+  local diffLabel=Label(resultPanel,"Difficulty","GameFontNormalSmall"); diffLabel:SetPoint("TOPLEFT",10,-34)
+  local difficultyButtons={}
+  local diffButton=Button(resultPanel,"Normal  v",132,22,function()
+    if auditUI.difficultyMenu:IsShown() then auditUI.difficultyMenu:Hide() else
+      for _,b in ipairs(difficultyButtons) do local label=(auditUI.selectedType=="raid" and b.raidLabel or b.normalLabel); b.display=label; b:SetText(label or "Unavailable"); b:SetEnabled(label~=nil) end
+      auditUI.difficultyMenu:Show(); auditUI.difficultyMenu:Raise()
+    end
+  end,"Choose a readable dungeon or raid difficulty"); diffButton:SetPoint("TOPLEFT",72,-29); auditUI.difficultyButton=diffButton
+  local diffMenu=CreateFrame("Frame",nil,resultPanel); diffMenu:SetWidth(170); diffMenu:SetHeight(112); diffMenu:SetPoint("TOPLEFT",diffButton,"BOTTOMLEFT",0,-2); diffMenu:SetFrameStrata("FULLSCREEN_DIALOG"); diffMenu:SetFrameLevel(250); Backdrop(diffMenu,C.panel); diffMenu:Hide(); auditUI.difficultyMenu=diffMenu
+  local difficultyOptions={{0,"Normal","10-player Normal"},{1,"Heroic","25-player Normal"},{2,nil,"10-player Heroic"},{3,nil,"25-player Heroic"}}
+  for i,opt in ipairs(difficultyOptions) do
+    local b=Button(diffMenu,"",158,22,function(self)
+      if #auditUI.members>0 and tonumber(auditUI.lastDifficulty)~=tonumber(self.value) then auditUI.stale=true end
+      auditUI.difficulty=self.value; auditUI.difficultyLabel=self.display; diffButton:SetText(self.display.."  v"); diffMenu:Hide(); RenderAudit(); SetStatus("Difficulty set to "..self.display)
+    end); b:SetPoint("TOPLEFT",6,-6-(i-1)*25); b.value=opt[1]; b.normalLabel=opt[2]; b.raidLabel=opt[3]
+    table.insert(difficultyButtons,b)
+  end
+  Button(resultPanel,"Audit Group",92,22,RunAudit,"Check every party or raid member"):SetPoint("TOPLEFT",212,-29)
+  Button(resultPanel,"Re-audit",70,20,function() if auditUI.lastMap then RunAudit() else SetStatus("Run an audit first.",true) end end,"Repeat the last group audit"):SetPoint("TOPRIGHT",-10,-29)
+
+  auditUI.summary=resultPanel:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); auditUI.summary:SetPoint("TOPLEFT",10,-82); auditUI.summary:SetPoint("TOPRIGHT",-10,-82); auditUI.summary:SetJustifyH("RIGHT"); auditUI.summary:SetTextColor(unpack(C.white))
+  local auditFilters={
+    {"ALL","ALL",38,"Show every inspected member"},
+    {"CAN JOIN","CAN_JOIN",64,"Show players who can enter with the group"},
+    {"CANNOT JOIN","CANNOT_JOIN",80,"Show blocked players and Instance ID conflicts"},
+    {"OFFLINE","OFFLINE",54,"Show players who could not be inspected"},
+    {"SAME ID","SAME_ID",56,"Show players already saved to the group Instance ID"},
+    {"DIFFERENT ID","DIFFERENT_ID",76,"Show players saved to a conflicting Instance ID"},
+    {"NO BIND","NO_BIND",58,"Show online players without a personal bind"},
+  }
+  local auditFilterX=10
+  for _,spec in ipairs(auditFilters) do
+    local label,filterName,width,tip=spec[1],spec[2],spec[3],spec[4]
+    local filterButton=Button(resultPanel,label,width,18,function() auditUI.filter=filterName; if Settings().rememberAuditFilter then AzerCoreOpsDB.auditFilter=filterName end; RenderAudit() end,tip)
+    filterButton:SetPoint("TOPLEFT",auditFilterX,-58); auditFilterX=auditFilterX+width+4; auditUI.filterButtons[filterName]=filterButton
     filterButton:SetScript("OnLeave",function(self) self:SetBackdropColor(unpack(filterName==auditUI.filter and C.selected or C.button)); GameTooltip:Hide() end)
   end
-  Button(resultPanel,"Export",70,18,ShowAuditExport,"Open a selectable text report for copying"):SetPoint("TOPRIGHT",-84,-4)
-  Button(resultPanel,"Re-audit",70,18,function() if auditUI.lastMap then auditUI.mapBox:SetText(auditUI.lastMap); auditUI.diffBox:SetText(auditUI.lastDifficulty); RunAudit() else SetStatus("Run an audit first.",true) end end,"Repeat the last audit"):SetPoint("TOPRIGHT",-8,-4)
-  local scroll=CreateFrame("ScrollFrame","AZERCORE_OPS_AuditResultScroll",resultPanel,"UIPanelScrollFrameTemplate"); scroll:SetPoint("TOPLEFT",8,-48); scroll:SetPoint("BOTTOMRIGHT",-28,54); auditUI.scroll=scroll
-  local child=CreateFrame("Frame",nil,scroll); child:SetWidth(610); child:SetHeight(1); scroll:SetScrollChild(child); auditUI.scrollChild=child
-  auditUI.reportEdit=CreateFrame("EditBox",nil,child); auditUI.reportEdit:SetPoint("TOPLEFT",4,-2); auditUI.reportEdit:SetWidth(600); auditUI.reportEdit:SetHeight(1); auditUI.reportEdit:SetMultiLine(true); auditUI.reportEdit:SetAutoFocus(false); auditUI.reportEdit:SetFontObject(GameFontHighlightSmall); auditUI.reportEdit:SetTextColor(unpack(C.white)); auditUI.reportEdit:SetScript("OnEscapePressed",function(self) self:ClearFocus() end)
-  for i=1,40 do auditUI.memberRows[i]=AuditResultRow(child); auditUI.memberRows[i]:Hide() end
+  local columns=CreateFrame("Frame",nil,resultPanel); columns:SetPoint("TOPLEFT",8,-101); columns:SetPoint("TOPRIGHT",-28,-101); columns:SetHeight(20); Backdrop(columns,C.bg)
+  local cs=Label(columns,"VERDICT","GameFontNormalSmall"); cs:SetPoint("LEFT",6,0)
+  local cn=Label(columns,"PLAYER","GameFontNormalSmall"); cn:SetPoint("LEFT",78,0)
+  local cr=Label(columns,"INSTANCE ID / ACCESS RESULT / SOLUTION","GameFontNormalSmall"); cr:SetPoint("LEFT",176,0)
+  local scroll=CreateFrame("ScrollFrame","AZERCORE_OPS_AuditResultScroll",resultPanel,"UIPanelScrollFrameTemplate"); scroll:SetPoint("TOPLEFT",8,-123); scroll:SetPoint("BOTTOMRIGHT",-28,58); auditUI.scroll=scroll
+  local child=CreateFrame("Frame",nil,scroll); child:SetWidth(820); child:SetHeight(1); scroll:SetScrollChild(child); auditUI.scrollChild=child
+  auditUI.memberRows={}
+  for i=1,60 do auditUI.memberRows[i]=AuditResultRow(child); auditUI.memberRows[i]:Hide() end
   scroll:EnableMouseWheel(true); scroll:SetScript("OnMouseWheel",function(self,delta) if Settings().mouseWheelAudit then self:SetVerticalScroll(math.max(0,self:GetVerticalScroll()-delta*80)) end end)
-  local hs=CreateFrame("Slider","AZERCORE_OPS_AuditHorizontalScroll",resultPanel,"OptionsSliderTemplate"); hs:SetPoint("BOTTOMLEFT",12,31); hs:SetPoint("BOTTOMRIGHT",-12,31); hs:SetHeight(16); hs:SetMinMaxValues(0,0); hs:SetValueStep(10); hs:SetValue(0); auditUI.horizontal=hs
+  local hs=CreateFrame("Slider","AZERCORE_OPS_InstanceAuditHorizontalScroll",resultPanel,"OptionsSliderTemplate"); hs:SetPoint("BOTTOMLEFT",resultPanel,"BOTTOMLEFT",12,39); hs:SetPoint("BOTTOMRIGHT",resultPanel,"BOTTOMRIGHT",-12,39); hs:SetHeight(16); hs:SetMinMaxValues(0,455); hs:SetValueStep(10); hs:SetValue(0); auditUI.horizontal=hs
   _G[hs:GetName().."Low"]:SetText(""); _G[hs:GetName().."High"]:SetText(""); _G[hs:GetName().."Text"]:SetText("")
   hs:SetScript("OnValueChanged",function(_,value) if auditUI.scroll then auditUI.scroll:SetHorizontalScroll(value) end end)
-  local legend=Label(resultPanel,"PASS = access allowed  •  WARN = context  •  FAIL = blocked  •  Hover for full reason","GameFontHighlightSmall"); legend:SetTextColor(unpack(C.white)); legend:SetPoint("BOTTOMLEFT",12,9)
+  local footer=CreateFrame("Frame",nil,resultPanel); footer:SetPoint("BOTTOMLEFT",8,7); footer:SetPoint("BOTTOMRIGHT",-8,7); footer:SetHeight(28); Backdrop(footer,C.bg)
+  local legend=Label(footer,"GRANTED allowed  •  CONFLICT ID mismatch  •  BLOCKED denied","GameFontHighlightSmall"); legend:SetTextColor(unpack(C.white)); legend:SetPoint("LEFT",7,0); legend:SetWidth(330); legend:SetJustifyH("LEFT")
+  Button(footer,"Copy",48,20,ShowAuditCopy,"Open the full audit as selected text"):SetPoint("RIGHT",-128,0)
+  Button(footer,"Share",54,20,ShareAuditReport,"Open the Quest-style Courier share window with this audit"):SetPoint("RIGHT",-70,0)
+  Button(footer,"Export",62,20,ShowAuditExport,"Open the complete selectable audit report"):SetPoint("RIGHT",-4,0)
 
-  local myBox=CreateFrame("Frame",nil,bindPage); myBox:SetPoint("TOPLEFT",12,-4); myBox:SetWidth(295); myBox:SetHeight(260); Backdrop(myBox,C.panel)
-  local mh=Label(myBox,"My saved instances","GameFontNormalSmall"); mh:SetPoint("TOPLEFT",9,-8)
-  Button(myBox,"Refresh",70,20,RefreshMyInstances,"Refresh client lockouts"):SetPoint("TOPRIGHT",-8,-6)
-  for i=1,5 do instanceUI.myRows[i]=BindRow(myBox,-31-(i-1)*44) end
-  myBox:EnableMouseWheel(true); myBox:SetScript("OnMouseWheel",function(_,d) instanceUI.myOffset=math.max(0,math.min(math.max(0,#instanceUI.my-5),instanceUI.myOffset-d)); RenderInstances() end)
+  local operations=CreateFrame("Frame",nil,bindPage); operations:SetPoint("TOPLEFT",12,-4); operations:SetPoint("BOTTOMLEFT",12,33); operations:SetWidth(130); Backdrop(operations,C.panel)
+  local oh=Section(operations,"OPERATIONS",C.gold); oh:SetPoint("TOPLEFT",8,-9)
+  Button(operations,"Refresh Binds",114,24,function()
+    LogBindActivity("Bind refresh requested","REFRESH"); RefreshMyInstances(); if SelectedPlayerName() then After(.15,InspectTargetInstances) else SetStatus("My Binds refreshed; select a player to refresh Target Binds.") end
+  end,"Refresh My Binds and, when a player is selected, Target Binds"):SetPoint("TOPLEFT",8,-31)
+  instanceUI.inspectButton=Button(operations,"Inspect Target",114,24,function() InspectTargetInstances(true); UpdateBindControls() end,"Keep target inspection active while moving through party or raid members"); instanceUI.inspectButton:SetPoint("TOPLEFT",8,-63)
+  instanceUI.inspectButton:SetScript("OnLeave",function() UpdateBindControls(); GameTooltip:Hide() end)
+  instanceUI.unbindSelectedButton=Button(operations,"Unbind Selected",114,24,function()
+    local rows=SelectedTargetBinds(); if #rows==0 then SetStatus("Select one or more target binds using their checkboxes.",true); return end
+    if not RequireSelectedPlayer() then return end
+    LogBindActivity("Batch preview: "..#rows.." selected bind(s) for "..tostring(SelectedPlayerName()),"PREVIEW"); ConfirmUnbindRows(rows,Settings().confirmResetSelected)
+  end,"Remove the selected target bind after confirmation"); instanceUI.unbindSelectedButton:SetPoint("TOPLEFT",8,-95)
+  instanceUI.unbindAllButton=Button(operations,"Unbind All",114,24,function()
+    if not RequireSelectedPlayer() then return end
+    local rows={}; for _,r in ipairs(instanceUI.target or {}) do if BindApplicable(r) then table.insert(rows,r) end end
+    if #rows==0 then SetStatus("No applicable target binds are available to unbind.",true); return end
+    LogBindActivity("Batch preview: all "..#rows.." applicable bind(s) for "..tostring(SelectedPlayerName()),"PREVIEW"); ConfirmUnbindRows(rows,Settings().confirmResetAll)
+  end,"Remove every applicable target bind after confirmation"); instanceUI.unbindAllButton:SetPoint("TOPLEFT",8,-127)
+  Button(operations,"Bind Activity",114,24,ShowBindActivity,"View bind inspection, selection, filtering and operation activity"):SetPoint("TOPLEFT",8,-159)
+  local future=Button(operations,"Bind to ID",114,24,function() end,"Not enabled — under consideration. Assigning an Instance ID requires additional safety validation."); future:SetPoint("TOPLEFT",8,-191); future:SetEnabled(false)
+  local futureNote=Label(operations,"Not enabled\nUnder consideration","GameFontHighlightSmall"); futureNote:SetTextColor(unpack(C.muted)); futureNote:SetPoint("TOPLEFT",8,-222); futureNote:SetWidth(114); futureNote:SetJustifyH("CENTER")
 
-  local targetBox=CreateFrame("Frame",nil,bindPage); targetBox:SetPoint("TOPLEFT",317,-4); targetBox:SetWidth(295); targetBox:SetHeight(260); Backdrop(targetBox,C.panel)
-  instanceUI.targetLabel=Label(targetBox,"Selected player: none","GameFontNormalSmall"); instanceUI.targetLabel:SetPoint("TOPLEFT",9,-8)
-  Button(targetBox,"Inspect",70,20,InspectTargetInstances,"Run .instance listbinds for the selected player"):SetPoint("TOPRIGHT",-8,-6)
-  for i=1,5 do instanceUI.targetRows[i]=BindRow(targetBox,-31-(i-1)*44,function(self) if self.data then instanceUI.mapBox:SetText(self.data.map); instanceUI.diffBox:SetText(self.data.difficulty); SetStatus("Selected map "..self.data.map..", difficulty "..self.data.difficulty) end end) end
-  targetBox:EnableMouseWheel(true); targetBox:SetScript("OnMouseWheel",function(_,d) instanceUI.targetOffset=math.max(0,math.min(math.max(0,#instanceUI.target-5),instanceUI.targetOffset-d)); RenderInstances() end)
+  local summary=CreateFrame("Frame",nil,bindPage); summary:SetPoint("TOPLEFT",150,-4); summary:SetPoint("TOPRIGHT",-12,-4); summary:SetHeight(82); Backdrop(summary,C.bg)
+  instanceUI.targetHeader=Section(summary,"Selected target: none",C.gold); instanceUI.targetHeader:SetPoint("TOPRIGHT",-9,-8); instanceUI.targetHeader:SetJustifyH("RIGHT")
+  local function SetBindView(view) instanceUI.view=view; instanceUI.selectedBind=nil; instanceUI.myOffset=0; instanceUI.targetOffset=0; LogBindActivity("Workspace changed to "..(view=="LOCKED" and "Locked Binds" or "Binds Overview"),"VIEW"); RenderInstances() end
+  instanceUI.viewButtons={}
+  instanceUI.viewButtons.OVERVIEW=Button(summary,"Binds Overview",112,24,function() SetBindView("OVERVIEW") end,"Show personal and target bind overviews"); instanceUI.viewButtons.OVERVIEW:SetPoint("TOPLEFT",9,-7)
+  instanceUI.viewButtons.LOCKED=Button(summary,"Locked Binds",100,24,function() SetBindView("LOCKED") end,"Hide the overview and show personal and target locked binds"); instanceUI.viewButtons.LOCKED:SetPoint("LEFT",instanceUI.viewButtons.OVERVIEW,"RIGHT",7,0)
+  instanceUI.summaryText=Label(summary,"Total  0        Permanent  0        Temporary  0        Resettable  0","GameFontHighlightSmall"); instanceUI.summaryText:SetTextColor(unpack(C.white)); instanceUI.summaryText:SetPoint("TOPLEFT",9,-38)
+  local bindFilters={"ALL","RAID","DUNGEON","PERMANENT","RESETTABLE"}; local filterWidths={ALL=54,RAID=54,DUNGEON=76,PERMANENT=86,RESETTABLE=88}
+  local filterX=9
+  for i,name in ipairs(bindFilters) do
+    local filterName=name; local width=filterWidths[name]
+    local b=Button(summary,name,width,20,function() instanceUI.filter=filterName; instanceUI.myOffset=0; instanceUI.targetOffset=0; LogBindActivity("Filter changed to "..filterName,"FILTER"); RenderInstances() end,"Show "..name:lower().." binds"); b:SetPoint("TOPLEFT",filterX,-57); instanceUI.filterButtons[name]=b; filterX=filterX+width+5
+    b:SetScript("OnLeave",function(self) self:SetBackdropColor(unpack(filterName==instanceUI.filter and C.selected or C.button)); self:SetBackdropBorderColor(unpack(filterName==instanceUI.filter and C.gold or C.border)); GameTooltip:Hide() end)
+  end
 
-  instanceUI.mapBox=AddField(bindPage,"Map ID",14,-282,80,true); instanceUI.diffBox=AddField(bindPage,"Difficulty",110,-282,70,true); instanceUI.diffBox:SetText("0")
-  Button(bindPage,"Reset Map",105,24,function()
-    local name=RequireSelectedPlayer(); local map=PositiveId(instanceUI.mapBox,"map"); local diff=tonumber(instanceUI.diffBox:GetText())
-    if name and map and diff and diff>=0 and diff<=3 then Confirm(string.format(CMD.instanceUnbind,tostring(map),diff),Settings().confirmResetSelected,function() if Settings().autoReaudit and auditUI.lastMap then After(.7,function() auditPage:Show(); bindPage:Hide(); RunAudit() end) end end) else SetStatus("Select a player and enter map ID plus difficulty 0–3.",true) end
-  end,"Unbind the selected player from this map and difficulty"):SetPoint("TOPLEFT",198,-299)
-  Button(bindPage,"Reset ALL",105,24,function() if RequireSelectedPlayer() then Confirm(CMD.instanceUnbindAll,Settings().confirmResetAll,function() if Settings().autoReaudit and auditUI.lastMap then After(.7,function() auditPage:Show(); bindPage:Hide(); RunAudit() end) end end) end end,"Clear all removable binds for the selected player"):SetPoint("TOPLEFT",313,-299)
-  local note=Label(bindPage,"Click a selected-player bind to fill Map ID and Difficulty. Unbinding removes the character bind; it cannot reset an occupied instance or bypass encounter rules.","GameFontHighlightSmall")
-  note:SetTextColor(unpack(C.white)); note:SetPoint("TOPLEFT",435,-282); note:SetWidth(175); note:SetJustifyH("LEFT")
-  Button(bindPage,"Re-audit",90,22,function() if auditUI.lastMap then auditPage:Show(); bindPage:Hide(); auditUI.mapBox:SetText(auditUI.lastMap); auditUI.diffBox:SetText(auditUI.lastDifficulty); RunAudit() else SetStatus("Run an audit first.",true) end end,"Return to and repeat the last audit"):SetPoint("BOTTOMLEFT",14,13)
-  auditUI.filter=(Settings().rememberAuditFilter and AzerCoreOpsDB.auditFilter) or "ALL"
+  local bindContent=CreateFrame("Frame",nil,bindPage); bindContent:SetPoint("TOPLEFT",150,-91); bindContent:SetPoint("BOTTOMRIGHT",-12,33)
+  local myBox=CreateFrame("Frame",nil,bindContent); myBox:SetPoint("TOPLEFT",0,0); myBox:SetPoint("BOTTOMRIGHT",bindContent,"BOTTOM",-4,0); Backdrop(myBox,C.panel)
+  instanceUI.myHeading=Section(myBox,"MY BINDS",C.gold); instanceUI.myHeading:SetPoint("TOPLEFT",8,-8)
+  local myScroll=CreateFrame("ScrollFrame",nil,myBox,"UIPanelScrollFrameTemplate"); myScroll:SetPoint("TOPLEFT",7,-28); myScroll:SetPoint("BOTTOMRIGHT",-27,29); instanceUI.myScroll=myScroll
+  local myChild=CreateFrame("Frame",nil,myScroll); myChild:SetWidth(430); myChild:SetHeight(1200); myScroll:SetScrollChild(myChild)
+  instanceUI.myRows={}; for i=1,20 do instanceUI.myRows[i]=BindRow(myChild,-2-(i-1)*60) end
+  instanceUI.myEmpty=Label(myBox,"No binds found","GameFontHighlightSmall"); instanceUI.myEmpty:SetPoint("CENTER",0,0); instanceUI.myEmpty:SetTextColor(unpack(C.muted))
+
+  local targetBox=CreateFrame("Frame",nil,bindContent); targetBox:SetPoint("TOPLEFT",bindContent,"TOP",4,0); targetBox:SetPoint("BOTTOMRIGHT",0,0); Backdrop(targetBox,C.panel)
+  instanceUI.targetLabel=Section(targetBox,"TARGET BINDS — none",C.gold); instanceUI.targetLabel:SetPoint("TOPLEFT",8,-8)
+  local targetScroll=CreateFrame("ScrollFrame",nil,targetBox,"UIPanelScrollFrameTemplate"); targetScroll:SetPoint("TOPLEFT",7,-28); targetScroll:SetPoint("BOTTOMRIGHT",-27,29); instanceUI.targetScroll=targetScroll
+  local targetChild=CreateFrame("Frame",nil,targetScroll); targetChild:SetWidth(430); targetChild:SetHeight(1200); targetScroll:SetScrollChild(targetChild)
+  instanceUI.targetRows={}; for i=1,20 do instanceUI.targetRows[i]=BindRow(targetChild,-2-(i-1)*60,
+    function(self) if self.data then instanceUI.selectedBind=self.data; LogBindActivity("Opened bind ID "..tostring(self.data.instance or "?"),"SELECT"); RenderInstances(); SetStatus("Opened bind ID "..tostring(self.data.instance or "?")) end end,
+    function(row,checked)
+      local r=row.data; if not r then return end
+      if checked and not BindApplicable(r) then r.selected=false; row.check:SetChecked(false); StaticPopup_Show("AZERCORE_OPS_BIND_NOT_APPLICABLE",r.reason or "The module reported that unbinding is not applicable."); LogBindActivity("Selection refused for ID "..tostring(r.instance)..": "..tostring(r.reason),"BLOCKED")
+      else r.selected=checked and true or false; LogBindActivity((r.selected and "Selected " or "Unselected ").."bind ID "..tostring(r.instance),"SELECT") end
+      UpdateBindControls()
+    end) end
+  instanceUI.targetEmpty=Label(targetBox,"No binds found","GameFontHighlightSmall"); instanceUI.targetEmpty:SetPoint("CENTER",0,0); instanceUI.targetEmpty:SetTextColor(unpack(C.muted))
+
+  local function BindPanelSlider(parent,name,scroll,bottom,maxValue)
+    local slider=CreateFrame("Slider",name,parent,"OptionsSliderTemplate"); slider:SetPoint("BOTTOMLEFT",10,bottom); slider:SetPoint("BOTTOMRIGHT",-10,bottom); slider:SetHeight(14); slider:SetMinMaxValues(0,maxValue); slider:SetValueStep(5); slider:SetValue(0)
+    _G[name.."Low"]:SetText(""); _G[name.."High"]:SetText(""); _G[name.."Text"]:SetText("")
+    slider:SetScript("OnValueChanged",function(_,value) scroll:SetHorizontalScroll(value) end); table.insert(instanceUI.horizontals,slider); return slider
+  end
+  instanceUI.horizontals={}
+  BindPanelSlider(myBox,"AZERCORE_OPS_MyBindHorizontalScroll",myScroll,7,110)
+  BindPanelSlider(targetBox,"AZERCORE_OPS_TargetBindHorizontalScroll",targetScroll,7,110)
+
+  local bindFooter=CreateFrame("Frame",nil,bindPage); bindFooter:SetPoint("BOTTOMLEFT",150,2); bindFooter:SetPoint("BOTTOMRIGHT",-12,2); bindFooter:SetHeight(27); Backdrop(bindFooter,C.bg)
+  instanceUI.statusText=Label(bindFooter,"Personal binds ready","GameFontHighlightSmall"); instanceUI.statusText:SetTextColor(unpack(C.white)); instanceUI.statusText:SetPoint("LEFT",7,0); instanceUI.statusText:SetWidth(300); instanceUI.statusText:SetJustifyH("LEFT")
+  Button(bindFooter,"Copy",48,20,CopyBindReport,"Open the complete bind report as selectable text"):SetPoint("RIGHT",-128,0)
+  Button(bindFooter,"Share",54,20,ShareBindReport,"Open the Courier share window with the bind report"):SetPoint("RIGHT",-70,0)
+  Button(bindFooter,"Export",62,20,ExportBindReport,"Export the complete visible bind report"):SetPoint("RIGHT",-4,0)
+  auditUI.filter=(Settings().rememberAuditFilter and AzerCoreOpsDB.auditFilter) or "ALL"; if not ({ALL=true,CAN_JOIN=true,CANNOT_JOIN=true,OFFLINE=true,SAME_ID=true,DIFFERENT_ID=true,NO_BIND=true})[auditUI.filter] then auditUI.filter="ALL" end
+  ShowInstanceMode("ACCESS")
   RenderAudit()
   RenderInstances()
 end
@@ -2047,6 +2623,7 @@ local function BuildUI()
   for i,item in ipairs(nav) do
     local label,pageName=item[1],item[2]
     local b=Button(sidebar,label,132,30,function() SelectTab(pageName) end); b:SetPoint("TOPLEFT",14,-38-(i-1)*36); tabs[pageName]=b
+    b:SetScript("OnLeave",function(self) self:SetBackdropColor(unpack(activeTab==pageName and C.selected or C.button)); self:SetBackdropBorderColor(unpack(activeTab==pageName and C.gold or C.border)); GameTooltip:Hide() end)
   end
   local build=sidebar:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); build:SetPoint("BOTTOMLEFT",14,14); build:SetPoint("BOTTOMRIGHT",-14,14); build:SetJustifyH("LEFT"); build:SetTextColor(.65,.65,.65,1); build:SetText("Protocol v"..PROTOCOL_VERSION.."\nDevelopment build")
 
@@ -2070,12 +2647,12 @@ local function BuildUI()
   if Settings().startMinimized then HideMain() end
 end
 
-local events=CreateFrame("Frame"); events:RegisterEvent("ADDON_LOADED"); events:RegisterEvent("PLAYER_ENTERING_WORLD"); events:RegisterEvent("CHAT_MSG_SYSTEM"); events:RegisterEvent("UPDATE_INSTANCE_INFO"); events:RegisterEvent("PLAYER_TARGET_CHANGED")
+local events=CreateFrame("Frame"); events:RegisterEvent("ADDON_LOADED"); events:RegisterEvent("PLAYER_ENTERING_WORLD"); events:RegisterEvent("CHAT_MSG_SYSTEM"); events:RegisterEvent("UPDATE_INSTANCE_INFO"); events:RegisterEvent("PLAYER_TARGET_CHANGED"); events:RegisterEvent("PARTY_MEMBERS_CHANGED"); events:RegisterEvent("RAID_ROSTER_UPDATE")
 local compatibilityRequested=false
 events:SetScript("OnEvent",function(_,event,arg1)
   if event=="ADDON_LOADED" then if arg1~=ADDON then return end; AzerCoreOpsDB=AzerCoreOpsDB or {}; Settings(); BuildOptions(); BuildUI(); Print("v"..ADDON_VERSION.." loaded. Type /azercoreops help")
   elseif event=="PLAYER_ENTERING_WORLD" and not compatibilityRequested then compatibilityRequested=true; SendChatMessage(CMD.version,"SAY")
-  elseif event=="UPDATE_INSTANCE_INFO" then RefreshMyInstances(true)
+  elseif event=="UPDATE_INSTANCE_INFO" and activeTab=="Instances" and instanceUI.bindPage and instanceUI.bindPage:IsShown() then RefreshMyInstances()
   elseif event=="PLAYER_TARGET_CHANGED" then
     RenderInstances(); UpdateQuestContextLabel()
     if shareFrame and shareFrame:IsShown() and shareFrame.RefreshLive then shareFrame:RefreshLive() end
@@ -2086,6 +2663,11 @@ events:SetScript("OnEvent",function(_,event,arg1)
     else
       UpdateQuestInspectorTarget(false)
     end
+    if instanceUI.autoInspect and activeTab=="Instances" and instanceUI.bindPage and instanceUI.bindPage:IsShown() and UnitExists("target") and UnitIsPlayer("target") then
+      After(.05,function() InspectTargetInstances(false) end)
+    end
+  elseif event=="PARTY_MEMBERS_CHANGED" or event=="RAID_ROSTER_UPDATE" then
+    if #auditUI.members>0 then auditUI.stale=true; RenderAudit(); SetStatus("Group roster changed; the Instance Access audit is stale. Run Re-audit.") end
   elseif event=="CHAT_MSG_SYSTEM" and tostring(arg1):find("^AZERCORE_OPS|") then
     local kind=tostring(arg1):match("^AZERCORE_OPS|([^|]+)")
     local f=ParseAuditFields(arg1)
@@ -2156,21 +2738,45 @@ events:SetScript("OnEvent",function(_,event,arg1)
     elseif kind=="QUEST_ERROR" then
       if questUI.targetLogLoading then questUI.targetLogLoading=false; questUI.targetLogError=f.reason or "Quest-log inspection failed"; RenderQuest() end
       SetStatus(f.reason or "Quest module error",true)
+    elseif kind=="BIND_BEGIN" then
+      instanceUI.bindScope=f.scope or instanceUI.bindScope or "TARGET"
+      if instanceUI.bindScope=="SELF" then instanceUI.my={} else instanceUI.target={}; instanceUI.inspectedPlayer=f.player or instanceUI.inspectedPlayer end
+      RenderInstances(); SetStatus("Receiving "..tostring(f.count or 0).." structured bind(s) for "..tostring(f.player or "player").."...")
+    elseif kind=="BIND_ENTRY" then
+      local row={name=f.name,map=tonumber(f.map),instance=tonumber(f.instance),id=tonumber(f.instance),difficulty=tonumber(f.difficulty),difficultyName=BindDifficultyName(f.difficulty),perm=f.permanent,permanent=f.permanent,extended=f.extended,canReset=f.canreset,applicable=f.applicable,reset=tonumber(f.reset),ttr=ShortTime(f.reset),encountermask=tonumber(f.encountermask) or 0,bosstotal=tonumber(f.bosstotal) or 0,bossdefeated=tonumber(f.bossdefeated) or 0,reason=f.reason,isRaid=f.type=="raid",bosses={}}
+      table.insert(instanceUI.bindScope=="SELF" and instanceUI.my or instanceUI.target,row); RenderInstances()
+    elseif kind=="BIND_BOSS" then
+      local rows=instanceUI.bindScope=="SELF" and instanceUI.my or instanceUI.target
+      for index=#rows,1,-1 do local r=rows[index]; if tonumber(r.map)==tonumber(f.map) and tonumber(r.instance)==tonumber(f.instance) and tonumber(r.difficulty)==tonumber(f.difficulty) then table.insert(r.bosses,{index=tonumber(f.index),defeated=f.defeated,name=f.name}); break end end
+      RenderInstances()
+    elseif kind=="BIND_END" then
+      if instanceUI.bindScope=="TARGET" then instanceUI.inspectedPlayer=f.player or instanceUI.inspectedPlayer; instanceUI.inspectedAt=date("%H:%M:%S") end
+      LogBindActivity(string.format("Structured %s binds loaded for %s: %s",instanceUI.bindScope or "",f.player or "player",f.count or 0),"RESULT"); RenderInstances(); SetStatus(tostring(f.count or 0).." structured bind(s) loaded for "..tostring(f.player or "player"))
+    elseif kind=="UNBIND_BEGIN" then
+      instanceUI.unbindOperation=f.operation; LogBindActivity("Operation "..tostring(f.operation).." started for "..tostring(f.player).." — "..tostring(f.requested).." bind(s)","UNBIND"); SetStatus("Batch unbind started for "..tostring(f.player).."...")
+    elseif kind=="UNBIND_RESULT" then
+      LogBindActivity(string.format("%s — Map %s, Difficulty %s, ID %s: %s",f.result or "RESULT",f.map or "?",f.difficulty or "?",f.instance or "?",f.reason or "No reason"),f.result=="SUCCESS" and "SUCCESS" or "FAILED")
+    elseif kind=="UNBIND_END" then
+      LogBindActivity(string.format("Operation %s complete: %s succeeded, %s failed",f.operation or "?",f.succeeded or 0,f.failed or 0),tonumber(f.failed)==0 and "SUCCESS" or "RESULT"); instanceUI.unbindOperation=nil; instanceUI.pendingUnbindCommands=math.max(0,(instanceUI.pendingUnbindCommands or 1)-1)
+      if instanceUI.pendingUnbindCommands==0 then SetStatus(string.format("Batch unbind complete: %s succeeded, %s failed. Verifying target...",f.succeeded or 0,f.failed or 0)); After(.25,function() InspectTargetInstances(false) end) else SetStatus("Unbind batch segment complete; continuing...") end
     elseif kind=="SEARCH" then
       if #auditUI.search<8 then table.insert(auditUI.search,f) end; RenderAudit(); SetStatus(#auditUI.search.." instance match(es)")
     elseif kind=="BEGIN" then
-      auditUI.members={}; RenderAudit(); SetStatus("Auditing "..(f.name or "instance").."...")
+      auditUI.members={}; auditUI.referenceId=tonumber(f.reference) or 0; auditUI.expectedMembers=tonumber(f.members) or 0; auditUI.stale=false; auditUI.generatedAt=nil; auditUI.groupVerdict="AUDITING"; auditUI.groupReason="Collecting live group access data"; RenderAudit(); SetStatus("Auditing "..(f.name or "instance").."...")
     elseif kind=="MEMBER" then
       table.insert(auditUI.members,f); RenderAudit()
     elseif kind=="END" then
-      local pass,fail,warn=0,0,0; for _,r in ipairs(auditUI.members) do if r.result=="PASS" then pass=pass+1 elseif r.result=="WARN" then warn=warn+1 else fail=fail+1 end end
-      SetStatus(string.format("Audit complete: %d pass, %d warning, %d fail/offline",pass,warn,fail))
+      auditUI.generatedAt=date("%Y-%m-%d %H:%M:%S"); auditUI.stale=false; ComputeGroupVerdict(); RenderAudit()
+      local granted,conflict,blocked,offline=0,0,0,0; for _,r in ipairs(auditUI.members) do PrepareAuditMember(r); if r.verdict=="GRANTED" then granted=granted+1 elseif r.verdict=="CONFLICT" then conflict=conflict+1 elseif r.verdict=="BLOCKED" then blocked=blocked+1 else offline=offline+1 end end
+      SetStatus(string.format("%s: %d granted, %d conflict, %d blocked, %d offline",auditUI.groupVerdict,granted,conflict,blocked,offline))
     elseif kind=="ERROR" then SetStatus(f.reason or "Instance audit error",true) end
   elseif event=="CHAT_MSG_SYSTEM" and instanceUI.captureUntil>0 and GetTime()<=instanceUI.captureUntil then
     local plain=tostring(arg1):gsub("|c%x%x%x%x%x%x%x%x",""):gsub("|r","")
     local map,inst,perm,diff,canReset,ttr=plain:match("map:%s*(%d+),%s*inst:%s*(%d+),%s*perm:%s*(%a+),%s*diff:%s*(%d+),%s*canReset:%s*(%a+),%s*TTR:%s*(.-)%s*$")
     if map then
-      table.insert(instanceUI.target,{map=tonumber(map),instance=tonumber(inst),perm=perm,difficulty=tonumber(diff),canReset=canReset,ttr=ttr})
+      local mapNumber=tonumber(map); local bindName=(GetMapNameByID and GetMapNameByID(mapNumber)) or ("Map "..map)
+      table.insert(instanceUI.target,{name=bindName,map=mapNumber,instance=tonumber(inst),perm=perm,difficulty=tonumber(diff),difficultyName=BindDifficultyName(diff),canReset=canReset,ttr=ttr})
+      LogBindActivity("Captured "..bindName.." — ID "..inst,"RESULT")
       RenderInstances(); SetStatus(#instanceUI.target.." selected-player bind(s) captured")
     end
   elseif event=="CHAT_MSG_SYSTEM" and lookup.kind and GetTime()<=lookup.expires then

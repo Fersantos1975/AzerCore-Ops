@@ -186,6 +186,15 @@ Shared behavior should be implemented once when practical.
 
 Avoid copying similar logic into multiple Inspectors.
 
+### Apply the UI Rules Before Coding
+
+All addon UI work must follow the binding rules in
+[`docs/design-system/README.md`](docs/design-system/README.md). In particular,
+button highlighting and workspace state must be event-driven and must not use
+permanent `OnUpdate` polling. If a requested change conflicts with a binding UI
+rule, document the conflict and obtain an explicit project decision before
+implementation.
+
 ### Preserve Clear Boundaries
 
 Keep these responsibilities separate:

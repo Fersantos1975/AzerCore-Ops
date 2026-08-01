@@ -35,6 +35,12 @@ Use this checklist before tagging any AzerCore Ops release.
 - [ ] Group audit handles solo, party, and raid states safely.
 - [ ] Search history, activity log, copy, and export functions work.
 - [ ] Instance inspection commands still respond correctly.
+- [ ] Structured My Binds and Target Binds show exact Instance IDs and reset metadata.
+- [ ] Boss progress shows defeated/total counts and defeated/remaining names when available.
+- [ ] Group Audit identifies same-ID, different-ID, no-bind, blocked, and offline members correctly.
+- [ ] Non-applicable bind selection explains why without selecting the bind.
+- [ ] Multi-select batch unbind requires confirmation and reports every success or failure in Bind Activity.
+- [ ] Post-unbind target reinspection confirms that successfully removed binds are gone.
 
 ## Release publication
 

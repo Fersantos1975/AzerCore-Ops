@@ -5,7 +5,7 @@
 
 AzerCore Ops Platform combines an AzerothCore C++ module with a World of Warcraft: Wrath of the Lich King 3.3.5a addon. Its flagship workspace, **Quest Intelligence**, provides quest inspection, contextual analysis, group auditing, history, diagnostics, and report export for administrators and Game Masters.
 
-> **Development status:** `0.5.1` target Quest Log release candidate. The source requires compilation and in-game validation against a supported AzerothCore checkout before production use.
+> **Development status:** `0.5.2` Instance Access release candidate. The source requires compilation and in-game validation against a supported AzerothCore checkout before production use.
 
 ## Features
 
@@ -16,7 +16,9 @@ AzerCore Ops Platform combines an AzerothCore C++ module with a World of Warcraf
 - Group quest auditing
 - Search history and activity logging
 - Report copy and export workflows
-- Instance inspection foundation
+- Structured personal and target bind inventories with exact Instance IDs
+- Group access readiness, bind-ID comparison, encounter progress, and boss names
+- Confirmed multi-select bind removal with per-bind results and post-operation verification
 - Module, core, and playerbots build information
 - Shared addon design, search, reporting, and platform frameworks
 

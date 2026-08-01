@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.5.2 — Instance Access
+
+### Added
+
+- Structured SELF and TARGET bind inventories with exact map, difficulty, Instance ID, permanence, extension, reset, and applicability fields.
+- Encounter masks, defeated/total boss progress, and individual defeated/remaining boss records.
+- Structured bind metadata in group access audits.
+- Multi-select bind checkboxes and safe batch unbinding with operation IDs, stale-selection protection, per-bind results, and server verification.
+- Automatic target reinspection and Bind Activity results after every batch operation.
+
+### Updated
+
+- Preserved the AzerothCore command-argument namespace compatibility patch in `InstanceInspector.cpp` and `.h`.
+- Updated the bundled addon to `0.5.2-alpha1-instance-module-sync`, including numbered quest chains and complete chunked Courier reports.
+
 ## 0.5.1 — Target Quest Log
 
 ### Added
@@ -16,6 +31,9 @@
 - Renamed the former Eligibility workspace to Instance Access.
 - Added safe plain-text Quest References for the current client/core quest-link limitation.
 - Added saved-search history navigation and confirmed history deletion.
+- Added numbered quest-chain progress to Quest Database and Target Player, including the selected quest's position, per-quest status, progress totals, and alternative-prerequisite labels.
+- Synchronized the numbered quest-chain presentation with Copy, Share, and Export reports.
+- Replaced Courier's single-message truncation with numbered, chat-safe report parts that advance after each Enter press.
 
 ## 0.5.0 — Foundation Release
 
