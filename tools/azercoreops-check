@@ -20,7 +20,7 @@ check_file addon/AzerCoreOps/AzerCoreOps.lua
 check_file addon/AzerCoreOps/AzerCoreOps.toc
 
 if grep -q '#include "Chat.h"' "$ROOT/src/mod_azercore_ops.cpp"; then ok 'AzerothCore command API header'; else bad 'Chat.h missing from command registration'; fi
-if grep -q 'Acore::ChatCommands::Optional<uint8>' "$ROOT/src/Inspectors/Instance/InstanceInspector.h"; then ok 'Optional command argument is namespace-qualified'; else bad 'Optional<uint8> is not namespace-qualified'; fi
+if grep -q 'Optional<uint8>' "$ROOT/src/Inspectors/Instance/InstanceInspector.h" && ! grep -q 'Acore::ChatCommands::Optional<uint8>' "$ROOT/src/Inspectors/Instance/InstanceInspector.h"; then ok 'Optional command argument matches AzerothCore API'; else bad 'Optional<uint8> command argument does not match AzerothCore API'; fi
 if grep -q 'AZERCORE_OPS_CAPABILITIES' "$ROOT/src/azercoreops_build_info.h.in"; then ok 'capability metadata'; else bad 'capability metadata missing'; fi
 
 printf '\n'

@@ -21,6 +21,16 @@
 - Display live objective progress for self and module-supplied progress for targets.
 - Add Quest Log actions for objectives, rewards, requirements, chain, NPCs, comparison, diagnostics, and export.
 
+## Role-aware operating modes
+
+- Add Automatic, Player, and GM operating modes before the wider 0.6.x workspace expansion.
+- Default to Automatic and derive the effective mode from the module permissions handshake.
+- Always allow a GM to select the safer read-only Player Mode.
+- Never allow an addon setting to grant GM authority; the server remains authoritative for every command.
+- Hide mutation and administrative operations in Player Mode while retaining permitted inspection, readiness, and report tools.
+- Show a persistent PLAYER MODE or GM MODE indicator and immediately downgrade the interface if permissions are lost.
+- Maintain a documented feature/permission matrix and apply it through centralized UI state rather than per-frame polling.
+
 ## Future intelligence workspaces
 
 - Character Intelligence

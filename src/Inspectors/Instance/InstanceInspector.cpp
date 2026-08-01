@@ -260,6 +260,19 @@ bool InstanceInspector::Search(ChatHandler* handler, Tail search)
     if (search.empty())
         return false;
 
+    std::string query(search);
+    if (Optional<uint32> mapId = Acore::StringTo<uint32>(query, 10))
+    {
+        uint32 count = 0;
+        if (MapEntry const* entry = sMapStore.LookupEntry(*mapId); entry && entry->IsDungeon())
+        {
+            Protocol::SendInstanceSearch(handler, entry->MapID, LocalizedMapName(entry, handler), entry->IsRaid() ? "raid" : "dungeon", entry->maxPlayers);
+            count = 1;
+        }
+        Protocol::SendInstanceSearchEnd(handler, count);
+        return true;
+    }
+
     std::wstring needle;
     if (!Utf8toWStr(search, needle))
         return false;
@@ -352,7 +365,7 @@ bool InstanceInspector::Unbind(ChatHandler* handler, Tail selectionsArg)
     return true;
 }
 
-bool InstanceInspector::Audit(ChatHandler* handler, uint32 mapId, Acore::ChatCommands::Optional<uint8> difficultyArg)
+bool InstanceInspector::Audit(ChatHandler* handler, uint32 mapId, Optional<uint8> difficultyArg)
 {
     Player* requester = handler->GetSession()->GetPlayer();
     MapEntry const* entry = sMapStore.LookupEntry(mapId);

@@ -12,7 +12,10 @@ AzerCore Ops Platform 0.5.2 connects the completed Instance Access interface to 
 - Structured SELF and TARGET bind inventories with map, difficulty, Instance ID, permanence, extension, reset, applicability, and exact reset duration
 - Encounter masks, defeated-boss totals, and defeated/remaining boss names where AzerothCore DBC data is available
 - Structured bind IDs and encounter progress in group access audits
-- Multi-select and all-applicable batch unbinding with stale-ID protection, per-bind results, operation IDs, server verification, activity logging, and automatic target reinspection
+- Explicit multi-select batch unbinding with stale-ID protection, per-bind results, operation IDs, server verification, activity logging, and automatic target reinspection
+- Direct instance search by exact numeric Map ID or partial title, with explicit zero-result completion reporting
+- Quest-style target identity card with synchronized portrait, name, level, class, guild, and class-colored context border
+- Boss-lockout terminology and scheduled-reset information that avoids presenting technical permanent binds as lifetime lockouts
 - Numbered quest chains with selected-quest position and player-specific status
 - Numbered Courier chunks for complete long-report delivery through Blizzard chat
 - Repository architecture, design-system documentation, contribution guidance, and release validation tooling

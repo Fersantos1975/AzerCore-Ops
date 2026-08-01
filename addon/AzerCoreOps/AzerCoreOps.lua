@@ -1,6 +1,6 @@
 local ADDON = ...
 
--- AzerCore Ops Platform 0.5.2-alpha1-instance-module-sync
+-- AzerCore Ops Platform 0.5.2-alpha2-instance-access-complete
 -- Target: WoW 3.3.5a / AzerothCore. All server commands live here so that
 -- branch-specific command names can be changed without touching the UI.
 local CMD = {
@@ -58,24 +58,27 @@ local compatUI={data=nil,text=nil,informationText=nil,received={}}
 local instanceUI={my={},target={},captureUntil=0,myRows={},targetRows={},myOffset=0,targetOffset=0,targetLabel=nil,
   selectedBind=nil,filter="ALL",filterButtons={},detailText=nil,summaryText=nil,myEmpty=nil,targetEmpty=nil,inspectionText=nil,
   inspectedPlayer=nil,inspectedAt=nil,statusText=nil,myScroll=nil,targetScroll=nil,detailScroll=nil,horizontals={},activity={},
-  view="OVERVIEW",viewButtons={},myHeading=nil,targetHeader=nil,autoInspect=false,bindPage=nil,bindScope=nil,unbindOperation=nil}
+  view="OVERVIEW",viewButtons={},myHeading=nil,targetHeader=nil,autoInspect=false,bindPage=nil,bindScope=nil,unbindOperation=nil,
+  myLoadState="UNLOADED",targetLoadState="UNLOADED",ignoreBindStream=false,targetPortrait=nil,targetPortraitFrame=nil,targetIdentity=nil,
+  targetIdentityName=nil,targetIdentityMeta=nil}
 local auditUI={search={},members={},searchRows={},memberRows={},filterButtons={},filtered={},mapBox=nil,diffBox=nil,summary=nil,scroll=nil,scrollChild=nil,horizontal=nil,filter="ALL",lastMap=nil,lastDifficulty=nil,reportEdit=nil,
   searchOffset=0,selectedMap=nil,selectedName=nil,selectedType=nil,selectedMaxPlayers=nil,difficulty=0,difficultyLabel="Normal",lockedText=nil,difficultyButton=nil,difficultyMenu=nil,historyIndex=0,searchBox=nil,
   referenceId=0,expectedMembers=0,display={},groupVerdict="NOT AUDITED",groupReason="Run Group Audit",generatedAt=nil,stale=false}
 local exportFrame, exportEdit, exportActionButton
 local shareFrame, shareText, courierUI
 local ShowSelectableReport
+local ApplyPlayerTargetIdentity
 local defaults={
   startMinimized=true,showMinimap=true,showMini=true,mbfCompatibility=true,scale=1,
   confirmCommands=true,hideAuditChat=true,defaultDifficulty=0,
   auditTooltips=true,wrapAuditReasons=true,mouseWheelAudit=true,problemsFirst=false,
-  rememberAuditFilter=true,autoReaudit=false,confirmResetSelected=true,confirmResetAll=true,
+  rememberAuditFilter=true,autoReaudit=false,confirmResetSelected=true,
   warnNoTarget=true,compactAuditRows=false,auditFontSize=10,shiftClickInsert=true,
 }
-local ADDON_VERSION="0.5.2-alpha1-instance-module-sync"
+local ADDON_VERSION="0.5.2-alpha2-instance-access-complete"
 local PROTOCOL_VERSION="1"
-local TESTED_CORE="ceeb3116ebed"
-local TESTED_PLAYERBOTS="3fa1c1e49f8f"
+local TESTED_CORE="190184a04539"
+local TESTED_PLAYERBOTS="ba46fcdecde3"
 
 local function Settings()
   AzerCoreOpsDB=AzerCoreOpsDB or {}
@@ -1298,17 +1301,15 @@ local function UpdateQuestInspectorTarget(refreshQuest)
   if not questUI.targetNameText then return end
   local valid=UnitExists("target") and UnitIsPlayer("target")
   if valid then
-    local name=UnitName("target") or "Unknown"
+    local identity=ApplyPlayerTargetIdentity(questUI.targetPortrait)
+    local name=identity.name
     if questUI.targetLogPlayer and questUI.targetLogPlayer~=name then
       questUI.targetLogEntries={}; questUI.targetLogLoading=false; questUI.targetLogError=nil
     end
-    local level=UnitLevel("target") or "?"
-    local class=select(1,UnitClass("target")) or "Player"
-    local guild=GetGuildInfo("target")
+    local level,class,guild=identity.level,identity.class,identity.guild
     questUI.targetNameText:SetText(name)
     if questUI.railTargetText then questUI.railTargetText:SetText(name) end
     questUI.targetMetaText:SetText(string.format("Level %s  %s%s",tostring(level),class,guild and ("\nGuild: "..guild) or ""))
-    if questUI.targetPortrait then SetPortraitTexture(questUI.targetPortrait,"target") end
     questUI.contextName=name
     questUI.contextKind="TARGET"
     UpdateQuestContextLabel()
@@ -1327,7 +1328,7 @@ local function UpdateQuestInspectorTarget(refreshQuest)
     questUI.targetMetaText:SetText("Select a player target to inspect their Quest Log or a locked quest.")
     questUI.targetHintText:SetText("Target inspection requires an online player target.")
     questUI.targetHintText:SetTextColor(unpack(C.muted))
-    if questUI.targetPortrait then questUI.targetPortrait:SetTexture("Interface\\Icons\\INV_Misc_QuestionMark") end
+    ApplyPlayerTargetIdentity(questUI.targetPortrait)
   end
   RenderQuest()
 end
@@ -1603,6 +1604,34 @@ local function SelectedPlayerName()
   if UnitExists("target") and UnitIsPlayer("target") then return UnitName("target") end
 end
 
+ApplyPlayerTargetIdentity=function(portrait,borderFrame)
+  if UnitExists("target") and UnitIsPlayer("target") then
+    local identity={
+      name=UnitName("target") or "Unknown",level=UnitLevel("target") or "?",
+      class=select(1,UnitClass("target")) or "Player",classToken=select(2,UnitClass("target")),
+      race=UnitRace("target") or "Unknown",guild=GetGuildInfo("target"),
+    }
+    if portrait then SetPortraitTexture(portrait,"target") end
+    if borderFrame then
+      local color=identity.classToken and RAID_CLASS_COLORS and RAID_CLASS_COLORS[identity.classToken]
+      borderFrame:SetBackdropBorderColor(color and color.r or C.gold[1],color and color.g or C.gold[2],color and color.b or C.gold[3],1)
+    end
+    return identity
+  end
+  if portrait then portrait:SetTexture("Interface\\Icons\\INV_Misc_QuestionMark") end
+  if borderFrame then borderFrame:SetBackdropBorderColor(unpack(C.border)) end
+end
+
+local function UpdateInstanceTargetIdentity()
+  local frame=instanceUI.targetPortraitFrame
+  if not frame or not instanceUI.targetPortrait then return end
+  instanceUI.targetIdentity=ApplyPlayerTargetIdentity(instanceUI.targetPortrait,frame)
+  local t=instanceUI.targetIdentity
+  if instanceUI.targetIdentityName then instanceUI.targetIdentityName:SetText(t and t.name or "No player selected") end
+  if instanceUI.targetIdentityMeta then instanceUI.targetIdentityMeta:SetText(t and string.format("Level %s  %s%s",tostring(t.level),t.class,t.guild and ("\nGuild: "..t.guild) or "") or "Select a player target") end
+  frame:Show()
+end
+
 local function RequireSelectedPlayer()
   local name=SelectedPlayerName()
   if not name and Settings().warnNoTarget then SetStatus("Select the player whose binds you want to change.",true); return end
@@ -1615,9 +1644,10 @@ local function MyHasInstance(id)
   return false
 end
 
-local function BindDifficultyName(id)
+local function BindDifficultyName(id,isRaid)
   id=tonumber(id)
-  return ({[0]="Normal",[1]="Heroic / 25 Player Normal",[2]="10 Player Heroic",[3]="25 Player Heroic"})[id] or ("Difficulty "..tostring(id or "?"))
+  if isRaid then return ({[0]="10 Player Normal",[1]="25 Player Normal",[2]="10 Player Heroic",[3]="25 Player Heroic"})[id] or ("Difficulty "..tostring(id or "?")) end
+  return ({[0]="Normal",[1]="Heroic"})[id] or ("Difficulty "..tostring(id or "?"))
 end
 
 local function BindResettable(r)
@@ -1687,7 +1717,7 @@ local function BindReportText(selectedOnly)
     table.insert(lines,""); table.insert(lines,title.." ("..#rows..")")
     if #rows==0 then table.insert(lines,"No binds found") end
     for i,r in ipairs(rows) do
-      table.insert(lines,string.format("%02d. %s | Map %s | Instance %s | %s | %s | Reset %s | Resettable %s | %s | Mask %s",i,r.name or "Unknown",r.map or "?",r.instance or r.id or "?",r.difficultyName or r.difficulty or "?",BindPermanent(r) and "Permanent" or "Temporary",r.ttr or ShortTime(r.reset),BindResettable(r) and "Yes" or "No",BossProgress(r),r.encountermask or "0"))
+      table.insert(lines,string.format("%02d. %s | Map %s | Instance %s | %s | %s | Expires %s | Standard reset %s | GM unbind %s | %s | Mask %s",i,r.name or "Unknown",r.map or "?",r.instance or r.id or "?",r.difficultyName or r.difficulty or "?",BindPermanent(r) and "Boss lockout" or "Temporary bind",r.ttr or ShortTime(r.reset),BindResettable(r) and "Available" or "Not available",BindApplicable(r) and "Available" or "Not available",BossProgress(r),r.encountermask or "0"))
       for _,boss in ipairs(r.bosses or {}) do table.insert(lines,string.format("    %s %s",tostring(boss.defeated)=="1" and "DEFEATED" or "REMAINING",boss.name or "Unknown boss")) end
     end
   end
@@ -1696,6 +1726,43 @@ local function BindReportText(selectedOnly)
     add(myTitle,FilterBinds(instanceUI.my)); add(targetTitle,FilterBinds(instanceUI.target)); if instanceUI.selectedBind then add("SELECTED BIND DETAILS",{instanceUI.selectedBind}) end
   end
   return table.concat(lines,"\n")
+end
+
+local function BindDetailText()
+  local r=instanceUI.selectedBind
+  if not r then return "No bind is selected." end
+  local player
+  if instanceUI.selectedBindOwner=="SELF" then player=UnitName("player") or "Player"
+  else player=instanceUI.inspectedPlayer or SelectedPlayerName() or "Target" end
+  local lines={
+    "AZERCORE OPS — SELECTED BIND DETAILS","",
+    "Player: "..tostring(player),
+    "Instance: "..tostring(r.name or "Unknown"),
+    "Map ID: "..tostring(r.map or "?"),
+    "Instance ID: "..tostring(r.instance or r.id or "?"),
+    "Difficulty: "..tostring(r.difficultyName or BindDifficultyName(r.difficulty)),
+    "Lockout: "..(BindPermanent(r) and "Saved until scheduled reset" or "Temporary bind"),
+    "Expires in: "..tostring(r.ttr or ShortTime(r.reset)),
+    "Technical bind type: "..(BindPermanent(r) and "Permanent" or "Temporary"),
+    "Standard reset: "..(BindResettable(r) and "Available" or "Not available"),
+    "GM unbind: "..(BindApplicable(r) and "Available" or "Not available"),
+    "Reason: "..tostring(r.reason or "Not reported"),
+    "Encounter mask: "..tostring(r.encountermask or 0),
+    "Boss progress: "..BossProgress(r),
+    "Comparison: "..(instanceUI.selectedBindOwner=="SELF" and "MY BIND" or BindComparison(r)),
+  }
+  if #(r.bosses or {})>0 then
+    table.insert(lines,""); table.insert(lines,"ENCOUNTERS")
+    for i,boss in ipairs(r.bosses) do
+      table.insert(lines,string.format("%02d. %s — %s",i,boss.name or "Unknown boss",tostring(boss.defeated)=="1" and "DEFEATED" or "REMAINING"))
+    end
+  else table.insert(lines,""); table.insert(lines,"Boss names unavailable") end
+  return table.concat(lines,"\n")
+end
+
+local function ShowBindDetails()
+  if not instanceUI.selectedBind then SetStatus("Select a bind first.",true); return end
+  ShowSelectableReport("Selected bind details",BindDetailText())
 end
 
 local function LogBindActivity(text,kind)
@@ -1736,17 +1803,22 @@ local function UpdateBindControls()
   state(instanceUI.inspectButton,selectedTarget~=nil)
   if instanceUI.inspectButton and selectedTarget and instanceUI.autoInspect then instanceUI.inspectButton:SetBackdropColor(unpack(C.selected)); instanceUI.inspectButton:SetBackdropBorderColor(unpack(C.gold)) end
   state(instanceUI.unbindSelectedButton,targetCurrent and #SelectedTargetBinds()>0)
-  state(instanceUI.unbindAllButton,targetCurrent and #(instanceUI.target or {})>0)
+  state(instanceUI.bindDetailsButton,instanceUI.selectedBind~=nil)
 end
 
 local function BindRow(parent,y,click,checkClick)
-  local row=CreateFrame("Button",nil,parent); row:SetPoint("TOPLEFT",2,y); row:SetWidth(290); row:SetHeight(58)
+  local row=CreateFrame("Button",nil,parent); row:SetPoint("TOPLEFT",2,y); row:SetWidth(410); row:SetHeight(64)
   row:SetBackdrop({bgFile="Interface\\Buttons\\WHITE8X8"}); row:SetBackdropColor(.075,.08,.095,.96)
-  row.text=row:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); row.text:SetPoint("TOPLEFT",6,-4); row.text:SetPoint("BOTTOMRIGHT",-6,3); row.text:SetJustifyH("LEFT"); row.text:SetJustifyV("TOP"); row.text:SetWordWrap(false); row.text:SetTextColor(unpack(C.white))
+  row.text=row:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); row.text:SetPoint("TOPLEFT",6,-4); row.text:SetPoint("BOTTOMRIGHT",-6,3); row.text:SetJustifyH("LEFT"); row.text:SetJustifyV("TOP"); row.text:SetWordWrap(true); row.text:SetTextColor(unpack(C.white))
   row:SetScript("OnClick",click)
   if checkClick then
-    row.check=CreateFrame("CheckButton",nil,row,"UICheckButtonTemplate"); row.check:SetPoint("TOPRIGHT",2,2); row.check:SetWidth(22); row.check:SetHeight(22)
-    row.check:SetScript("OnClick",function(self) checkClick(row,self:GetChecked()) end)
+    row.text:ClearAllPoints(); row.text:SetPoint("TOPLEFT",30,-4); row.text:SetPoint("BOTTOMRIGHT",-6,3)
+    row.check=CreateFrame("Button",nil,row); row.check:SetPoint("TOPLEFT",4,-4); row.check:SetWidth(20); row.check:SetHeight(20); row.check:SetFrameLevel(row:GetFrameLevel()+5); Backdrop(row.check,C.bg)
+    row.check.label=row.check:CreateFontString(nil,"OVERLAY","GameFontNormal"); row.check.label:SetPoint("CENTER",0,0); row.check.label:SetTextColor(unpack(C.gold))
+    row.check.checked=false
+    row.check.SetChecked=function(self,value) self.checked=value and true or false; self.label:SetText(self.checked and "x" or "") end
+    row.check.GetChecked=function(self) return self.checked end
+    row.check:SetScript("OnClick",function(self) local wanted=not self:GetChecked(); self:SetChecked(wanted); checkClick(row,wanted) end)
   end
   row:Hide(); return row
 end
@@ -1755,34 +1827,36 @@ local function RenderInstances()
   local selectedName=SelectedPlayerName() or "none"; local targetName=instanceUI.inspectedPlayer or selectedName; local lockedView=instanceUI.view=="LOCKED"
   if instanceUI.targetLabel then instanceUI.targetLabel:SetText((lockedView and "TARGET LOCKED BINDS — " or "TARGET BINDS — ").."|cffffffff"..targetName.."|r") end
   if instanceUI.myHeading then instanceUI.myHeading:SetText(lockedView and "MY LOCKED BINDS" or "MY BINDS") end
-  if instanceUI.targetHeader then instanceUI.targetHeader:SetText("Selected target: |cffffffff"..selectedName.."|r") end
+  if instanceUI.targetHeader then instanceUI.targetHeader:SetText("SELECTED TARGET") end
   local mine=FilterBinds(instanceUI.my); local target=FilterBinds(instanceUI.target)
   for i,row in ipairs(instanceUI.myRows) do
     local r=mine[instanceUI.myOffset+i]
     if r then
-      local state=BindPermanent(r) and "Permanent" or "Temporary"
-      row.data=r; row.text:SetText(string.format("|cffffcc33%s|r\nMap %s  •  ID %s  •  %s\n%s  •  Reset %s  •  Resettable %s",r.name or "Unknown",r.map or "?",r.instance or r.id or "?",r.difficultyName or r.difficulty or "?",state,r.ttr or ShortTime(r.reset),BindResettable(r) and "Yes" or "No")); row:Show()
+      local state=BindPermanent(r) and "Boss lockout" or "Temporary bind"
+      row.data=r; row.text:SetText(string.format("|cffffcc33%s|r\nMap %s  •  Instance %s  •  %s\n%s  •  Standard reset: %s  •  %s",r.name or "Unknown",r.map or "?",r.instance or r.id or "?",r.difficultyName or BindDifficultyName(r.difficulty,r.isRaid),state,BindResettable(r) and "Yes" or "No",BossProgress(r))); row:SetBackdropColor(unpack(instanceUI.selectedBind==r and C.selected or C.button)); row:Show()
     else row.data=nil; row:Hide() end
   end
   for i,row in ipairs(instanceUI.targetRows) do
     local r=target[instanceUI.targetOffset+i]
     if r then
-      local match=BindComparison(r); local color=match=="SAME AS MINE" and "|cff55ff55" or (match=="DIFFERENT ID" and "|cffff8844" or "|cffaaaaaa")
-      row.data=r; row.text:SetText(string.format("|cffffcc33%s|r\nMap %s  •  ID %s  •  %s\n%s%s|r  •  %s",r.name or ("Map "..tostring(r.map or "?")),r.map or "?",r.instance or "?",r.difficultyName or BindDifficultyName(r.difficulty),color,match,BossProgress(r))); row:SetBackdropColor(unpack(instanceUI.selectedBind==r and C.selected or C.button)); if row.check then row.check:SetChecked(r.selected and true or false) end; row:Show()
+      local match=BindComparison(r)
+      row.data=r; row.text:SetText(string.format("|cffffcc33%s|r\nMap %s  •  Instance %s  •  %s\n%s  •  GM unbind: %s  •  %s",r.name or ("Map "..tostring(r.map or "?")),r.map or "?",r.instance or "?",r.difficultyName or BindDifficultyName(r.difficulty,r.isRaid),BindPermanent(r) and "Boss lockout" or "Temporary bind",BindApplicable(r) and "Yes" or "No",BossProgress(r))); row:SetBackdropColor(unpack(instanceUI.selectedBind==r and C.selected or C.button)); row.match=match; if row.check then row.check:SetChecked(r.selected and true or false) end; row:Show()
     else row.data=nil; if row.check then row.check:SetChecked(false) end; row:Hide() end
   end
-  if instanceUI.myEmpty then if #mine==0 then instanceUI.myEmpty:Show() else instanceUI.myEmpty:Hide() end end
-  if instanceUI.targetEmpty then if #target==0 then instanceUI.targetEmpty:Show() else instanceUI.targetEmpty:Hide() end end
-  local total=#mine+#target; local permanent,temporary,resettable=0,0,0
-  for _,set in ipairs({mine,target}) do for _,r in ipairs(set) do if BindPermanent(r) then permanent=permanent+1 else temporary=temporary+1 end; if BindResettable(r) then resettable=resettable+1 end end end
-  if instanceUI.summaryText then instanceUI.summaryText:SetText(string.format("Total  %d        Permanent  %d        Temporary  %d        Resettable  %d",total,permanent,temporary,resettable)) end
+  if instanceUI.myEmpty then instanceUI.myEmpty:SetText(instanceUI.myLoadState=="LOADING" and "Loading personal binds..." or instanceUI.myLoadState=="LOADED" and "No binds found" or "Personal binds not loaded"); if #mine==0 then instanceUI.myEmpty:Show() else instanceUI.myEmpty:Hide() end end
+  if instanceUI.targetEmpty then instanceUI.targetEmpty:SetText(instanceUI.targetLoadState=="LOADING" and "Loading target binds..." or instanceUI.targetLoadState=="LOADED" and "No binds found" or selectedName=="none" and "No player selected" or "Target binds not loaded"); if #target==0 then instanceUI.targetEmpty:Show() else instanceUI.targetEmpty:Hide() end end
+  local playerKey=tostring(UnitName("player") or ""):lower(); local targetKey=tostring(instanceUI.inspectedPlayer or ""):match("^[^-]+") or ""; targetKey=targetKey:lower()
+  local countedSets=targetKey~="" and targetKey==playerKey and {mine} or {mine,target}
+  local total,permanent,temporary,resettable=0,0,0,0
+  for _,set in ipairs(countedSets) do for _,r in ipairs(set) do total=total+1; if BindPermanent(r) then permanent=permanent+1 else temporary=temporary+1 end; if BindResettable(r) then resettable=resettable+1 end end end
+  if instanceUI.summaryText then instanceUI.summaryText:SetText(string.format("Total  %d        Boss lockouts  %d        Temporary  %d        Resettable  %d",total,permanent,temporary,resettable)) end
   for name,b in pairs(instanceUI.filterButtons) do b:SetBackdropColor(unpack(name==instanceUI.filter and C.selected or C.button)); b:SetBackdropBorderColor(unpack(name==instanceUI.filter and C.gold or C.border)) end
   for name,b in pairs(instanceUI.viewButtons) do local active=(name==instanceUI.view); b:SetBackdropColor(unpack(active and C.selected or C.button)); b:SetBackdropBorderColor(unpack(active and C.gold or C.border)) end
   if instanceUI.detailText then
     local r=instanceUI.selectedBind
     if r then
       local bossLines={BossProgress(r).."  •  Encounter mask "..tostring(r.encountermask or 0)}; for _,boss in ipairs(r.bosses or {}) do table.insert(bossLines,(tostring(boss.defeated)=="1" and "[DEFEATED] " or "[REMAINING] ")..(boss.name or "Unknown boss")) end
-      instanceUI.detailText:SetText(string.format("|cffffcc33Player|r\n%s\n\n|cffffcc33Instance|r\n%s\n\n|cffffcc33Identifiers|r\nMap ID        %s\nInstance ID   %s\n\n|cffffcc33Details|r\nDifficulty    %s\nStatus        %s\nReset in      %s\nCan reset     %s\nApplicable    %s\nReason        %s\n\n|cffffcc33Encounter progress|r\n%s\n\n|cffffcc33Comparison|r\n%s",instanceUI.inspectedPlayer or SelectedPlayerName() or "Target",r.name or "Unknown",r.map or "?",r.instance or r.id or "?",r.difficultyName or BindDifficultyName(r.difficulty),BindPermanent(r) and "Permanent" or "Temporary",r.ttr or ShortTime(r.reset),BindResettable(r) and "Yes" or "No",BindApplicable(r) and "Yes" or "No",r.reason or "Not reported",table.concat(bossLines,"\n"),BindComparison(r)))
+      instanceUI.detailText:SetText(string.format("|cffffcc33Player|r\n%s\n\n|cffffcc33Instance|r\n%s\n\n|cffffcc33Identifiers|r\nMap ID        %s\nInstance ID   %s\n\n|cffffcc33Details|r\nDifficulty    %s\nStatus        %s\nReset in      %s\nStandard reset %s\nGM unbind     %s\nReason        %s\n\n|cffffcc33Encounter progress|r\n%s\n\n|cffffcc33Comparison|r\n%s",instanceUI.inspectedPlayer or SelectedPlayerName() or "Target",r.name or "Unknown",r.map or "?",r.instance or r.id or "?",r.difficultyName or BindDifficultyName(r.difficulty,r.isRaid),BindPermanent(r) and "Permanent" or "Temporary",r.ttr or ShortTime(r.reset),BindResettable(r) and "Available" or "Not available",BindApplicable(r) and "Available" or "Not available",r.reason or "Not reported",table.concat(bossLines,"\n"),BindComparison(r)))
     else instanceUI.detailText:SetText("Select a target bind to inspect its complete details.") end
   end
   if instanceUI.inspectionText then instanceUI.inspectionText:SetText(instanceUI.inspectedPlayer and ("Inspected: "..instanceUI.inspectedPlayer.."  •  "..(instanceUI.inspectedAt or "just now")) or "No target inspected") end
@@ -1794,13 +1868,13 @@ local function RenderInstances()
 end
 
 local function RefreshMyInstances(skipRequest)
-  instanceUI.my={}; instanceUI.myOffset=0; instanceUI.bindScope="SELF"; RenderInstances(); SendCommand(CMD.instanceBindsSelf); SetStatus("Collecting structured personal binds...")
+  instanceUI.my={}; instanceUI.myOffset=0; instanceUI.myLoadState="LOADING"; instanceUI.bindScope="SELF"; RenderInstances(); SendCommand(CMD.instanceBindsSelf); SetStatus("Collecting structured personal binds...")
 end
 
 local function InspectTargetInstances(activateMode)
   if activateMode then instanceUI.autoInspect=true end
   if not RequireSelectedPlayer() then return end
-  instanceUI.target={}; instanceUI.targetOffset=0; instanceUI.selectedBind=nil; instanceUI.inspectedPlayer=SelectedPlayerName(); instanceUI.inspectedAt=date("%H:%M:%S"); instanceUI.bindScope="TARGET"; RenderInstances(); LogBindActivity("Inspecting target "..instanceUI.inspectedPlayer,"INSPECT"); SendCommand(CMD.instanceBindsTarget); SetStatus("Collecting structured binds for "..instanceUI.inspectedPlayer.."...")
+  instanceUI.target={}; instanceUI.targetOffset=0; instanceUI.targetLoadState="LOADING"; instanceUI.selectedBind=nil; instanceUI.inspectedPlayer=SelectedPlayerName(); instanceUI.inspectedAt=date("%H:%M:%S"); instanceUI.bindScope="TARGET"; RenderInstances(); LogBindActivity("Inspecting target "..instanceUI.inspectedPlayer,"INSPECT"); SendCommand(CMD.instanceBindsTarget); SetStatus("Collecting structured binds for "..instanceUI.inspectedPlayer.."...")
 end
 
 local function BindSystemChatFilter(_,event,message)
@@ -2059,11 +2133,16 @@ local function BuildInstances()
   local auditTab,bindTab
   local function ShowInstanceMode(mode)
     local access=mode=="ACCESS"; if access then auditPage:Show(); bindPage:Hide() else auditPage:Hide(); bindPage:Show() end
-    if access then instanceUI.autoInspect=false end
+    instanceUI.autoInspect=not access
     auditTab:SetBackdropColor(unpack(access and C.selected or C.button)); auditTab:SetBackdropBorderColor(unpack(access and C.gold or C.border))
     bindTab:SetBackdropColor(unpack(not access and C.selected or C.button)); bindTab:SetBackdropBorderColor(unpack(not access and C.gold or C.border))
     context:SetText(access and "Group Audit" or "Binds / Reset")
-    if not access then RenderInstances() end
+    if not access then
+      UpdateInstanceTargetIdentity()
+      RenderInstances()
+      if instanceUI.myLoadState=="UNLOADED" then RefreshMyInstances() end
+      if SelectedPlayerName() and instanceUI.targetLoadState=="UNLOADED" then After(.30,function() InspectTargetInstances(false) end) end
+    end
   end
   auditTab=Button(p,"Instance Access",140,24,function() ShowInstanceMode("ACCESS") end,"Check group and raid access to an instance"); auditTab:SetPoint("TOPLEFT",12,-65)
   bindTab=Button(p,"Binds / Reset",120,24,function() ShowInstanceMode("BINDS") end,"Inspect and safely remove instance binds"); bindTab:SetPoint("LEFT",auditTab,"RIGHT",8,0)
@@ -2196,45 +2275,56 @@ local function BuildInstances()
     if not RequireSelectedPlayer() then return end
     LogBindActivity("Batch preview: "..#rows.." selected bind(s) for "..tostring(SelectedPlayerName()),"PREVIEW"); ConfirmUnbindRows(rows,Settings().confirmResetSelected)
   end,"Remove the selected target bind after confirmation"); instanceUI.unbindSelectedButton:SetPoint("TOPLEFT",8,-95)
-  instanceUI.unbindAllButton=Button(operations,"Unbind All",114,24,function()
-    if not RequireSelectedPlayer() then return end
-    local rows={}; for _,r in ipairs(instanceUI.target or {}) do if BindApplicable(r) then table.insert(rows,r) end end
-    if #rows==0 then SetStatus("No applicable target binds are available to unbind.",true); return end
-    LogBindActivity("Batch preview: all "..#rows.." applicable bind(s) for "..tostring(SelectedPlayerName()),"PREVIEW"); ConfirmUnbindRows(rows,Settings().confirmResetAll)
-  end,"Remove every applicable target bind after confirmation"); instanceUI.unbindAllButton:SetPoint("TOPLEFT",8,-127)
+  instanceUI.bindDetailsButton=Button(operations,"Bind Details",114,24,ShowBindDetails,"Open the complete details for the selected personal or target bind"); instanceUI.bindDetailsButton:SetPoint("TOPLEFT",8,-127)
   Button(operations,"Bind Activity",114,24,ShowBindActivity,"View bind inspection, selection, filtering and operation activity"):SetPoint("TOPLEFT",8,-159)
   local future=Button(operations,"Bind to ID",114,24,function() end,"Not enabled — under consideration. Assigning an Instance ID requires additional safety validation."); future:SetPoint("TOPLEFT",8,-191); future:SetEnabled(false)
   local futureNote=Label(operations,"Not enabled\nUnder consideration","GameFontHighlightSmall"); futureNote:SetTextColor(unpack(C.muted)); futureNote:SetPoint("TOPLEFT",8,-222); futureNote:SetWidth(114); futureNote:SetJustifyH("CENTER")
 
   local summary=CreateFrame("Frame",nil,bindPage); summary:SetPoint("TOPLEFT",150,-4); summary:SetPoint("TOPRIGHT",-12,-4); summary:SetHeight(82); Backdrop(summary,C.bg)
-  instanceUI.targetHeader=Section(summary,"Selected target: none",C.gold); instanceUI.targetHeader:SetPoint("TOPRIGHT",-9,-8); instanceUI.targetHeader:SetJustifyH("RIGHT")
+  instanceUI.targetHeader=Section(summary,"SELECTED TARGET",C.gold); instanceUI.targetHeader:SetPoint("TOPRIGHT",-9,-7); instanceUI.targetHeader:SetWidth(210); instanceUI.targetHeader:SetJustifyH("RIGHT")
+  instanceUI.targetPortraitFrame=CreateFrame("Frame",nil,summary); instanceUI.targetPortraitFrame:SetPoint("TOPRIGHT",-9,-25); instanceUI.targetPortraitFrame:SetWidth(210); instanceUI.targetPortraitFrame:SetHeight(52); Backdrop(instanceUI.targetPortraitFrame,C.bg)
+  instanceUI.targetPortrait=instanceUI.targetPortraitFrame:CreateTexture(nil,"ARTWORK"); instanceUI.targetPortrait:SetWidth(42); instanceUI.targetPortrait:SetHeight(42); instanceUI.targetPortrait:SetPoint("LEFT",5,0); instanceUI.targetPortrait:SetTexture("Interface\\Icons\\INV_Misc_QuestionMark")
+  instanceUI.targetIdentityName=instanceUI.targetPortraitFrame:CreateFontString(nil,"OVERLAY","GameFontNormal"); instanceUI.targetIdentityName:SetPoint("TOPLEFT",54,-8); instanceUI.targetIdentityName:SetPoint("TOPRIGHT",-8,-8); instanceUI.targetIdentityName:SetJustifyH("LEFT"); instanceUI.targetIdentityName:SetTextColor(unpack(C.white)); instanceUI.targetIdentityName:SetText("No player selected")
+  instanceUI.targetIdentityMeta=instanceUI.targetPortraitFrame:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); instanceUI.targetIdentityMeta:SetPoint("TOPLEFT",54,-25); instanceUI.targetIdentityMeta:SetPoint("BOTTOMRIGHT",-8,5); instanceUI.targetIdentityMeta:SetJustifyH("LEFT"); instanceUI.targetIdentityMeta:SetJustifyV("TOP"); instanceUI.targetIdentityMeta:SetTextColor(unpack(C.muted)); instanceUI.targetIdentityMeta:SetText("Select a player target")
+  instanceUI.targetPortraitFrame:SetScript("OnEnter",function(self)
+    GameTooltip:SetOwner(self,"ANCHOR_RIGHT")
+    local t=instanceUI.targetIdentity
+    if t then
+      GameTooltip:SetText(t.name,1,.82,0); GameTooltip:AddLine(string.format("Level %s %s %s",tostring(t.level),t.race,t.class),1,1,1)
+      if t.guild then GameTooltip:AddLine("Guild: "..t.guild,.7,.85,1) end
+      GameTooltip:AddLine("Selected target",.65,.65,.65)
+    else GameTooltip:SetText("No player selected",1,.82,0); GameTooltip:AddLine("Select a player to inspect their instance binds.",1,1,1,true) end
+    GameTooltip:Show()
+  end); instanceUI.targetPortraitFrame:SetScript("OnLeave",function() GameTooltip:Hide() end)
+  UpdateInstanceTargetIdentity()
   local function SetBindView(view) instanceUI.view=view; instanceUI.selectedBind=nil; instanceUI.myOffset=0; instanceUI.targetOffset=0; LogBindActivity("Workspace changed to "..(view=="LOCKED" and "Locked Binds" or "Binds Overview"),"VIEW"); RenderInstances() end
   instanceUI.viewButtons={}
   instanceUI.viewButtons.OVERVIEW=Button(summary,"Binds Overview",112,24,function() SetBindView("OVERVIEW") end,"Show personal and target bind overviews"); instanceUI.viewButtons.OVERVIEW:SetPoint("TOPLEFT",9,-7)
   instanceUI.viewButtons.LOCKED=Button(summary,"Locked Binds",100,24,function() SetBindView("LOCKED") end,"Hide the overview and show personal and target locked binds"); instanceUI.viewButtons.LOCKED:SetPoint("LEFT",instanceUI.viewButtons.OVERVIEW,"RIGHT",7,0)
-  instanceUI.summaryText=Label(summary,"Total  0        Permanent  0        Temporary  0        Resettable  0","GameFontHighlightSmall"); instanceUI.summaryText:SetTextColor(unpack(C.white)); instanceUI.summaryText:SetPoint("TOPLEFT",9,-38)
-  local bindFilters={"ALL","RAID","DUNGEON","PERMANENT","RESETTABLE"}; local filterWidths={ALL=54,RAID=54,DUNGEON=76,PERMANENT=86,RESETTABLE=88}
+  instanceUI.summaryText=Label(summary,"Total  0        Boss lockouts  0        Temporary  0        Resettable  0","GameFontHighlightSmall"); instanceUI.summaryText:SetTextColor(unpack(C.white)); instanceUI.summaryText:SetPoint("TOPLEFT",9,-38); instanceUI.summaryText:SetWidth(390); instanceUI.summaryText:SetJustifyH("LEFT")
+  local bindFilters={{"ALL","ALL",54},{"RAID","RAID",54},{"DUNGEON","DUNGEON",76},{"LOCKOUT","PERMANENT",76},{"RESETTABLE","RESETTABLE",88}}
   local filterX=9
-  for i,name in ipairs(bindFilters) do
-    local filterName=name; local width=filterWidths[name]
-    local b=Button(summary,name,width,20,function() instanceUI.filter=filterName; instanceUI.myOffset=0; instanceUI.targetOffset=0; LogBindActivity("Filter changed to "..filterName,"FILTER"); RenderInstances() end,"Show "..name:lower().." binds"); b:SetPoint("TOPLEFT",filterX,-57); instanceUI.filterButtons[name]=b; filterX=filterX+width+5
+  for _,spec in ipairs(bindFilters) do
+    local label,filterName,width=spec[1],spec[2],spec[3]
+    local b=Button(summary,label,width,20,function() instanceUI.filter=filterName; instanceUI.myOffset=0; instanceUI.targetOffset=0; LogBindActivity("Filter changed to "..filterName,"FILTER"); RenderInstances() end,"Show "..label:lower().." binds"); b:SetPoint("TOPLEFT",filterX,-57); instanceUI.filterButtons[filterName]=b; filterX=filterX+width+5
     b:SetScript("OnLeave",function(self) self:SetBackdropColor(unpack(filterName==instanceUI.filter and C.selected or C.button)); self:SetBackdropBorderColor(unpack(filterName==instanceUI.filter and C.gold or C.border)); GameTooltip:Hide() end)
   end
 
   local bindContent=CreateFrame("Frame",nil,bindPage); bindContent:SetPoint("TOPLEFT",150,-91); bindContent:SetPoint("BOTTOMRIGHT",-12,33)
   local myBox=CreateFrame("Frame",nil,bindContent); myBox:SetPoint("TOPLEFT",0,0); myBox:SetPoint("BOTTOMRIGHT",bindContent,"BOTTOM",-4,0); Backdrop(myBox,C.panel)
   instanceUI.myHeading=Section(myBox,"MY BINDS",C.gold); instanceUI.myHeading:SetPoint("TOPLEFT",8,-8)
-  local myScroll=CreateFrame("ScrollFrame",nil,myBox,"UIPanelScrollFrameTemplate"); myScroll:SetPoint("TOPLEFT",7,-28); myScroll:SetPoint("BOTTOMRIGHT",-27,29); instanceUI.myScroll=myScroll
+  local myScroll=CreateFrame("ScrollFrame","AZERCORE_OPS_MyBindScroll",myBox,"UIPanelScrollFrameTemplate"); myScroll:SetPoint("TOPLEFT",7,-28); myScroll:SetPoint("BOTTOMRIGHT",-27,29); instanceUI.myScroll=myScroll
   local myChild=CreateFrame("Frame",nil,myScroll); myChild:SetWidth(430); myChild:SetHeight(1200); myScroll:SetScrollChild(myChild)
-  instanceUI.myRows={}; for i=1,20 do instanceUI.myRows[i]=BindRow(myChild,-2-(i-1)*60) end
+  instanceUI.myRows={}; for i=1,20 do instanceUI.myRows[i]=BindRow(myChild,-2-(i-1)*66,
+    function(self) if self.data then instanceUI.selectedBind=self.data; instanceUI.selectedBindOwner="SELF"; LogBindActivity("Opened personal bind ID "..tostring(self.data.instance or "?"),"SELECT"); RenderInstances(); SetStatus("Selected personal bind ID "..tostring(self.data.instance or "?")..". Click Bind Details for the complete report.") end end) end
   instanceUI.myEmpty=Label(myBox,"No binds found","GameFontHighlightSmall"); instanceUI.myEmpty:SetPoint("CENTER",0,0); instanceUI.myEmpty:SetTextColor(unpack(C.muted))
 
   local targetBox=CreateFrame("Frame",nil,bindContent); targetBox:SetPoint("TOPLEFT",bindContent,"TOP",4,0); targetBox:SetPoint("BOTTOMRIGHT",0,0); Backdrop(targetBox,C.panel)
   instanceUI.targetLabel=Section(targetBox,"TARGET BINDS — none",C.gold); instanceUI.targetLabel:SetPoint("TOPLEFT",8,-8)
-  local targetScroll=CreateFrame("ScrollFrame",nil,targetBox,"UIPanelScrollFrameTemplate"); targetScroll:SetPoint("TOPLEFT",7,-28); targetScroll:SetPoint("BOTTOMRIGHT",-27,29); instanceUI.targetScroll=targetScroll
+  local targetScroll=CreateFrame("ScrollFrame","AZERCORE_OPS_TargetBindScroll",targetBox,"UIPanelScrollFrameTemplate"); targetScroll:SetPoint("TOPLEFT",7,-28); targetScroll:SetPoint("BOTTOMRIGHT",-27,29); instanceUI.targetScroll=targetScroll
   local targetChild=CreateFrame("Frame",nil,targetScroll); targetChild:SetWidth(430); targetChild:SetHeight(1200); targetScroll:SetScrollChild(targetChild)
-  instanceUI.targetRows={}; for i=1,20 do instanceUI.targetRows[i]=BindRow(targetChild,-2-(i-1)*60,
-    function(self) if self.data then instanceUI.selectedBind=self.data; LogBindActivity("Opened bind ID "..tostring(self.data.instance or "?"),"SELECT"); RenderInstances(); SetStatus("Opened bind ID "..tostring(self.data.instance or "?")) end end,
+  instanceUI.targetRows={}; for i=1,20 do instanceUI.targetRows[i]=BindRow(targetChild,-2-(i-1)*66,
+    function(self) if self.data then instanceUI.selectedBind=self.data; instanceUI.selectedBindOwner="TARGET"; LogBindActivity("Opened target bind ID "..tostring(self.data.instance or "?"),"SELECT"); RenderInstances(); SetStatus("Selected target bind ID "..tostring(self.data.instance or "?")..". Click Bind Details for the complete report.") end end,
     function(row,checked)
       local r=row.data; if not r then return end
       if checked and not BindApplicable(r) then r.selected=false; row.check:SetChecked(false); StaticPopup_Show("AZERCORE_OPS_BIND_NOT_APPLICABLE",r.reason or "The module reported that unbinding is not applicable."); LogBindActivity("Selection refused for ID "..tostring(r.instance)..": "..tostring(r.reason),"BLOCKED")
@@ -2404,10 +2494,9 @@ local function BuildOptions()
   Check(a,auditControls,"RememberFilter","Remember the selected audit filter","rememberAuditFilter",-198,"Restore the last selected result filter.")
   Check(a,auditControls,"AutoAudit","Automatically re-audit after a bind reset","autoReaudit",-230,"Repeat the last audit after an accepted bind reset.")
   Check(a,auditControls,"ConfirmMapReset","Confirm a selected map reset","confirmResetSelected",-262,"Confirm before removing one map/difficulty bind.")
-  Check(a,auditControls,"ConfirmAllReset","Confirm reset of all instance binds","confirmResetAll",-294,"Confirm before removing every removable bind.")
-  Check(a,auditControls,"WarnTarget","Warn when no player is selected","warnNoTarget",-326,"Prevent bind commands from accidentally applying to yourself.")
-  Check(a,auditControls,"CompactRows","Use compact audit result rows","compactAuditRows",-358,"Fit more member results into the audit view.")
-  Check(a,auditControls,"ShiftClick","Enable Shift-click link insertion","shiftClickInsert",-390,"With a AzerCoreOps field focused, Shift-click an item, quest, spell, or player link to insert it.")
+  Check(a,auditControls,"WarnTarget","Warn when no player is selected","warnNoTarget",-294,"Prevent bind commands from accidentally applying to yourself.")
+  Check(a,auditControls,"CompactRows","Use compact audit result rows","compactAuditRows",-326,"Fit more member results into the audit view.")
+  Check(a,auditControls,"ShiftClick","Enable Shift-click link insertion","shiftClickInsert",-358,"With a AzerCoreOps field focused, Shift-click an item, quest, spell, or player link to insert it.")
 
   local diffLabel=a:CreateFontString(nil,"ARTWORK","GameFontNormal"); diffLabel:SetPoint("TOPLEFT",22,-438); diffLabel:SetText("Default instance difficulty")
   local diff=CreateFrame("Slider","AZERCORE_OPS_OptDifficulty",a,"OptionsSliderTemplate"); diff:SetPoint("TOPLEFT",22,-462); diff:SetWidth(200); diff:SetMinMaxValues(0,3); diff:SetValueStep(1)
@@ -2654,6 +2743,17 @@ events:SetScript("OnEvent",function(_,event,arg1)
   elseif event=="PLAYER_ENTERING_WORLD" and not compatibilityRequested then compatibilityRequested=true; SendChatMessage(CMD.version,"SAY")
   elseif event=="UPDATE_INSTANCE_INFO" and activeTab=="Instances" and instanceUI.bindPage and instanceUI.bindPage:IsShown() then RefreshMyInstances()
   elseif event=="PLAYER_TARGET_CHANGED" then
+    UpdateInstanceTargetIdentity()
+    After(.08,UpdateInstanceTargetIdentity)
+    if activeTab=="Instances" and instanceUI.bindPage and instanceUI.bindPage:IsShown() then
+      instanceUI.target={}; instanceUI.targetOffset=0; instanceUI.selectedBind=nil; instanceUI.selectedBindOwner=nil; instanceUI.inspectedAt=nil
+      if UnitExists("target") and UnitIsPlayer("target") then
+        instanceUI.inspectedPlayer=SelectedPlayerName(); instanceUI.targetLoadState="LOADING"; RenderInstances(); SetStatus("Loading binds for "..tostring(instanceUI.inspectedPlayer).."...")
+        After(.05,function() InspectTargetInstances(false) end)
+      else
+        instanceUI.inspectedPlayer=nil; instanceUI.targetLoadState="UNLOADED"; RenderInstances(); SetStatus("No player selected; Target Binds cleared.")
+      end
+    end
     RenderInstances(); UpdateQuestContextLabel()
     if shareFrame and shareFrame:IsShown() and shareFrame.RefreshLive then shareFrame:RefreshLive() end
     if questUI.activeWorkspace=="TARGET" and questUI.targetLogActive and UnitExists("target") and UnitIsPlayer("target") then
@@ -2662,9 +2762,6 @@ events:SetScript("OnEvent",function(_,event,arg1)
       UpdateQuestInspectorTarget(true)
     else
       UpdateQuestInspectorTarget(false)
-    end
-    if instanceUI.autoInspect and activeTab=="Instances" and instanceUI.bindPage and instanceUI.bindPage:IsShown() and UnitExists("target") and UnitIsPlayer("target") then
-      After(.05,function() InspectTargetInstances(false) end)
     end
   elseif event=="PARTY_MEMBERS_CHANGED" or event=="RAID_ROSTER_UPDATE" then
     if #auditUI.members>0 then auditUI.stale=true; RenderAudit(); SetStatus("Group roster changed; the Instance Access audit is stale. Run Re-audit.") end
@@ -2740,17 +2837,28 @@ events:SetScript("OnEvent",function(_,event,arg1)
       SetStatus(f.reason or "Quest module error",true)
     elseif kind=="BIND_BEGIN" then
       instanceUI.bindScope=f.scope or instanceUI.bindScope or "TARGET"
-      if instanceUI.bindScope=="SELF" then instanceUI.my={} else instanceUI.target={}; instanceUI.inspectedPlayer=f.player or instanceUI.inspectedPlayer end
+      instanceUI.ignoreBindStream=false
+      if instanceUI.bindScope=="TARGET" then
+        local current=tostring(SelectedPlayerName() or ""):match("^[^-]+") or ""
+        local received=tostring(f.player or ""):match("^[^-]+") or ""
+        if current=="" or received:lower()~=current:lower() then
+          instanceUI.ignoreBindStream=true; LogBindActivity("Ignored stale target bind response for "..tostring(f.player or "unknown"),"STALE"); return
+        end
+      end
+      if instanceUI.bindScope=="SELF" then instanceUI.my={}; instanceUI.myLoadState="LOADING" else instanceUI.target={}; instanceUI.targetLoadState="LOADING"; instanceUI.inspectedPlayer=f.player or instanceUI.inspectedPlayer end
       RenderInstances(); SetStatus("Receiving "..tostring(f.count or 0).." structured bind(s) for "..tostring(f.player or "player").."...")
     elseif kind=="BIND_ENTRY" then
-      local row={name=f.name,map=tonumber(f.map),instance=tonumber(f.instance),id=tonumber(f.instance),difficulty=tonumber(f.difficulty),difficultyName=BindDifficultyName(f.difficulty),perm=f.permanent,permanent=f.permanent,extended=f.extended,canReset=f.canreset,applicable=f.applicable,reset=tonumber(f.reset),ttr=ShortTime(f.reset),encountermask=tonumber(f.encountermask) or 0,bosstotal=tonumber(f.bosstotal) or 0,bossdefeated=tonumber(f.bossdefeated) or 0,reason=f.reason,isRaid=f.type=="raid",bosses={}}
+      if instanceUI.ignoreBindStream then return end
+      local row={name=f.name,map=tonumber(f.map),instance=tonumber(f.instance),id=tonumber(f.instance),difficulty=tonumber(f.difficulty),difficultyName=BindDifficultyName(f.difficulty,f.type=="raid"),perm=f.permanent,permanent=f.permanent,extended=f.extended,canReset=f.canreset,applicable=f.applicable,reset=tonumber(f.reset),ttr=ShortTime(f.reset),encountermask=tonumber(f.encountermask) or 0,bosstotal=tonumber(f.bosstotal) or 0,bossdefeated=tonumber(f.bossdefeated) or 0,reason=f.reason,isRaid=f.type=="raid",bosses={}}
       table.insert(instanceUI.bindScope=="SELF" and instanceUI.my or instanceUI.target,row); RenderInstances()
     elseif kind=="BIND_BOSS" then
+      if instanceUI.ignoreBindStream then return end
       local rows=instanceUI.bindScope=="SELF" and instanceUI.my or instanceUI.target
       for index=#rows,1,-1 do local r=rows[index]; if tonumber(r.map)==tonumber(f.map) and tonumber(r.instance)==tonumber(f.instance) and tonumber(r.difficulty)==tonumber(f.difficulty) then table.insert(r.bosses,{index=tonumber(f.index),defeated=f.defeated,name=f.name}); break end end
       RenderInstances()
     elseif kind=="BIND_END" then
-      if instanceUI.bindScope=="TARGET" then instanceUI.inspectedPlayer=f.player or instanceUI.inspectedPlayer; instanceUI.inspectedAt=date("%H:%M:%S") end
+      if instanceUI.ignoreBindStream then instanceUI.ignoreBindStream=false; return end
+      if instanceUI.bindScope=="TARGET" then instanceUI.targetLoadState="LOADED"; instanceUI.inspectedPlayer=f.player or instanceUI.inspectedPlayer; instanceUI.inspectedAt=date("%H:%M:%S") else instanceUI.myLoadState="LOADED" end
       LogBindActivity(string.format("Structured %s binds loaded for %s: %s",instanceUI.bindScope or "",f.player or "player",f.count or 0),"RESULT"); RenderInstances(); SetStatus(tostring(f.count or 0).." structured bind(s) loaded for "..tostring(f.player or "player"))
     elseif kind=="UNBIND_BEGIN" then
       instanceUI.unbindOperation=f.operation; LogBindActivity("Operation "..tostring(f.operation).." started for "..tostring(f.player).." — "..tostring(f.requested).." bind(s)","UNBIND"); SetStatus("Batch unbind started for "..tostring(f.player).."...")
@@ -2761,6 +2869,9 @@ events:SetScript("OnEvent",function(_,event,arg1)
       if instanceUI.pendingUnbindCommands==0 then SetStatus(string.format("Batch unbind complete: %s succeeded, %s failed. Verifying target...",f.succeeded or 0,f.failed or 0)); After(.25,function() InspectTargetInstances(false) end) else SetStatus("Unbind batch segment complete; continuing...") end
     elseif kind=="SEARCH" then
       if #auditUI.search<8 then table.insert(auditUI.search,f) end; RenderAudit(); SetStatus(#auditUI.search.." instance match(es)")
+    elseif kind=="SEARCH_END" then
+      local count=tonumber(f.count) or #auditUI.search
+      if count==0 then SetStatus("No matching instance found.",true) else SetStatus(count.." instance match(es) found.") end
     elseif kind=="BEGIN" then
       auditUI.members={}; auditUI.referenceId=tonumber(f.reference) or 0; auditUI.expectedMembers=tonumber(f.members) or 0; auditUI.stale=false; auditUI.generatedAt=nil; auditUI.groupVerdict="AUDITING"; auditUI.groupReason="Collecting live group access data"; RenderAudit(); SetStatus("Auditing "..(f.name or "instance").."...")
     elseif kind=="MEMBER" then

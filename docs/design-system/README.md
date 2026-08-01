@@ -36,3 +36,7 @@ These rules must be checked before coding any addon UI change:
 7. **Conflict escalation:** when a requested implementation conflicts with these
    rules, stop before coding, explain the conflict, and agree on an explicit
    exception or alternative with the project owner.
+8. **Target identity:** target-context workspaces should reuse an event-driven
+   identity component with portrait, name, class-colored border, and a concise
+   level/race/class/guild tooltip. Clear it immediately when no player is
+   selected; never use permanent polling to track the target.

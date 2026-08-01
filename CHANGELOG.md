@@ -9,11 +9,14 @@
 - Structured bind metadata in group access audits.
 - Multi-select bind checkboxes and safe batch unbinding with operation IDs, stale-selection protection, per-bind results, and server verification.
 - Automatic target reinspection and Bind Activity results after every batch operation.
+- Exact numeric Map ID lookup with explicit search-completion results.
+- Event-driven Quest-style target identity cards for bind inspection.
 
 ### Updated
 
-- Preserved the AzerothCore command-argument namespace compatibility patch in `InstanceInspector.cpp` and `.h`.
-- Updated the bundled addon to `0.5.2-alpha1-instance-module-sync`, including numbered quest chains and complete chunked Courier reports.
+- Preserved the AzerothCore `Optional<uint8>` command-argument compatibility patch in `InstanceInspector.cpp` and `.h`.
+- Updated the bundled addon to `0.5.2-alpha2-instance-access-complete`, including numbered quest chains, complete chunked Courier reports, truthful bind loading states, safe explicit bind selection, boss-lockout terminology, stale-target protection, and shared target identity presentation.
+- Removed the broad Unbind All control; every affected bind must now be explicitly selected and confirmed.
 
 ## 0.5.1 — Target Quest Log
 
