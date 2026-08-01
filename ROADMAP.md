@@ -39,6 +39,7 @@
 - Clear stale target records immediately when the selected player changes or disappears.
 - Keep copied, shared, and exported Character reports free of sensitive technical identifiers.
 - Preserve self-only character saving while offering a separately confirmed GM target-save operation.
+- Provide a persistent raid/difficulty selector for Wrath raid-achievement evidence, with only valid difficulties per raid and event-driven target refresh. *(Added in 0.5.3.)*
 
 ## Future intelligence workspaces
 

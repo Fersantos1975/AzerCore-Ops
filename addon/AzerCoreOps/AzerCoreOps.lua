@@ -1,6 +1,6 @@
 local ADDON = ...
 
--- AzerCore Ops Platform 0.5.3-alpha1-character-intelligence
+-- AzerCore Ops Platform 0.5.3-alpha4-raid-experience
 -- Target: WoW 3.3.5a / AzerothCore. All server commands live here so that
 -- branch-specific command names can be changed without touching the UI.
 local CMD = {
@@ -24,6 +24,7 @@ local CMD = {
   questAudit = ".azercoreops quest audit %d",
   questLog = ".azercoreops quest log",
   characterInspect = ".azercoreops character inspect",
+  characterRaid = ".azercoreops character raid %s %s",
   characterSaveTarget = ".azercoreops character save",
   version = ".azercoreops version",
 }
@@ -59,7 +60,19 @@ local questUI={results={},rows={},info=nil,chain={},detailText=nil,chainText=nil
 local compatUI={data=nil,text=nil,informationText=nil,received={}}
 local characterUI={activity={},buttons={},viewButtons={},target=nil,identityFrame=nil,portrait=nil,nameText=nil,metaText=nil,
   overviewText=nil,stateText=nil,locationText=nil,contextText=nil,statusText=nil,modeText=nil,Update=nil,Render=nil,Log=nil,
-  view="OVERVIEW",overviewPanels={},reportPanel=nil,reportText=nil,reportChild=nil,server={},capturePlayer=nil}
+  view="OVERVIEW",overviewPanels={},reportPanel=nil,reportText=nil,reportChild=nil,server={},capturePlayer=nil,autoInspect=false,Inspect=nil,
+  raidControls=nil,raidButton=nil,difficultyButton=nil,raidMenu=nil,difficultyMenu=nil,RequestRaid=nil,
+  raidCatalog={
+    {key="VOA",name="Vault of Archavon",difficulties={{key="10N",name="10 Player"},{key="25N",name="25 Player"}}},
+    {key="NAXX",name="Naxxramas",difficulties={{key="10N",name="10 Player"},{key="25N",name="25 Player"}}},
+    {key="OS",name="The Obsidian Sanctum",difficulties={{key="10N",name="10 Player"},{key="25N",name="25 Player"},{key="10HM",name="10 Player Hard Mode"},{key="25HM",name="25 Player Hard Mode"}}},
+    {key="EOE",name="The Eye of Eternity",difficulties={{key="10N",name="10 Player"},{key="25N",name="25 Player"}}},
+    {key="ULDUAR",name="Ulduar",difficulties={{key="10N",name="10 Player"},{key="25N",name="25 Player"},{key="10HM",name="10 Player Hard Mode"},{key="25HM",name="25 Player Hard Mode"}}},
+    {key="TOC",name="Trial of the Crusader",difficulties={{key="10N",name="10 Player"},{key="25N",name="25 Player"},{key="10H",name="10 Player Heroic"},{key="25H",name="25 Player Heroic"}}},
+    {key="ONYXIA",name="Onyxia's Lair",difficulties={{key="10N",name="10 Player"},{key="25N",name="25 Player"}}},
+    {key="ICC",name="Icecrown Citadel",difficulties={{key="10N",name="10 Player"},{key="25N",name="25 Player"},{key="10H",name="10 Player Heroic"},{key="25H",name="25 Player Heroic"}}},
+    {key="RS",name="The Ruby Sanctum",difficulties={{key="10N",name="10 Player"},{key="25N",name="25 Player"},{key="10H",name="10 Player Heroic"},{key="25H",name="25 Player Heroic"}}},
+  }}
 local instanceUI={my={},target={},captureUntil=0,myRows={},targetRows={},myOffset=0,targetOffset=0,targetLabel=nil,
   selectedBind=nil,filter="ALL",filterButtons={},detailText=nil,summaryText=nil,myEmpty=nil,targetEmpty=nil,inspectionText=nil,
   inspectedPlayer=nil,inspectedAt=nil,statusText=nil,myScroll=nil,targetScroll=nil,detailScroll=nil,horizontals={},activity={},
@@ -76,12 +89,13 @@ local EnsureShareFrame
 local ApplyPlayerTargetIdentity
 local defaults={
   startMinimized=true,showMinimap=true,showMini=true,mbfCompatibility=true,scale=1,roleMode="AUTOMATIC",
+  characterRaid="ICC",characterRaidDifficulty="10N",
   confirmCommands=true,hideAuditChat=true,defaultDifficulty=0,
   auditTooltips=true,wrapAuditReasons=true,mouseWheelAudit=true,problemsFirst=false,
   rememberAuditFilter=true,autoReaudit=false,confirmResetSelected=true,
   warnNoTarget=true,compactAuditRows=false,auditFontSize=10,shiftClickInsert=true,
 }
-local ADDON_VERSION="0.5.3-alpha1-character-intelligence"
+local ADDON_VERSION="0.5.3-alpha4-raid-experience"
 local PROTOCOL_VERSION="1"
 local TESTED_CORE="190184a04539"
 local TESTED_PLAYERBOTS="ba46fcdecde3"
@@ -103,6 +117,41 @@ local function EffectiveCharacterMode()
   if requested=="PLAYER" then return "PLAYER" end
   if requested=="GM" then return granted=="GM" and "GM" or "PLAYER" end
   return granted=="GM" and "GM" or "PLAYER"
+end
+
+function Platform:UpdateWorkspaceMode()
+  local gm=EffectiveCharacterMode()=="GM"
+  if compatUI.workspaceModeText then
+    compatUI.workspaceModeText:SetText(gm and "|cff55ff55GM MODE|r" or "|cffffff55PLAYER MODE|r")
+  end
+  if characterUI.modeText then
+    characterUI.modeText:SetText(gm and "GM MODE — server authorized" or "PLAYER MODE — GM operations unavailable")
+  end
+end
+
+function Platform:RegisterRoleButton(button,policy,reason)
+  if not button then return button end
+  button.azerRolePolicy=policy or "PLAYER_ALLOWED"
+  button.azerRoleReason=reason
+  self.rolePolicyButtons=self.rolePolicyButtons or {}
+  table.insert(self.rolePolicyButtons,button)
+  return button
+end
+
+function Platform:ApplyRoleButtonPolicies()
+  local gm=EffectiveCharacterMode()=="GM"
+  for _,button in ipairs(self.rolePolicyButtons or {}) do
+    if button.azerRolePolicy=="GM_REQUIRED" then
+      if not gm then
+        if not button.azerRoleDenied then button.azerRoleWasEnabled=button:IsEnabled() and true or false end
+        button.azerRoleDenied=true; button:Disable(); button:SetNormalFontObject(GameFontDisableSmall); button:SetBackdropColor(.08,.08,.08,1)
+        button.disabledReason=button.azerRoleReason or "Unavailable in Player Mode. This operation requires server-authorized GM Mode."
+      elseif button.azerRoleDenied then
+        button.azerRoleDenied=false; button.disabledReason=nil
+        if button.azerRoleWasEnabled then button:Enable(); button:SetNormalFontObject(GameFontNormalSmall); button:SetBackdropColor(unpack(C.button)) end
+      end
+    end
+  end
 end
 
 local function Print(msg, errorColor)
@@ -168,8 +217,15 @@ local function Button(parent, text, w, h, click, tip)
   b:SetNormalFontObject(GameFontNormalSmall); b:SetHighlightFontObject(GameFontHighlightSmall)
   b:SetBackdrop({bgFile="Interface\\Buttons\\WHITE8X8",edgeFile="Interface\\Tooltips\\UI-Tooltip-Border",edgeSize=10,insets={left=2,right=2,top=2,bottom=2}})
   b:SetBackdropColor(unpack(C.button)); b:SetBackdropBorderColor(unpack(C.border)); b:SetScript("OnClick",click)
-  b:SetScript("OnEnter",function(self) self:SetBackdropColor(unpack(C.hover)); if tip then GameTooltip:SetOwner(self,"ANCHOR_RIGHT"); GameTooltip:SetText(text,1,.82,0); GameTooltip:AddLine(tip,1,1,1,true); GameTooltip:Show() end end)
-  b:SetScript("OnLeave",function(self) self:SetBackdropColor(unpack(C.button)); GameTooltip:Hide() end)
+  b:SetScript("OnEnter",function(self)
+    self:SetBackdropColor(unpack(C.hover))
+    local explanation=self.disabledReason or tip
+    if explanation then GameTooltip:SetOwner(self,"ANCHOR_RIGHT"); GameTooltip:SetText(text,1,.82,0); GameTooltip:AddLine(explanation,1,1,1,true); GameTooltip:Show() end
+  end)
+  b:SetScript("OnLeave",function(self)
+    if self:IsEnabled() then self:SetBackdropColor(unpack(C.button)) else self:SetBackdropColor(.08,.08,.08,1) end
+    GameTooltip:Hide()
+  end)
   return b
 end
 
@@ -278,6 +334,7 @@ local function AddCommandGrid(parent, defs, startY)
   for i,d in ipairs(defs) do
     local col=(i-1)%3; local row=math.floor((i-1)/3)
     local b=Button(parent,d[1],150,28,d[2],d[3]); b:SetPoint("TOPLEFT",18+col*164,startY-row*40)
+    if d[4] then Platform:RegisterRoleButton(b,d[4],d[5]) end
   end
 end
 
@@ -289,7 +346,13 @@ local function SelectTab(name)
   activeTab=name; AzerCoreOpsDB.activeTab=name
   for n,p in pairs(pages) do if n==name then p:Show() else p:Hide() end end
   for n,b in pairs(tabs) do b:SetBackdropColor(unpack(n==name and C.selected or C.button)); b:SetBackdropBorderColor(unpack(n==name and C.gold or C.border)) end
-  if name=="Character" and characterUI.Update then characterUI.Update() end
+  if name=="Character" and characterUI.Update then
+    characterUI.Update()
+    if UnitExists("target") and UnitIsPlayer("target") and characterUI.Inspect then
+      characterUI.autoInspect=true; characterUI.Inspect(true)
+    end
+  end
+  Platform:UpdateWorkspaceMode(); Platform:ApplyRoleButtonPolicies()
   SetStatus(name=="Teleport" and "Movement workspace" or name.." workspace")
 end
 
@@ -298,7 +361,7 @@ local function BuildCharacter()
   local header=CreateFrame("Frame",nil,p); header:SetPoint("TOPLEFT",10,-10); header:SetPoint("TOPRIGHT",-10,-10); header:SetHeight(52); Backdrop(header,C.bg)
   local h=Label(header,"Character Inspector","GameFontNormalLarge"); h:SetPoint("TOPLEFT",12,-8)
   local subtitle=header:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); subtitle:SetPoint("TOPLEFT",12,-31); subtitle:SetText("Character status, recovery and controlled GM operations"); subtitle:SetTextColor(unpack(C.white))
-  local mode=Label(header,"Mode: Player","GameFontNormalSmall"); mode:SetPoint("TOPRIGHT",-12,-17); characterUI.modeText=mode
+  local mode=Label(header,"PLAYER MODE","GameFontNormalSmall"); mode:SetPoint("TOPRIGHT",-12,-17); characterUI.modeText=mode
 
   local operations=CreateFrame("Frame",nil,p); operations:SetPoint("TOPLEFT",10,-70); operations:SetPoint("BOTTOMLEFT",10,36); operations:SetWidth(148); Backdrop(operations,C.panel)
   local opTitle=Section(operations,"OPERATIONS",C.gold); opTitle:SetPoint("TOPLEFT",10,-10)
@@ -341,7 +404,62 @@ local function BuildCharacter()
   characterUI.overviewPanels={overview,state,location,context}
 
   local reportPanel=CreateFrame("Frame",nil,workspace); reportPanel:SetPoint("TOPLEFT",8,-140); reportPanel:SetPoint("BOTTOMRIGHT",-8,44); Backdrop(reportPanel,C.panel); reportPanel:Hide(); characterUI.reportPanel=reportPanel
+  local raidControls=CreateFrame("Frame",nil,reportPanel); raidControls:SetPoint("TOPLEFT",8,-8); raidControls:SetPoint("TOPRIGHT",-28,-8); raidControls:SetHeight(34); raidControls:Hide(); characterUI.raidControls=raidControls
+  local raidLabel=raidControls:CreateFontString(nil,"OVERLAY","GameFontNormalSmall"); raidLabel:SetPoint("LEFT",2,0); raidLabel:SetText("Raid")
+  local raidButton=Button(raidControls,"Select raid",190,24,nil,"Choose the raid whose recorded achievements will be inspected. This selection remains locked while targets change and after reload."); raidButton:SetPoint("LEFT",36,0); characterUI.raidButton=raidButton
+  local difficultyLabel=raidControls:CreateFontString(nil,"OVERLAY","GameFontNormalSmall"); difficultyLabel:SetPoint("LEFT",raidButton,"RIGHT",12,0); difficultyLabel:SetText("Difficulty")
+  local difficultyButton=Button(raidControls,"Select difficulty",170,24,nil,"Only difficulties applicable to the selected raid are listed."); difficultyButton:SetPoint("LEFT",difficultyLabel,"RIGHT",8,0); characterUI.difficultyButton=difficultyButton
+  local lockedLabel=raidControls:CreateFontString(nil,"OVERLAY","GameFontNormalSmall"); lockedLabel:SetPoint("LEFT",difficultyButton,"RIGHT",12,0); lockedLabel:SetText("|cffffd100SELECTION LOCKED|r")
+
+  local raidMenu=CreateFrame("Frame",nil,reportPanel); raidMenu:SetWidth(214); raidMenu:SetHeight(#characterUI.raidCatalog*23+10); raidMenu:SetPoint("TOPLEFT",raidButton,"BOTTOMLEFT",0,-2); raidMenu:SetFrameStrata("FULLSCREEN_DIALOG"); raidMenu:SetFrameLevel(260); Backdrop(raidMenu,C.panel); raidMenu:Hide(); characterUI.raidMenu=raidMenu
+  local difficultyMenu=CreateFrame("Frame",nil,reportPanel); difficultyMenu:SetWidth(194); difficultyMenu:SetHeight(106); difficultyMenu:SetPoint("TOPLEFT",difficultyButton,"BOTTOMLEFT",0,-2); difficultyMenu:SetFrameStrata("FULLSCREEN_DIALOG"); difficultyMenu:SetFrameLevel(260); Backdrop(difficultyMenu,C.panel); difficultyMenu:Hide(); characterUI.difficultyMenu=difficultyMenu
+
+  local function RaidDefinition(key)
+    for _,raid in ipairs(characterUI.raidCatalog) do if raid.key==key then return raid end end
+    return characterUI.raidCatalog[1]
+  end
+  local function DifficultyDefinition(raid,key)
+    for _,difficulty in ipairs(raid.difficulties) do if difficulty.key==key then return difficulty end end
+    return raid.difficulties[1]
+  end
+  local function RefreshRaidSelectors()
+    local settings=Settings(); local raid=RaidDefinition(settings.characterRaid); local difficulty=DifficultyDefinition(raid,settings.characterRaidDifficulty)
+    settings.characterRaid=raid.key; settings.characterRaidDifficulty=difficulty.key
+    raidButton:SetText(raid.name.."  v"); difficultyButton:SetText(difficulty.name.."  v")
+    return raid,difficulty
+  end
+  local function SelectRaid(raid)
+    local settings=Settings(); settings.characterRaid=raid.key
+    settings.characterRaidDifficulty=DifficultyDefinition(raid,settings.characterRaidDifficulty).key
+    raidMenu:Hide(); difficultyMenu:Hide(); characterUI.server.raid={}; characterUI.server.raidSelection=nil
+    RefreshRaidSelectors(); if characterUI.Render then characterUI.Render() end; if characterUI.RequestRaid then characterUI.RequestRaid() end
+  end
+  for index,raid in ipairs(characterUI.raidCatalog) do
+    local definition=raid; local option=Button(raidMenu,definition.name,204,21,function() SelectRaid(definition) end); option:SetPoint("TOPLEFT",5,-5-(index-1)*23)
+  end
+  local difficultyOptions={}
+  for index=1,4 do
+    local option=Button(difficultyMenu,"",184,21,nil); option:SetPoint("TOPLEFT",5,-5-(index-1)*23); difficultyOptions[index]=option
+  end
+  local function OpenDifficultyMenu()
+    local raid=RaidDefinition(Settings().characterRaid)
+    for index,option in ipairs(difficultyOptions) do
+      local definition=raid.difficulties[index]
+      if definition then
+        option:SetText(definition.name); option:SetScript("OnClick",function()
+          Settings().characterRaidDifficulty=definition.key; difficultyMenu:Hide(); raidMenu:Hide(); characterUI.server.raid={}; characterUI.server.raidSelection=nil
+          RefreshRaidSelectors(); if characterUI.Render then characterUI.Render() end; if characterUI.RequestRaid then characterUI.RequestRaid() end
+        end); option:Show()
+      else option:Hide() end
+    end
+    difficultyMenu:SetHeight(#raid.difficulties*23+10); difficultyMenu:Show(); difficultyMenu:Raise()
+  end
+  raidButton:SetScript("OnClick",function() difficultyMenu:Hide(); if raidMenu:IsShown() then raidMenu:Hide() else raidMenu:Show(); raidMenu:Raise() end end)
+  difficultyButton:SetScript("OnClick",function() raidMenu:Hide(); if difficultyMenu:IsShown() then difficultyMenu:Hide() else OpenDifficultyMenu() end end)
+  RefreshRaidSelectors()
+
   local reportScroll=CreateFrame("ScrollFrame","AZERCORE_OPS_CharacterReportScroll",reportPanel,"UIPanelScrollFrameTemplate"); reportScroll:SetPoint("TOPLEFT",8,-8); reportScroll:SetPoint("BOTTOMRIGHT",-28,8); reportScroll:EnableMouseWheel(true)
+  characterUI.reportScroll=reportScroll
   local reportChild=CreateFrame("Frame",nil,reportScroll); reportChild:SetWidth(540); reportChild:SetHeight(360); reportScroll:SetScrollChild(reportChild); characterUI.reportChild=reportChild
   local reportText=reportChild:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); reportText:SetPoint("TOPLEFT",4,-4); reportText:SetWidth(526); reportText:SetJustifyH("LEFT"); reportText:SetJustifyV("TOP"); reportText:SetWordWrap(true); reportText:SetTextColor(unpack(C.white)); characterUI.reportText=reportText
   reportScroll:SetScript("OnMouseWheel",function(self,delta) self:SetVerticalScroll(math.max(0,self:GetVerticalScroll()-delta*45)) end)
@@ -352,7 +470,7 @@ local function BuildCharacter()
     local server=characterUI.server or {}
     if server.inventory then local r=server.inventory; table.insert(lines,""); table.insert(lines,"INVENTORY SUMMARY"); table.insert(lines,string.format("Bag slots: %s / %s | Equipped: %s | Average item level: %s",r.used or "?",r.capacity or "?",r.equipped or "?",r.average or "?")) end
     if server.professions and #server.professions>0 then table.insert(lines,""); table.insert(lines,"PROFESSIONS"); for _,r in ipairs(server.professions) do table.insert(lines,string.format("%s | %s | %s/%s",r.category or "Skill",r.name or "Unknown",r.value or "?",r.maximum or "?")) end end
-    if server.raid and #server.raid>0 then table.insert(lines,""); table.insert(lines,"RAID EXPERIENCE — RECORDED ACHIEVEMENTS"); for _,r in ipairs(server.raid) do table.insert(lines,string.format("%s | %s | %s | %s | Achievement %s",r.complete=="1" and "COMPLETED" or "NOT RECORDED",r.raid or "Raid",r.difficulty or "?",r.section or "Unknown section",r.achievement or "?")) end; table.insert(lines,"Achievement records indicate completion, not mastery of the current role.") end
+    if server.raid and #server.raid>0 then local raid,difficulty=RefreshRaidSelectors(); table.insert(lines,""); table.insert(lines,"RAID EXPERIENCE — "..raid.name.." — "..difficulty.name.." (LOCKED SELECTION)"); for _,r in ipairs(server.raid) do table.insert(lines,string.format("%s | %s | Achievement %s",r.complete=="1" and "COMPLETED" or "NOT RECORDED",r.section or "Unknown section",r.achievement or "?")) end; table.insert(lines,"Achievement records indicate completion, not mastery of the current role.") end
     return table.concat(lines,"\n"):gsub("|c%x%x%x%x%x%x%x%x",""):gsub("|r","")
   end
   local function LogCharacter(action,result)
@@ -360,6 +478,12 @@ local function BuildCharacter()
     while #characterUI.activity>80 do table.remove(characterUI.activity) end
   end
   characterUI.Log=LogCharacter
+  characterUI.RequestRaid=function()
+    if not UnitExists("target") or not UnitIsPlayer("target") then return end
+    local settings=Settings(); characterUI.server.raid={}; characterUI.server.raidSelection=nil
+    SendCommand(string.format(CMD.characterRaid,settings.characterRaid,settings.characterRaidDifficulty))
+    characterUI.statusText:SetText("Loading locked Raid Experience selection for "..tostring(UnitName("target")).."...")
+  end
   local function SelectedTarget()
     if not UnitExists("target") or not UnitIsPlayer("target") then SetStatus("Select a player before using this Character operation.",true); return end
     return UnitName("target")
@@ -373,10 +497,24 @@ local function BuildCharacter()
   local function OpButton(text,y,click,tip,requiresTarget,gmOnly)
     local b=Button(operations,text,128,28,click,tip); b:SetPoint("TOPLEFT",10,y); b.requiresTarget=requiresTarget; b.gmOnly=gmOnly; characterUI.buttons[text]=b; return b
   end
-  OpButton("Inspect Character",-34,function()
-    characterUI.Update(); characterUI.server={professions={},raid={}}; characterUI.capturePlayer=SelectedTarget()
-    if characterUI.capturePlayer then SendCommand(CMD.characterInspect); LogCharacter("Inspect","Requested authoritative Character data for "..characterUI.capturePlayer); characterUI.statusText:SetText("Loading module Character data for "..characterUI.capturePlayer.."...") end
-  end,"Refresh client-visible and module-authoritative information for the selected player",true,false)
+  characterUI.Inspect=function(automatic)
+    characterUI.Update(); characterUI.server={professions={},raid={}}
+    local target=UnitExists("target") and UnitIsPlayer("target") and UnitName("target") or nil
+    characterUI.capturePlayer=target
+    if not target then characterUI.statusText:SetText("Automatic inspection is waiting for a player target."); return end
+    SendCommand(CMD.characterInspect)
+    After(.05,function() if characterUI.RequestRaid then characterUI.RequestRaid() end end)
+    LogCharacter(automatic and "Auto Inspect" or "Inspect","Requested authoritative Character data for "..target)
+    characterUI.statusText:SetText("Loading module Character data for "..target.."...")
+  end
+  local inspectOperation=OpButton("Inspect Character",-34,function()
+    characterUI.autoInspect=true; characterUI.Inspect(false)
+  end,"Activate automatic Character inspection. Changing player targets then refreshes this workspace immediately.",true,false)
+  inspectOperation:SetScript("OnLeave",function(self)
+    if characterUI.autoInspect and UnitExists("target") and UnitIsPlayer("target") then self:SetBackdropColor(unpack(C.selected)); self:SetBackdropBorderColor(unpack(C.gold))
+    else self:SetBackdropColor(unpack(C.button)); self:SetBackdropBorderColor(unpack(C.border)) end
+    GameTooltip:Hide()
+  end)
   OpButton("Revive",-70,function() RunTargetCommand("Revive",CMD.revive,true) end,"Revive the explicitly selected player",true,true)
   OpButton("Repair Equipment",-106,function() RunTargetCommand("Repair",CMD.repair,true) end,"Repair the explicitly selected player's equipment",true,true)
   OpButton("Summon",-142,function() RunTargetCommand("Summon",CMD.summon,true) end,"Summon the explicitly selected player to your location",true,true)
@@ -416,15 +554,10 @@ local function BuildCharacter()
       end
       return table.concat(lines,"\n")
     elseif view=="RAID" then
-      local lines={"|cffffd100RAID EXPERIENCE — RECORDED ACHIEVEMENTS|r","Achievements are evidence of recorded completion; they do not prove mastery of the current role.",""}; local rows=s.raid or {}
-      if #rows==0 then table.insert(lines,"No raid-experience records were reported. Select Inspect Character to refresh.")
-      else
-        for _,difficulty in ipairs({"10 Player","25 Player"}) do
-          table.insert(lines,"|cffffff55Icecrown Citadel — "..difficulty.."|r")
-          for _,r in ipairs(rows) do if r.difficulty==difficulty then table.insert(lines,string.format("%s  %s  [Achievement %s]",r.complete=="1" and "|cff55ff55COMPLETED|r" or "|cffaaaaaaNOT RECORDED|r",r.section or "Unknown",r.achievement or "?")) end end
-          table.insert(lines,"")
-        end
-      end
+      local raid,difficulty=RefreshRaidSelectors(); local lines={"|cffffd100"..raid.name.." — "..difficulty.name.."|r","|cffffff55Selection locked across target changes and reloads.|r","Achievements are evidence of recorded completion; they do not prove mastery of the current role.",""}; local rows=s.raid or {}
+      if not s.raidSelection then table.insert(lines,"Loading the selected raid experience from the module...")
+      elseif #rows==0 then table.insert(lines,"No achievement records are defined for this selection.")
+      else for _,r in ipairs(rows) do table.insert(lines,string.format("%s  %s  [Achievement %s]",r.complete=="1" and "|cff55ff55COMPLETED|r" or "|cffaaaaaaNOT RECORDED|r",r.section or "Unknown",r.achievement or "?")) end end
       return table.concat(lines,"\n")
     elseif view=="TECHNICAL" then
       if EffectiveCharacterMode()~="GM" then return "|cffff5555RESTRICTED|r\n\nTechnical Character details require module-authorized GM mode." end
@@ -436,6 +569,9 @@ local function BuildCharacter()
 
   characterUI.Render=function()
     local overviewMode=characterUI.view=="OVERVIEW"
+    local raidMode=characterUI.view=="RAID"
+    if raidMode then characterUI.raidControls:Show() else characterUI.raidControls:Hide(); characterUI.raidMenu:Hide(); characterUI.difficultyMenu:Hide() end
+    characterUI.reportScroll:ClearAllPoints(); characterUI.reportScroll:SetPoint("TOPLEFT",8,raidMode and -48 or -8); characterUI.reportScroll:SetPoint("BOTTOMRIGHT",-28,8)
     for _,panel in ipairs(characterUI.overviewPanels) do if overviewMode then panel:Show() else panel:Hide() end end
     if overviewMode then characterUI.reportPanel:Hide() else
       characterUI.reportPanel:Show(); local text=CharacterViewText(characterUI.view); characterUI.reportText:SetText(text)
@@ -448,16 +584,23 @@ local function BuildCharacter()
     local identityData=ApplyPlayerTargetIdentity(characterUI.portrait,characterUI.identityFrame)
     characterUI.target=identityData
     local gmMode=EffectiveCharacterMode()=="GM"
-    characterUI.modeText:SetText("Mode: "..(gmMode and "GM" or "Player"))
+    Platform:UpdateWorkspaceMode()
     for _,button in pairs(characterUI.buttons) do
       if button.requiresTarget or button.gmOnly then
         local enabled=(not button.requiresTarget or identityData) and (not button.gmOnly or gmMode)
-        if enabled then button:Enable(); button:SetNormalFontObject(GameFontNormalSmall); button:SetBackdropColor(unpack(C.button))
-        else button:Disable(); button:SetNormalFontObject(GameFontDisableSmall); button:SetBackdropColor(.08,.08,.08,1) end
+        if enabled then button:Enable(); button.disabledReason=nil; button:SetNormalFontObject(GameFontNormalSmall); button:SetBackdropColor(unpack(C.button))
+        else
+          button:Disable(); button:SetNormalFontObject(GameFontDisableSmall); button:SetBackdropColor(.08,.08,.08,1)
+          if button.requiresTarget and not identityData then button.disabledReason="Select a player target to use this operation."
+          elseif button.gmOnly and not gmMode then button.disabledReason="Unavailable in Player Mode. GM authorization must be granted by the server; Automatic Mode will use it when available."
+          else button.disabledReason="This operation is unavailable in the current context." end
+        end
       end
     end
+    local inspectButton=characterUI.buttons["Inspect Character"]
+    if inspectButton and characterUI.autoInspect and identityData then inspectButton:SetBackdropColor(unpack(C.selected)); inspectButton:SetBackdropBorderColor(unpack(C.gold)) end
     local technicalButton=characterUI.viewButtons.TECHNICAL
-    if technicalButton then if gmMode then technicalButton:Enable(); technicalButton:SetNormalFontObject(GameFontNormalSmall) else technicalButton:Disable(); technicalButton:SetNormalFontObject(GameFontDisableSmall); if characterUI.view=="TECHNICAL" then characterUI.view="OVERVIEW" end end end
+    if technicalButton then if gmMode then technicalButton:Enable(); technicalButton.disabledReason=nil; technicalButton:SetNormalFontObject(GameFontNormalSmall) else technicalButton:Disable(); technicalButton.disabledReason="Unavailable in Player Mode. Technical Character details require server-authorized GM Mode."; technicalButton:SetNormalFontObject(GameFontDisableSmall); if characterUI.view=="TECHNICAL" then characterUI.view="OVERVIEW" end end end
     if not identityData then
       characterUI.nameText:SetText("No player selected"); characterUI.metaText:SetText("Select a player target to inspect Character information.")
       characterUI.overviewText:SetText("No Character information loaded.")
@@ -501,14 +644,14 @@ local function BuildNPC()
   local p=NewPage("NPC"); local h=Label(p,"Creature commands"); h:SetPoint("TOPLEFT",18,-18)
   local entry=AddField(p,"Creature entry ID",18,-56,145,true)
   Button(p,"Use Target",120,24,function() local id,err=TargetCreatureEntry(); if not id then SetStatus(err,true); return end; entry:SetText(id); SetStatus("Creature entry: "..id) end,"Read entry ID from selected creature"):SetPoint("TOPLEFT",180,-73)
-  Button(p,"Add NPC",120,24,function() local id=PositiveId(entry,"creature"); if id then SendCommand(string.format(CMD.npcAdd,id)) end end,"Spawn creature at your position"):SetPoint("TOPLEFT",315,-73)
+  local addNpc=Button(p,"Add NPC",120,24,function() local id=PositiveId(entry,"creature"); if id then SendCommand(string.format(CMD.npcAdd,id)) end end,"Spawn creature at your position"); addNpc:SetPoint("TOPLEFT",315,-73); Platform:RegisterRoleButton(addNpc,"GM_REQUIRED")
   AddCommandGrid(p,{
-    {"NPC Info",function() SendCommand(CMD.npcInfo) end,"Show selected creature information"},
-    {"Kill",function() SendCommand(CMD.npcKill) end,"Kill selected unit"},
-    {"Respawn",function() SendCommand(CMD.npcRespawn) end,"Respawn selected creature"},
-    {"Move Here",function() Confirm(CMD.npcMove) end,"Move selected spawn to your position"},
-    {"NPC Near",function() SendCommand(CMD.npcNear) end,"List nearby creature spawns"},
-    {"Delete NPC",function() Confirm(CMD.npcDelete) end,"Permanently delete selected creature spawn"},
+    {"NPC Info",function() SendCommand(CMD.npcInfo) end,"Show selected creature information","GM_REQUIRED"},
+    {"Kill",function() SendCommand(CMD.npcKill) end,"Kill selected unit","GM_REQUIRED"},
+    {"Respawn",function() SendCommand(CMD.npcRespawn) end,"Respawn selected creature","GM_REQUIRED"},
+    {"Move Here",function() Confirm(CMD.npcMove) end,"Move selected spawn to your position","GM_REQUIRED"},
+    {"NPC Near",function() SendCommand(CMD.npcNear) end,"List nearby creature spawns","GM_REQUIRED"},
+    {"Delete NPC",function() Confirm(CMD.npcDelete) end,"Permanently delete selected creature spawn","GM_REQUIRED"},
   },-130)
 end
 
@@ -1647,10 +1790,10 @@ local function BuildQuest()
   OperationButton("ACTIVITY","Quest Activity",-148,nil,"View commands, status messages and module output")
 
   local gm=Section(operation,"GM OPERATIONS",C.operate); gm:SetPoint("TOP",0,-198)
-  Button(operation,"Add Quest",130,27,function() RunSelectedCommand(CMD.questAdd,false) end,"Add the locked quest to the current target"):SetPoint("TOPLEFT",10,-218)
-  Button(operation,"Complete Quest",130,27,function() RunSelectedCommand(CMD.questComplete,false) end,"Force-complete the locked quest"):SetPoint("TOPLEFT",10,-251)
-  Button(operation,"Reward Quest",130,27,function() RunSelectedCommand(CMD.questReward,true) end,"Reward the locked quest"):SetPoint("TOPLEFT",10,-284)
-  Button(operation,"Remove Quest",130,27,function() RunSelectedCommand(CMD.questRemove,true) end,"Remove the locked quest"):SetPoint("TOPLEFT",10,-317)
+  local addQuest=Button(operation,"Add Quest",130,27,function() RunSelectedCommand(CMD.questAdd,false) end,"Add the locked quest to the current target"); addQuest:SetPoint("TOPLEFT",10,-218); Platform:RegisterRoleButton(addQuest,"GM_REQUIRED")
+  local completeQuest=Button(operation,"Complete Quest",130,27,function() RunSelectedCommand(CMD.questComplete,false) end,"Force-complete the locked quest"); completeQuest:SetPoint("TOPLEFT",10,-251); Platform:RegisterRoleButton(completeQuest,"GM_REQUIRED")
+  local rewardQuest=Button(operation,"Reward Quest",130,27,function() RunSelectedCommand(CMD.questReward,true) end,"Reward the locked quest"); rewardQuest:SetPoint("TOPLEFT",10,-284); Platform:RegisterRoleButton(rewardQuest,"GM_REQUIRED")
+  local removeQuest=Button(operation,"Remove Quest",130,27,function() RunSelectedCommand(CMD.questRemove,true) end,"Remove the locked quest"); removeQuest:SetPoint("TOPLEFT",10,-317); Platform:RegisterRoleButton(removeQuest,"GM_REQUIRED")
   Button(operation,"Open Quest Log",130,27,OpenQuestLog,"Open the Blizzard Quest Log for the logged-in character"):SetPoint("TOPLEFT",10,-350)
   Button(operation,"Clear Workspace",130,27,ClearQuestSearch,"Clear the locked quest, results and audit data"):SetPoint("TOPLEFT",10,-383)
 
@@ -1762,22 +1905,22 @@ end
 local function BuildTeleport()
   local p=NewPage("Teleport"); local h=Label(p,"Teleport tools"); h:SetPoint("TOPLEFT",18,-18)
   local loc=AddField(p,"Teleport location",18,-56,260,false)
-  Button(p,"Teleport",120,24,function() local s=NonEmpty(loc,"a teleport location"); if s then SendCommand(string.format(CMD.tele,s)) end end,"Use an AzerothCore teleport name"):SetPoint("TOPLEFT",295,-73)
+  local teleportButton=Button(p,"Teleport",120,24,function() local s=NonEmpty(loc,"a teleport location"); if s then SendCommand(string.format(CMD.tele,s)) end end,"Use an AzerothCore teleport name"); teleportButton:SetPoint("TOPLEFT",295,-73); Platform:RegisterRoleButton(teleportButton,"GM_REQUIRED")
   local playerName=AddField(p,"Player name",18,-125,210,false); playerName.azerCoreOpsExpected="player"; playerName.azerCoreOpsPlain=true
   Button(p,"Use Target",100,24,function()
     if UnitExists("target") and UnitIsPlayer("target") then playerName:SetText(UnitName("target") or ""); SetStatus("Selected player "..(UnitName("target") or ""))
     else SetStatus("Select a player first.",true) end
   end,"Copy the selected player's name"):SetPoint("TOPLEFT",245,-142)
-  Button(p,"Appear",100,24,function()
+  local appearButton=Button(p,"Appear",100,24,function()
     local name=NonEmpty(playerName,"a player name"); if name then Confirm(CMD.appear.." "..name) end
-  end,"Teleport to the named player"):SetPoint("TOPLEFT",355,-142)
-  Button(p,"Summon",100,24,function()
+  end,"Teleport to the named player"); appearButton:SetPoint("TOPLEFT",355,-142); Platform:RegisterRoleButton(appearButton,"GM_REQUIRED")
+  local summonButton=Button(p,"Summon",100,24,function()
     local name=NonEmpty(playerName,"a player name"); if name then Confirm(CMD.summon.." "..name) end
-  end,"Summon the named player to you"):SetPoint("TOPLEFT",465,-142)
+  end,"Summon the named player to you"); summonButton:SetPoint("TOPLEFT",465,-142); Platform:RegisterRoleButton(summonButton,"GM_REQUIRED")
   AddCommandGrid(p,{
-    {"GPS",function() SendCommand(CMD.gps) end,"Show map and coordinates"},
-    {"Appear Target",function() if UnitExists("target") and UnitIsPlayer("target") then Confirm(CMD.appear) else SetStatus("Select a player first.",true) end end,"Teleport to selected player"},
-    {"Summon Target",function() if UnitExists("target") and UnitIsPlayer("target") then Confirm(CMD.summon) else SetStatus("Select a player first.",true) end end,"Summon selected player"},
+    {"GPS",function() SendCommand(CMD.gps) end,"Show map and coordinates","GM_REQUIRED"},
+    {"Appear Target",function() if UnitExists("target") and UnitIsPlayer("target") then Confirm(CMD.appear) else SetStatus("Select a player first.",true) end end,"Teleport to selected player","GM_REQUIRED"},
+    {"Summon Target",function() if UnitExists("target") and UnitIsPlayer("target") then Confirm(CMD.summon) else SetStatus("Select a player first.",true) end end,"Summon selected player","GM_REQUIRED"},
   },-205)
   local note=Label(p,"Named-player commands are validated by AzerothCore. Confirm cross-map and instance movement before continuing.","GameFontHighlightSmall")
   note:SetTextColor(unpack(C.white)); note:SetPoint("TOPLEFT",18,-300); note:SetWidth(550); note:SetJustifyH("LEFT")
@@ -1787,8 +1930,8 @@ local function BuildItem()
   local p=NewPage("Item"); local titleBox=AddField(p,"Item name",18,-18,300,false); titleBox.azerCoreOpsExpected="item"; titleBox.azerCoreOpsPlain=true
   Button(p,"Lookup",110,24,function() local s=NonEmpty(titleBox,"an item name"); if s then BeginLookup("item",string.format(CMD.itemLookup,s)) end end,"Search the server item database"):SetPoint("TOPLEFT",334,-35)
   itemIdBox=AddField(p,"Item ID",18,-78,110,true); itemIdBox.azerCoreOpsExpected="item"; local count=AddField(p,"Quantity",145,-78,80,true); count:SetText("1")
-  Button(p,"Add Item",105,24,function() local id=PositiveId(itemIdBox,"item"); local n=PositiveId(count,"quantity"); if id and n then SendCommand(string.format(CMD.itemAdd,id,n)) end end):SetPoint("TOPLEFT",245,-95)
-  Button(p,"Remove",105,24,function() local id=PositiveId(itemIdBox,"item"); local n=PositiveId(count,"quantity"); if id and n then Confirm(string.format(CMD.itemRemove,id,n)) end end):SetPoint("TOPLEFT",365,-95)
+  local addItem=Button(p,"Add Item",105,24,function() local id=PositiveId(itemIdBox,"item"); local n=PositiveId(count,"quantity"); if id and n then SendCommand(string.format(CMD.itemAdd,id,n)) end end); addItem:SetPoint("TOPLEFT",245,-95); Platform:RegisterRoleButton(addItem,"GM_REQUIRED")
+  local removeItem=Button(p,"Remove",105,24,function() local id=PositiveId(itemIdBox,"item"); local n=PositiveId(count,"quantity"); if id and n then Confirm(string.format(CMD.itemRemove,id,n)) end end); removeItem:SetPoint("TOPLEFT",365,-95); Platform:RegisterRoleButton(removeItem,"GM_REQUIRED")
   AddResultsPanel(p,"item")
 end
 
@@ -2008,7 +2151,14 @@ local function UpdateBindControls()
   end
   state(instanceUI.inspectButton,selectedTarget~=nil)
   if instanceUI.inspectButton and selectedTarget and instanceUI.autoInspect then instanceUI.inspectButton:SetBackdropColor(unpack(C.selected)); instanceUI.inspectButton:SetBackdropBorderColor(unpack(C.gold)) end
-  state(instanceUI.unbindSelectedButton,targetCurrent and #SelectedTargetBinds()>0)
+  local unbindAllowed=EffectiveCharacterMode()=="GM"
+  state(instanceUI.unbindSelectedButton,unbindAllowed and targetCurrent and #SelectedTargetBinds()>0)
+  if instanceUI.unbindSelectedButton then
+    if not unbindAllowed then instanceUI.unbindSelectedButton.disabledReason="Unavailable in Player Mode. Removing instance binds requires server-authorized GM Mode."
+    elseif not targetCurrent then instanceUI.unbindSelectedButton.disabledReason="Inspect the current player target before selecting binds."
+    elseif #SelectedTargetBinds()==0 then instanceUI.unbindSelectedButton.disabledReason="Select one or more applicable target binds first."
+    else instanceUI.unbindSelectedButton.disabledReason=nil end
+  end
   state(instanceUI.bindDetailsButton,instanceUI.selectedBind~=nil)
 end
 
@@ -2704,7 +2854,7 @@ local function BuildOptions()
     local role,label=definition[1],definition[2]
     local b=Button(pc,label,84,24,function()
       if role=="GM" and tostring(Platform:PermissionFor("CHARACTER_MODE") or "PLAYER"):upper()~="GM" then SetStatus("GM mode is unavailable until the module advertises GM authorization.",true); return end
-      Settings().roleMode=role; UpdateRoleButtons(); if characterUI.Update then characterUI.Update() end; SetStatus("Operation mode set to "..label..". Effective Character mode: "..EffectiveCharacterMode()..".")
+      Settings().roleMode=role; UpdateRoleButtons(); Platform:UpdateWorkspaceMode(); Platform:ApplyRoleButtonPolicies(); UpdateBindControls(); if characterUI.Update then characterUI.Update() end; SetStatus("Operation mode set to "..label..". Effective mode: "..EffectiveCharacterMode()..".")
     end,"Automatic follows module authorization; Player is always available; GM requires server authorization")
     b:SetPoint("TOPLEFT",22+(index-1)*92,-298); b:SetScript("OnLeave",function(self) UpdateRoleButtons(); GameTooltip:Hide() end); roleButtons[role]=b
   end
@@ -2947,6 +3097,7 @@ local function BuildUI()
   main=CreateFrame("Frame","AZERCORE_OPS_MainFrame",UIParent); main:SetWidth(980); main:SetHeight(650); main:SetClampedToScreen(true); main:SetFrameStrata("DIALOG"); Backdrop(main); RestorePoint(main,"main","CENTER",0,0); Movable(main,"main")
   local logo=main:CreateTexture(nil,"ARTWORK"); logo:SetTexture("Interface\\AddOns\\AzerCoreOps\\Media\\azercoreops-icon.tga"); logo:SetWidth(30); logo:SetHeight(30); logo:SetPoint("TOPLEFT",12,-7)
   local title=Label(main,"AzerCore Ops  |cffaaaaaa"..ADDON_VERSION.."|r"); title:SetPoint("TOPLEFT",50,-15)
+  compatUI.workspaceModeText=main:CreateFontString(nil,"OVERLAY","GameFontNormalSmall"); compatUI.workspaceModeText:SetPoint("TOPRIGHT",-104,-16); compatUI.workspaceModeText:SetJustifyH("RIGHT")
   Button(main,"?",22,20,OpenOptions,"Open AzerCoreOps options"):SetPoint("TOPRIGHT",-66,-10)
   Button(main,"_",22,20,HideMain,"Minimize to floating button"):SetPoint("TOPRIGHT",-38,-10)
   Button(main,"X",22,20,HideMain,"Close"):SetPoint("TOPRIGHT",-10,-10)
@@ -2988,7 +3139,7 @@ local function BuildUI()
 
   content=CreateFrame("Frame",nil,main); content:SetPoint("TOPLEFT",180,-48); content:SetPoint("BOTTOMRIGHT",-10,32); Backdrop(content,C.panel)
   statusText=main:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); statusText:SetPoint("BOTTOMLEFT",14,11); statusText:SetPoint("BOTTOMRIGHT",-14,11); statusText:SetJustifyH("LEFT")
-  BuildDashboard(); BuildCharacter(); BuildNPC(); BuildQuest(); BuildTeleport(); BuildItem(); BuildInstances(); BuildCourier(); BuildInformation(); SelectTab(AzerCoreOpsDB.activeTab or "Dashboard")
+  BuildDashboard(); BuildCharacter(); BuildNPC(); BuildQuest(); BuildTeleport(); BuildItem(); BuildInstances(); BuildCourier(); BuildInformation(); Platform:UpdateWorkspaceMode(); SelectTab(AzerCoreOpsDB.activeTab or "Dashboard")
 
   mini=CreateFrame("Button","AZERCORE_OPS_MiniButton",UIParent); mini:SetWidth(36); mini:SetHeight(28); mini:SetClampedToScreen(true); mini:SetFrameStrata("HIGH"); mini:SetFrameLevel(100); Backdrop(mini); RestorePoint(mini,"mini","CENTER",290,0); Movable(mini,"mini")
   local mi=mini:CreateTexture(nil,"ARTWORK"); mi:SetTexture("Interface\\AddOns\\AzerCoreOps\\Media\\azercoreops-icon.tga"); mi:SetAllPoints()
@@ -3015,6 +3166,10 @@ events:SetScript("OnEvent",function(_,event,arg1)
   elseif event=="PLAYER_TARGET_CHANGED" then
     characterUI.server={professions={},raid={}}; characterUI.capturePlayer=nil; characterUI.ignoreStream=false
     if characterUI.Update then characterUI.Update() end
+    if activeTab=="Character" and characterUI.autoInspect and characterUI.Inspect then
+      if UnitExists("target") and UnitIsPlayer("target") then After(.05,function() characterUI.Inspect(true) end)
+      elseif characterUI.statusText then characterUI.statusText:SetText("Automatic inspection is waiting for a player target.") end
+    end
     UpdateInstanceTargetIdentity()
     After(.08,UpdateInstanceTargetIdentity)
     if activeTab=="Instances" and instanceUI.bindPage and instanceUI.bindPage:IsShown() then
@@ -3052,7 +3207,7 @@ events:SetScript("OnEvent",function(_,event,arg1)
     elseif kind=="PERMISSIONS" then
       compatUI.data=compatUI.data or {}; compatUI.received.PERMISSIONS=true
       compatUI.data.permissions=f.values or ""
-      Platform:ApplyVersion(compatUI.data); if compatUI.updateRoleButtons then compatUI.updateRoleButtons() end; if characterUI.Update then characterUI.Update() end
+      Platform:ApplyVersion(compatUI.data); if compatUI.updateRoleButtons then compatUI.updateRoleButtons() end; Platform:UpdateWorkspaceMode(); Platform:ApplyRoleButtonPolicies(); UpdateBindControls(); if characterUI.Update then characterUI.Update() end
       RenderCompatibility(); SetStatus("Permission registry loaded; reading build information...")
     elseif kind=="BUILD" then
       compatUI.data=compatUI.data or {}; compatUI.received.BUILD=true
@@ -3079,7 +3234,14 @@ events:SetScript("OnEvent",function(_,event,arg1)
     elseif kind=="CHARACTER_PROFESSION" then
       if not characterUI.ignoreStream then table.insert(characterUI.server.professions,f) end
     elseif kind=="CHARACTER_RAID" then
-      if not characterUI.ignoreStream then table.insert(characterUI.server.raid,f) end
+      local settings=Settings()
+      if f.raidkey==settings.characterRaid and f.difficultykey==settings.characterRaidDifficulty then table.insert(characterUI.server.raid,f) end
+    elseif kind=="CHARACTER_RAID_END" then
+      local settings=Settings(); local selected=UnitExists("target") and UnitIsPlayer("target") and UnitName("target") or nil
+      if selected==f.player and f.raidkey==settings.characterRaid and f.difficultykey==settings.characterRaidDifficulty then
+        characterUI.server.raidSelection=f; if characterUI.Update then characterUI.Update() end
+        characterUI.statusText:SetText("Raid Experience loaded for "..tostring(f.player).."; selection remains locked.")
+      end
     elseif kind=="CHARACTER_END" then
       if not characterUI.ignoreStream and f.player==characterUI.capturePlayer then characterUI.Update(); characterUI.Log("Inspect","Authoritative Character data loaded for "..tostring(f.player)); characterUI.statusText:SetText("Module Character data loaded for "..tostring(f.player)) end
       characterUI.ignoreStream=false

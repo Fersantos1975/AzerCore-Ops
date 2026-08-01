@@ -36,6 +36,7 @@ public:
         static ChatCommandTable characterTable =
         {
             { "inspect", AzerCoreOps::CharacterInspector::Inspect, rbac::RBAC_PERM_COMMAND_LOOKUP_QUEST, Console::No },
+            { "raid", AzerCoreOps::CharacterInspector::Raid, rbac::RBAC_PERM_COMMAND_LOOKUP_QUEST, Console::No },
             { "save", AzerCoreOps::CharacterInspector::SaveTarget, rbac::RBAC_PERM_COMMAND_INSTANCE_UNBIND, Console::No },
         };
         static ChatCommandTable azerCoreOpsTable =

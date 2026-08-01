@@ -2,7 +2,7 @@
 ## Title: |cffffd100AzerCore Ops|r
 ## Notes: Professional operations platform for AzerothCore administrators and Game Masters.
 ## Author: Fersantos
-## Version: 0.5.3-alpha1-character-intelligence
+## Version: 0.5.3-alpha4-raid-experience
 ## SavedVariablesPerCharacter: AzerCoreOpsDB
 
 DesignSystem.lua

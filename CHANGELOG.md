@@ -9,10 +9,16 @@
 - A guarded Save Target operation that verifies authorization, names the selected online character, persists without logout, and returns a structured result.
 - Character sub-workspaces for Overview, Inventory, Professions, Raid Experience, and Technical Details.
 - Character Activity plus privacy-safe Copy, Share, and Export reports.
+- A selectable Wrath raid catalog with raid-specific difficulty choices and structured achievement evidence for the locked selection.
 
 ### Updated
 
-- Updated the bundled addon to `0.5.3-alpha1-character-intelligence`.
+- Updated the bundled addon to `0.5.3-alpha4-raid-experience`.
+- Raid Experience now preserves its raid and difficulty selection across target changes and reloads, automatically refreshes the selected target, and rejects stale responses from an earlier selection.
+- Added a persistent effective-mode indicator across every workspace and explanatory tooltips for operations disabled by Player Mode or missing target context.
+- Character automatically activates Inspect Character when opened with a player target or when a player is subsequently selected; target changes refresh authoritative data without polling.
+- Added a shared role-policy registry and applied GM-required state to Character mutations, Quest mutations, NPC commands, Item mutations, Movement commands, and instance unbinding.
+- Moved role-policy helpers and mode presentation onto the shared platform object to remain safely below WoW 3.3.5 Lua 5.1's 200-local limit.
 - Character target changes clear stale server records immediately; authoritative responses are accepted only for the currently selected player.
 - Account, email, and network identifiers are intentionally excluded from Character reports.
 

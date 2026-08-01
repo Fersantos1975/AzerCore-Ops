@@ -12,6 +12,9 @@
 #include "WorldSession.h"
 
 #include <array>
+#include <algorithm>
+#include <cctype>
+#include <sstream>
 #include <string>
 
 namespace AzerCoreOps
@@ -42,14 +45,31 @@ constexpr std::array<ProfessionDefinition, 13> Professions = {{
     { 356, "Fishing", "Secondary" }
 }};
 
-struct RaidAchievement { uint32 id; char const* section; char const* difficulty; };
-constexpr std::array<RaidAchievement, 10> IccAchievements = {{
-    { 4531, "Lower Spire", "10 Player" }, { 4528, "Plagueworks", "10 Player" },
-    { 4529, "Crimson Hall", "10 Player" }, { 4527, "Frostwing Halls", "10 Player" },
-    { 4530, "The Frozen Throne", "10 Player" }, { 4604, "Lower Spire", "25 Player" },
-    { 4605, "Plagueworks", "25 Player" }, { 4606, "Crimson Hall", "25 Player" },
-    { 4607, "Frostwing Halls", "25 Player" }, { 4608, "The Frozen Throne", "25 Player" }
-}};
+struct RaidAchievement { char const* raidKey; char const* raid; char const* difficultyKey; char const* difficulty; uint32 id; char const* section; };
+constexpr RaidAchievement RaidAchievements[] = {
+    { "VOA", "Vault of Archavon", "10N", "10 Player", 1722, "Archavon the Stone Watcher" }, { "VOA", "Vault of Archavon", "10N", "10 Player", 3136, "Emalon the Storm Watcher" }, { "VOA", "Vault of Archavon", "10N", "10 Player", 3836, "Koralon the Flame Watcher" }, { "VOA", "Vault of Archavon", "10N", "10 Player", 4585, "Toravon the Ice Watcher" },
+    { "VOA", "Vault of Archavon", "25N", "25 Player", 1721, "Archavon the Stone Watcher" }, { "VOA", "Vault of Archavon", "25N", "25 Player", 3137, "Emalon the Storm Watcher" }, { "VOA", "Vault of Archavon", "25N", "25 Player", 3837, "Koralon the Flame Watcher" }, { "VOA", "Vault of Archavon", "25N", "25 Player", 4586, "Toravon the Ice Watcher" },
+    { "NAXX", "Naxxramas", "10N", "10 Player", 562, "Arachnid Quarter" }, { "NAXX", "Naxxramas", "10N", "10 Player", 564, "Construct Quarter" }, { "NAXX", "Naxxramas", "10N", "10 Player", 566, "Plague Quarter" }, { "NAXX", "Naxxramas", "10N", "10 Player", 568, "Military Quarter" }, { "NAXX", "Naxxramas", "10N", "10 Player", 572, "Sapphiron's Demise" }, { "NAXX", "Naxxramas", "10N", "10 Player", 574, "Kel'Thuzad's Defeat" },
+    { "NAXX", "Naxxramas", "25N", "25 Player", 563, "Arachnid Quarter" }, { "NAXX", "Naxxramas", "25N", "25 Player", 565, "Construct Quarter" }, { "NAXX", "Naxxramas", "25N", "25 Player", 567, "Plague Quarter" }, { "NAXX", "Naxxramas", "25N", "25 Player", 569, "Military Quarter" }, { "NAXX", "Naxxramas", "25N", "25 Player", 573, "Sapphiron's Demise" }, { "NAXX", "Naxxramas", "25N", "25 Player", 575, "Kel'Thuzad's Defeat" },
+    { "OS", "The Obsidian Sanctum", "10N", "10 Player", 1876, "Sartharion defeated" }, { "OS", "The Obsidian Sanctum", "25N", "25 Player", 625, "Sartharion defeated" }, { "OS", "The Obsidian Sanctum", "10HM", "10 Player Hard Mode", 2051, "The Twilight Zone" }, { "OS", "The Obsidian Sanctum", "25HM", "25 Player Hard Mode", 2054, "The Twilight Zone" },
+    { "EOE", "The Eye of Eternity", "10N", "10 Player", 622, "The Spellweaver's Downfall" }, { "EOE", "The Eye of Eternity", "25N", "25 Player", 623, "The Spellweaver's Downfall" },
+    { "ULDUAR", "Ulduar", "10N", "10 Player", 2886, "The Siege of Ulduar" }, { "ULDUAR", "Ulduar", "10N", "10 Player", 2888, "The Antechamber of Ulduar" }, { "ULDUAR", "Ulduar", "10N", "10 Player", 2890, "The Keepers of Ulduar" }, { "ULDUAR", "Ulduar", "10N", "10 Player", 2892, "The Descent into Madness" }, { "ULDUAR", "Ulduar", "10N", "10 Player", 2894, "The Secrets of Ulduar" },
+    { "ULDUAR", "Ulduar", "25N", "25 Player", 2887, "The Siege of Ulduar" }, { "ULDUAR", "Ulduar", "25N", "25 Player", 2889, "The Antechamber of Ulduar" }, { "ULDUAR", "Ulduar", "25N", "25 Player", 2891, "The Keepers of Ulduar" }, { "ULDUAR", "Ulduar", "25N", "25 Player", 2893, "The Descent into Madness" }, { "ULDUAR", "Ulduar", "25N", "25 Player", 2895, "The Secrets of Ulduar" },
+    { "ULDUAR", "Ulduar", "10HM", "10 Player Hard Mode", 2957, "Glory of the Ulduar Raider" }, { "ULDUAR", "Ulduar", "25HM", "25 Player Hard Mode", 2958, "Glory of the Ulduar Raider" },
+    { "TOC", "Trial of the Crusader", "10N", "10 Player", 3917, "Call of the Crusade" }, { "TOC", "Trial of the Crusader", "25N", "25 Player", 3916, "Call of the Crusade" }, { "TOC", "Trial of the Crusader", "10H", "10 Player Heroic", 3918, "Call of the Grand Crusade" }, { "TOC", "Trial of the Crusader", "25H", "25 Player Heroic", 3812, "Call of the Grand Crusade" },
+    { "ONYXIA", "Onyxia's Lair", "10N", "10 Player", 4396, "Onyxia defeated" }, { "ONYXIA", "Onyxia's Lair", "25N", "25 Player", 4397, "Onyxia defeated" },
+    { "ICC", "Icecrown Citadel", "10N", "10 Player", 4531, "Lower Spire" }, { "ICC", "Icecrown Citadel", "10N", "10 Player", 4528, "Plagueworks" }, { "ICC", "Icecrown Citadel", "10N", "10 Player", 4529, "Crimson Hall" }, { "ICC", "Icecrown Citadel", "10N", "10 Player", 4527, "Frostwing Halls" }, { "ICC", "Icecrown Citadel", "10N", "10 Player", 4532, "Fall of the Lich King" },
+    { "ICC", "Icecrown Citadel", "25N", "25 Player", 4604, "Lower Spire" }, { "ICC", "Icecrown Citadel", "25N", "25 Player", 4605, "Plagueworks" }, { "ICC", "Icecrown Citadel", "25N", "25 Player", 4606, "Crimson Hall" }, { "ICC", "Icecrown Citadel", "25N", "25 Player", 4607, "Frostwing Halls" }, { "ICC", "Icecrown Citadel", "25N", "25 Player", 4608, "Fall of the Lich King" },
+    { "ICC", "Icecrown Citadel", "10H", "10 Player Heroic", 4628, "Lower Spire" }, { "ICC", "Icecrown Citadel", "10H", "10 Player Heroic", 4629, "Plagueworks" }, { "ICC", "Icecrown Citadel", "10H", "10 Player Heroic", 4630, "Crimson Hall" }, { "ICC", "Icecrown Citadel", "10H", "10 Player Heroic", 4631, "Frostwing Halls" }, { "ICC", "Icecrown Citadel", "10H", "10 Player Heroic", 4636, "Fall of the Lich King" },
+    { "ICC", "Icecrown Citadel", "25H", "25 Player Heroic", 4632, "Lower Spire" }, { "ICC", "Icecrown Citadel", "25H", "25 Player Heroic", 4633, "Plagueworks" }, { "ICC", "Icecrown Citadel", "25H", "25 Player Heroic", 4634, "Crimson Hall" }, { "ICC", "Icecrown Citadel", "25H", "25 Player Heroic", 4635, "Frostwing Halls" }, { "ICC", "Icecrown Citadel", "25H", "25 Player Heroic", 4637, "Fall of the Lich King" },
+    { "RS", "The Ruby Sanctum", "10N", "10 Player", 4817, "The Twilight Destroyer" }, { "RS", "The Ruby Sanctum", "25N", "25 Player", 4815, "The Twilight Destroyer" }, { "RS", "The Ruby Sanctum", "10H", "10 Player Heroic", 4818, "Heroic: The Twilight Destroyer" }, { "RS", "The Ruby Sanctum", "25H", "25 Player Heroic", 4816, "Heroic: The Twilight Destroyer" }
+};
+
+std::string Upper(std::string value)
+{
+    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) { return char(std::toupper(c)); });
+    return value;
+}
 }
 
 bool CharacterInspector::Inspect(ChatHandler* handler)
@@ -101,10 +121,34 @@ bool CharacterInspector::Inspect(ChatHandler* handler)
         if (uint16 value = player->GetSkillValue(profession.id))
             Protocol::SendCharacterProfession(handler, profession.id, profession.name, profession.category, value, player->GetMaxSkillValue(profession.id));
 
-    for (RaidAchievement const& achievement : IccAchievements)
-        Protocol::SendCharacterRaid(handler, "Icecrown Citadel", achievement.difficulty, achievement.section, achievement.id, player->HasAchieved(achievement.id));
-
     Protocol::SendCharacterEnd(handler, player->GetName());
+    return true;
+}
+
+bool CharacterInspector::Raid(ChatHandler* handler, Acore::ChatCommands::Tail selection)
+{
+    Player* requester = handler->GetSession()->GetPlayer();
+    Player* player = SelectedCharacter(handler);
+    if (!player)
+        return true;
+    bool gm = IsGMAuthorized(handler);
+    bool sameGroup = requester && requester->GetGroup() && requester->GetGroup() == player->GetGroup();
+    if (!gm && player != requester && !sameGroup) { Protocol::SendCharacterError(handler, "Player mode may inspect only yourself or a member of your current group"); return true; }
+    if (gm && handler->HasLowerSecurity(player)) { Protocol::SendCharacterError(handler, "You cannot inspect a player with higher security"); return true; }
+
+    std::stringstream stream{std::string(selection)};
+    std::string raidKey, difficultyKey;
+    stream >> raidKey >> difficultyKey;
+    raidKey = Upper(raidKey); difficultyKey = Upper(difficultyKey);
+    uint32 count = 0;
+    for (RaidAchievement const& achievement : RaidAchievements)
+        if (raidKey == achievement.raidKey && difficultyKey == achievement.difficultyKey)
+        {
+            Protocol::SendCharacterRaid(handler, raidKey, difficultyKey, achievement.raid, achievement.difficulty, achievement.section, achievement.id, player->HasAchieved(achievement.id));
+            ++count;
+        }
+    if (!count) { Protocol::SendCharacterError(handler, "Unsupported raid or difficulty selection"); return true; }
+    Protocol::SendCharacterRaidEnd(handler, player->GetName(), raidKey, difficultyKey, count);
     return true;
 }
 

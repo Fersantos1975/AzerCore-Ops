@@ -43,7 +43,8 @@ void SendCharacterState(ChatHandler* handler, bool alive, bool combat, std::uint
 void SendCharacterLocation(ChatHandler* handler, std::uint32_t map, std::uint32_t zone, std::uint32_t area, std::uint32_t instance, std::uint32_t phase, float x, float y, float z, float orientation, bool authorized);
 void SendCharacterInventory(ChatHandler* handler, std::uint32_t used, std::uint32_t capacity, std::uint32_t equipped, std::uint32_t averageItemLevel);
 void SendCharacterProfession(ChatHandler* handler, std::uint32_t id, std::string const& name, std::string const& category, std::uint32_t value, std::uint32_t maximum);
-void SendCharacterRaid(ChatHandler* handler, std::string const& raid, std::string const& difficulty, std::string const& section, std::uint32_t achievement, bool complete);
+void SendCharacterRaid(ChatHandler* handler, std::string const& raidKey, std::string const& difficultyKey, std::string const& raid, std::string const& difficulty, std::string const& section, std::uint32_t achievement, bool complete);
+void SendCharacterRaidEnd(ChatHandler* handler, std::string const& player, std::string const& raidKey, std::string const& difficultyKey, std::uint32_t count);
 void SendCharacterEnd(ChatHandler* handler, std::string const& player);
 void SendCharacterSaveResult(ChatHandler* handler, std::string const& player, std::string const& result, std::string const& reason);
 }

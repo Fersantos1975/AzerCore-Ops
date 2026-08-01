@@ -21,6 +21,7 @@ AzerCore Ops Platform 0.5.3 adds a role-aware Character Inspector while retainin
 - Repository architecture, design-system documentation, contribution guidance, and release validation tooling
 - Server-authoritative Automatic, Player, and GM operation modes
 - Character Overview, Inventory, Professions, Raid Experience, restricted Technical Details, and Character Activity
+- Locked raid and valid-difficulty selectors covering Wrath raid achievement evidence without presenting Ulduar or Obsidian Sanctum hard modes as heroic difficulties
 - Guarded target saving with structured success or denial results and no logout side effect
 
 ## Verification state

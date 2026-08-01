@@ -47,6 +47,9 @@ Use this checklist before tagging any AzerCore Ops release.
 - [ ] Changing or clearing the selected target immediately removes stale Character records.
 - [ ] Technical identifiers and exact location remain unavailable in Player Mode and excluded from shared reports.
 - [ ] Raid Experience clearly labels achievements as recorded evidence rather than proof of mastery.
+- [ ] Every listed raid exposes only applicable difficulty choices; changing the raid selects a valid fallback difficulty.
+- [ ] The selected raid and difficulty survive target changes and `/reload`, and the new target refreshes automatically.
+- [ ] A late response for an earlier raid, difficulty, or target is ignored.
 - [ ] Save My Character remains self-only; Save Target requires GM authorization and confirmation.
 - [ ] Character copy, share, and export reports contain no account, email, IP, GUID, or exact-location data.
 
