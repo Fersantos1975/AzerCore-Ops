@@ -94,7 +94,7 @@ bool NPCInspector::Inspect(ChatHandler* handler)
     CreatureTemplate const* data = creature->GetCreatureTemplate();
     uint32 entry = creature->GetEntry();
     Protocol::SendNPCBegin(handler, creature->GetName(), entry, std::to_string(creature->GetGUID().GetCounter()), player->GetName());
-    Protocol::SendNPCOverview(handler, creature->getLevel(), data ? data->minlevel : creature->getLevel(), data ? data->maxlevel : creature->getLevel(), data ? data->rank : 0, data ? data->type : 0, data ? data->family : 0, data ? data->faction : 0, data ? data->npcflag : 0);
+    Protocol::SendNPCOverview(handler, creature->GetLevel(), data ? data->minlevel : creature->GetLevel(), data ? data->maxlevel : creature->GetLevel(), data ? data->rank : 0, data ? data->type : 0, data ? data->family : 0, data ? data->faction : 0, data ? data->npcflag : 0);
     Protocol::SendNPCState(handler, creature->IsAlive(), creature->IsInCombat(), creature->GetHealth(), creature->GetMaxHealth(), creature->getPowerType(), creature->GetPower(creature->getPowerType()), creature->GetMaxPower(creature->getPowerType()));
     Protocol::SendNPCLocation(handler, creature->GetMapId(), creature->GetZoneId(), creature->GetAreaId(), creature->GetInstanceId(), creature->GetPhaseMask(), creature->GetPositionX(), creature->GetPositionY(), creature->GetPositionZ(), creature->GetOrientation());
     if (data)
