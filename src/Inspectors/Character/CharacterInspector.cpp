@@ -29,8 +29,8 @@ bool IsGMAuthorized(ChatHandler* handler)
 Player* SelectedCharacter(ChatHandler* handler)
 {
     Player* player = handler ? handler->getSelectedPlayer() : nullptr;
-    if (!player)
-        Protocol::SendCharacterError(handler, "Select an online player before inspecting Character data");
+    if (!player && handler && handler->GetSession())
+        player = handler->GetSession()->GetPlayer();
     return player;
 }
 

@@ -1,6 +1,6 @@
 local ADDON = ...
 
--- AzerCore Ops Platform 0.5.3-alpha4-raid-experience
+-- AzerCore Ops Platform 0.5.3-alpha8-auto-character-inspection
 -- Target: WoW 3.3.5a / AzerothCore. All server commands live here so that
 -- branch-specific command names can be changed without touching the UI.
 local CMD = {
@@ -61,6 +61,8 @@ local compatUI={data=nil,text=nil,informationText=nil,received={}}
 local characterUI={activity={},buttons={},viewButtons={},target=nil,identityFrame=nil,portrait=nil,nameText=nil,metaText=nil,
   overviewText=nil,stateText=nil,locationText=nil,contextText=nil,statusText=nil,modeText=nil,Update=nil,Render=nil,Log=nil,
   view="OVERVIEW",overviewPanels={},reportPanel=nil,reportText=nil,reportChild=nil,server={},capturePlayer=nil,autoInspect=false,Inspect=nil,
+  equipmentFrame=nil,equipmentSlots={},equipment={},talents={},inspectionPlayer=nil,inspectionGuid=nil,inspectionState="UNLOADED",
+  equipmentActionBar=nil,equipmentActionStatus=nil,footer=nil,roleText=nil,roleIcon=nil,detectedRole="Unknown",detectedSpec=nil,RequestClientInspection=nil,RefreshInspection=nil,
   raidControls=nil,raidButton=nil,difficultyButton=nil,raidMenu=nil,difficultyMenu=nil,RequestRaid=nil,
   raidCatalog={
     {key="VOA",name="Vault of Archavon",difficulties={{key="10N",name="10 Player"},{key="25N",name="25 Player"}}},
@@ -95,7 +97,7 @@ local defaults={
   rememberAuditFilter=true,autoReaudit=false,confirmResetSelected=true,
   warnNoTarget=true,compactAuditRows=false,auditFontSize=10,shiftClickInsert=true,
 }
-local ADDON_VERSION="0.5.3-alpha4-raid-experience"
+local ADDON_VERSION="0.5.3-alpha8-auto-character-inspection"
 local PROTOCOL_VERSION="1"
 local TESTED_CORE="190184a04539"
 local TESTED_PLAYERBOTS="ba46fcdecde3"
@@ -338,6 +340,15 @@ local function AddCommandGrid(parent, defs, startY)
   end
 end
 
+local function CharacterUnit()
+  if UnitExists("target") and UnitIsPlayer("target") then return "target" end
+  return "player"
+end
+
+local function CharacterContextName()
+  return UnitName(CharacterUnit())
+end
+
 local function NewPage(name)
   local p=CreateFrame("Frame",nil,content); p:SetAllPoints(content); p:Hide(); pages[name]=p; return p
 end
@@ -347,10 +358,8 @@ local function SelectTab(name)
   for n,p in pairs(pages) do if n==name then p:Show() else p:Hide() end end
   for n,b in pairs(tabs) do b:SetBackdropColor(unpack(n==name and C.selected or C.button)); b:SetBackdropBorderColor(unpack(n==name and C.gold or C.border)) end
   if name=="Character" and characterUI.Update then
-    characterUI.Update()
-    if UnitExists("target") and UnitIsPlayer("target") and characterUI.Inspect then
-      characterUI.autoInspect=true; characterUI.Inspect(true)
-    end
+    characterUI.autoInspect=true; characterUI.Update()
+    if characterUI.Inspect then characterUI.Inspect(true) end
   end
   Platform:UpdateWorkspaceMode(); Platform:ApplyRoleButtonPolicies()
   SetStatus(name=="Teleport" and "Movement workspace" or name.." workspace")
@@ -372,19 +381,28 @@ local function BuildCharacter()
   local portraitFrame=CreateFrame("Frame",nil,identity); portraitFrame:SetPoint("TOPLEFT",10,-28); portraitFrame:SetWidth(50); portraitFrame:SetHeight(50); Backdrop(portraitFrame,C.panel)
   local portrait=portraitFrame:CreateTexture(nil,"ARTWORK"); portrait:SetPoint("TOPLEFT",3,-3); portrait:SetPoint("BOTTOMRIGHT",-3,3); characterUI.portrait=portrait
   local nameText=identity:CreateFontString(nil,"OVERLAY","GameFontNormalLarge"); nameText:SetPoint("TOPLEFT",72,-31); nameText:SetTextColor(unpack(C.white)); characterUI.nameText=nameText
-  local metaText=identity:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); metaText:SetPoint("TOPLEFT",72,-56); metaText:SetPoint("BOTTOMRIGHT",-10,8); metaText:SetJustifyH("LEFT"); metaText:SetJustifyV("TOP"); metaText:SetTextColor(unpack(C.white)); characterUI.metaText=metaText
+  local metaText=identity:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); metaText:SetPoint("TOPLEFT",72,-56); metaText:SetPoint("BOTTOMRIGHT",-184,8); metaText:SetJustifyH("LEFT"); metaText:SetJustifyV("TOP"); metaText:SetTextColor(unpack(C.white)); characterUI.metaText=metaText
+
+  local roleBox=CreateFrame("Frame",nil,identity); roleBox:SetPoint("TOPRIGHT",-10,-27); roleBox:SetWidth(166); roleBox:SetHeight(52); Backdrop(roleBox,C.bg)
+  local roleHeading=Section(roleBox,"DETECTED ROLE",C.inspect); roleHeading:SetPoint("TOPLEFT",8,-7)
+  local roleIcon=roleBox:CreateTexture(nil,"ARTWORK"); roleIcon:SetWidth(24); roleIcon:SetHeight(24); roleIcon:SetPoint("BOTTOMLEFT",8,5); characterUI.roleIcon=roleIcon
+  local roleText=roleBox:CreateFontString(nil,"OVERLAY","GameFontNormalSmall"); roleText:SetPoint("LEFT",roleIcon,"RIGHT",7,0); roleText:SetPoint("RIGHT",-5,0); roleText:SetJustifyH("LEFT"); roleText:SetText("Unknown"); characterUI.roleText=roleText
 
   local tabBar=CreateFrame("Frame",nil,workspace); tabBar:SetPoint("TOPLEFT",8,-108); tabBar:SetPoint("TOPRIGHT",-8,-108); tabBar:SetHeight(28)
   local function CharacterViewButton(label,view,width,x)
     local b=Button(tabBar,label,width,24,function()
-      characterUI.view=view; if characterUI.Render then characterUI.Render() end
+      characterUI.view=view
+      if (view=="EQUIPMENT" or view=="TALENTS") and characterUI.RequestClientInspection and (characterUI.inspectionGuid~=UnitGUID(CharacterUnit()) or characterUI.inspectionState=="UNLOADED" or characterUI.inspectionState=="UNAVAILABLE") then characterUI.RequestClientInspection(false) end
+      if characterUI.Render then characterUI.Render() end
     end); b:SetPoint("TOPLEFT",x,0); b:SetScript("OnLeave",function() if characterUI.Render then characterUI.Render() end; GameTooltip:Hide() end); characterUI.viewButtons[view]=b; return b
   end
-  CharacterViewButton("Overview","OVERVIEW",76,0)
-  CharacterViewButton("Inventory","INVENTORY",76,80)
-  CharacterViewButton("Professions","PROFESSIONS",86,160)
-  CharacterViewButton("Raid Experience","RAID",112,250)
-  CharacterViewButton("Technical","TECHNICAL",82,366)
+  CharacterViewButton("Overview","OVERVIEW",68,0)
+  CharacterViewButton("Inventory","INVENTORY",68,72)
+  CharacterViewButton("Equipment","EQUIPMENT",74,144)
+  CharacterViewButton("Talents","TALENTS",60,222)
+  CharacterViewButton("Professions","PROFESSIONS",78,286)
+  CharacterViewButton("Raid Experience","RAID",100,368)
+  CharacterViewButton("Technical","TECHNICAL",70,472)
 
   local overview=CreateFrame("Frame",nil,workspace); overview:SetPoint("TOPLEFT",8,-140); overview:SetPoint("TOPRIGHT",workspace,"TOP",-4,-140); overview:SetHeight(132); Backdrop(overview,C.panel)
   local overviewHeading=Section(overview,"CHARACTER OVERVIEW",C.inspect); overviewHeading:SetPoint("TOPLEFT",10,-10)
@@ -404,12 +422,56 @@ local function BuildCharacter()
   characterUI.overviewPanels={overview,state,location,context}
 
   local reportPanel=CreateFrame("Frame",nil,workspace); reportPanel:SetPoint("TOPLEFT",8,-140); reportPanel:SetPoint("BOTTOMRIGHT",-8,44); Backdrop(reportPanel,C.panel); reportPanel:Hide(); characterUI.reportPanel=reportPanel
+
+  local equipmentFrame=CreateFrame("Frame",nil,workspace); equipmentFrame:SetPoint("TOPLEFT",8,-140); equipmentFrame:SetPoint("BOTTOMRIGHT",-8,8); Backdrop(equipmentFrame,C.panel); equipmentFrame:Hide(); characterUI.equipmentFrame=equipmentFrame
+  local equipmentHeading=Section(equipmentFrame,"EQUIPMENT INSPECTION",C.inspect); equipmentHeading:SetPoint("TOPLEFT",10,-10)
+  local equipmentSummary=equipmentFrame:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); equipmentSummary:SetPoint("TOPLEFT",166,-11); equipmentSummary:SetPoint("TOPRIGHT",-130,-11); equipmentSummary:SetJustifyH("CENTER"); characterUI.equipmentSummary=equipmentSummary
+  local refreshEquipment=Button(equipmentFrame,"Refresh",76,22,function() if characterUI.RefreshInspection then characterUI.RefreshInspection() end end,"Request current equipment and talent information again for the selected target."); refreshEquipment:SetPoint("TOPRIGHT",-10,-7)
+  Button(equipmentFrame,"?",22,22,nil,"Equipment follows the selected target automatically. Mouse over a slot for its complete item tooltip and use the arrow buttons to rotate the character. The target must be nearby, visible, friendly and online."):SetPoint("RIGHT",refreshEquipment,"LEFT",-5,0)
+
+  local equipmentActionBar=CreateFrame("Frame",nil,equipmentFrame); equipmentActionBar:SetPoint("BOTTOMLEFT",50,5); equipmentActionBar:SetPoint("BOTTOMRIGHT",-5,5); equipmentActionBar:SetHeight(28); Backdrop(equipmentActionBar,C.bg); characterUI.equipmentActionBar=equipmentActionBar
+  local equipmentActionStatus=equipmentActionBar:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); equipmentActionStatus:SetPoint("LEFT",8,0); equipmentActionStatus:SetPoint("RIGHT",-190,0); equipmentActionStatus:SetJustifyH("LEFT"); equipmentActionStatus:SetTextColor(unpack(C.white)); equipmentActionStatus:SetText("Equipment inspection ready"); characterUI.equipmentActionStatus=equipmentActionStatus
+
+  local leftRail=CreateFrame("Frame",nil,equipmentFrame); leftRail:SetPoint("TOPLEFT",5,-32); leftRail:SetPoint("BOTTOMLEFT",5,5); leftRail:SetWidth(42); Backdrop(leftRail,C.bg); characterUI.leftEquipmentRail=leftRail
+  local rightRail=CreateFrame("Frame",nil,equipmentFrame); rightRail:SetPoint("TOPRIGHT",-5,-32); rightRail:SetPoint("BOTTOMRIGHT",-5,38); rightRail:SetWidth(42); Backdrop(rightRail,C.bg); characterUI.rightEquipmentRail=rightRail
+
+  local model=CreateFrame("PlayerModel",nil,equipmentFrame); model:SetPoint("TOPLEFT",50,-32); model:SetPoint("BOTTOMRIGHT",rightRail,"BOTTOMLEFT",-3,5); model:SetUnit("player"); characterUI.equipmentModel=model
+  model.azerFacing=0
+  Button(equipmentFrame,"<",26,20,function() model.azerFacing=model.azerFacing-.25; model:SetFacing(model.azerFacing) end,"Rotate character left"):SetPoint("BOTTOMLEFT",model,"BOTTOMLEFT",4,4)
+  Button(equipmentFrame,">",26,20,function() model.azerFacing=model.azerFacing+.25; model:SetFacing(model.azerFacing) end,"Rotate character right"):SetPoint("BOTTOMRIGHT",model,"BOTTOMRIGHT",-4,4)
+
+  local slotLayout={
+    {1,"HeadSlot","Head","LEFT",-4},{2,"NeckSlot","Neck","LEFT",-40},{3,"ShoulderSlot","Shoulders","LEFT",-76},{15,"BackSlot","Back","LEFT",-112},{5,"ChestSlot","Chest","LEFT",-148},{4,"ShirtSlot","Shirt","LEFT",-184},{19,"TabardSlot","Tabard","LEFT",-220},{9,"WristSlot","Wrist","LEFT",-256},
+    {10,"HandsSlot","Hands","RIGHT",-4},{6,"WaistSlot","Waist","RIGHT",-40},{7,"LegsSlot","Legs","RIGHT",-76},{8,"FeetSlot","Feet","RIGHT",-112},{11,"Finger0Slot","Finger 1","RIGHT",-148},{12,"Finger1Slot","Finger 2","RIGHT",-184},{13,"Trinket0Slot","Trinket 1","RIGHT",-220},{14,"Trinket1Slot","Trinket 2","RIGHT",-256},
+    {16,"MainHandSlot","Main Hand","BOTTOM",-36},{17,"SecondaryHandSlot","Off Hand","BOTTOM",0},{18,"RangedSlot","Ranged","BOTTOM",36},
+  }
+  for _,definition in ipairs(slotLayout) do
+    local slotId,slotName,label,rail,y=definition[1],definition[2],definition[3],definition[4],definition[5]
+    local slotParent=rail=="LEFT" and leftRail or (rail=="RIGHT" and rightRail or equipmentFrame)
+    local slot=CreateFrame("Button",nil,slotParent); slot:SetWidth(32); slot:SetHeight(32); Backdrop(slot,C.bg); slot.slotId=slotId; slot.slotName=slotName; slot.slotLabel=label
+    local icon=slot:CreateTexture(nil,"ARTWORK"); icon:SetPoint("TOPLEFT",3,-3); icon:SetPoint("BOTTOMRIGHT",-3,3); icon:SetTexture("Interface\\PaperDoll\\UI-PaperDoll-Slot-"..slotName); slot.icon=icon
+    local count=slot:CreateFontString(nil,"OVERLAY","NumberFontNormalSmall"); count:SetPoint("BOTTOMRIGHT",-3,3); slot.count=count
+    if rail=="BOTTOM" then slot:SetPoint("BOTTOM",model,"BOTTOM",y,4)
+    else slot:SetPoint("TOPLEFT",5,y) end
+    slot:SetScript("OnEnter",function(self)
+      local item=characterUI.equipment[self.slotId]
+      GameTooltip:SetOwner(self,rail=="LEFT" and "ANCHOR_RIGHT" or "ANCHOR_LEFT")
+      if item and item.link then GameTooltip:SetHyperlink(item.link) else GameTooltip:SetText(self.slotLabel); GameTooltip:AddLine("Empty or not yet inspected",.7,.7,.7) end
+      GameTooltip:Show()
+    end)
+    slot:SetScript("OnLeave",function() GameTooltip:Hide() end)
+    characterUI.equipmentSlots[slotId]=slot
+  end
   local raidControls=CreateFrame("Frame",nil,reportPanel); raidControls:SetPoint("TOPLEFT",8,-8); raidControls:SetPoint("TOPRIGHT",-28,-8); raidControls:SetHeight(34); raidControls:Hide(); characterUI.raidControls=raidControls
   local raidLabel=raidControls:CreateFontString(nil,"OVERLAY","GameFontNormalSmall"); raidLabel:SetPoint("LEFT",2,0); raidLabel:SetText("Raid")
   local raidButton=Button(raidControls,"Select raid",190,24,nil,"Choose the raid whose recorded achievements will be inspected. This selection remains locked while targets change and after reload."); raidButton:SetPoint("LEFT",36,0); characterUI.raidButton=raidButton
   local difficultyLabel=raidControls:CreateFontString(nil,"OVERLAY","GameFontNormalSmall"); difficultyLabel:SetPoint("LEFT",raidButton,"RIGHT",12,0); difficultyLabel:SetText("Difficulty")
   local difficultyButton=Button(raidControls,"Select difficulty",170,24,nil,"Only difficulties applicable to the selected raid are listed."); difficultyButton:SetPoint("LEFT",difficultyLabel,"RIGHT",8,0); characterUI.difficultyButton=difficultyButton
   local lockedLabel=raidControls:CreateFontString(nil,"OVERLAY","GameFontNormalSmall"); lockedLabel:SetPoint("LEFT",difficultyButton,"RIGHT",12,0); lockedLabel:SetText("|cffffd100SELECTION LOCKED|r")
+
+  local talentControls=CreateFrame("Frame",nil,reportPanel); talentControls:SetPoint("TOPLEFT",8,-8); talentControls:SetPoint("TOPRIGHT",-28,-8); talentControls:SetHeight(34); talentControls:Hide(); characterUI.talentControls=talentControls
+  local talentStatus=talentControls:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); talentStatus:SetPoint("LEFT",2,0); talentStatus:SetPoint("RIGHT",-88,0); talentStatus:SetJustifyH("LEFT"); talentStatus:SetText("Live inspected talents"); characterUI.talentStatus=talentStatus
+  Button(talentControls,"Refresh",76,22,function() if characterUI.RefreshInspection then characterUI.RefreshInspection() end end,"Request current equipment and talent information again for the selected target."):SetPoint("RIGHT",-2,0)
 
   local raidMenu=CreateFrame("Frame",nil,reportPanel); raidMenu:SetWidth(214); raidMenu:SetHeight(#characterUI.raidCatalog*23+10); raidMenu:SetPoint("TOPLEFT",raidButton,"BOTTOMLEFT",0,-2); raidMenu:SetFrameStrata("FULLSCREEN_DIALOG"); raidMenu:SetFrameLevel(260); Backdrop(raidMenu,C.panel); raidMenu:Hide(); characterUI.raidMenu=raidMenu
   local difficultyMenu=CreateFrame("Frame",nil,reportPanel); difficultyMenu:SetWidth(194); difficultyMenu:SetHeight(106); difficultyMenu:SetPoint("TOPLEFT",difficultyButton,"BOTTOMLEFT",0,-2); difficultyMenu:SetFrameStrata("FULLSCREEN_DIALOG"); difficultyMenu:SetFrameLevel(260); Backdrop(difficultyMenu,C.panel); difficultyMenu:Hide(); characterUI.difficultyMenu=difficultyMenu
@@ -464,9 +526,114 @@ local function BuildCharacter()
   local reportText=reportChild:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); reportText:SetPoint("TOPLEFT",4,-4); reportText:SetWidth(526); reportText:SetJustifyH("LEFT"); reportText:SetJustifyV("TOP"); reportText:SetWordWrap(true); reportText:SetTextColor(unpack(C.white)); characterUI.reportText=reportText
   reportScroll:SetScript("OnMouseWheel",function(self,delta) self:SetVerticalScroll(math.max(0,self:GetVerticalScroll()-delta*45)) end)
 
+  local roleByClass={
+    WARRIOR={"Damage","Damage","Tank"}, PALADIN={"Healer","Tank","Damage"}, HUNTER={"Damage","Damage","Damage"},
+    ROGUE={"Damage","Damage","Damage"}, PRIEST={"Healer","Healer","Damage"}, SHAMAN={"Damage","Damage","Healer"},
+    MAGE={"Damage","Damage","Damage"}, WARLOCK={"Damage","Damage","Damage"}, DRUID={"Damage","Tank / Damage","Healer"},
+    DEATHKNIGHT={"Tank / Damage","Tank / Damage","Damage"},
+  }
+  local function CaptureClientInspection()
+    local unit=CharacterUnit()
+    if not UnitExists(unit) or not UnitIsPlayer(unit) then return false end
+    local inspectOther=not UnitIsUnit(unit,"player")
+    local selectedGuid=UnitGUID(unit)
+    if characterUI.inspectionGuid and selectedGuid~=characterUI.inspectionGuid then return false end
+    characterUI.equipment={}
+    local equipped=0
+    for slotId,slot in pairs(characterUI.equipmentSlots) do
+      local link=GetInventoryItemLink(unit,slotId)
+      if link then
+        local name,_,quality,itemLevel,_,_,_,_,_,texture=GetItemInfo(link)
+        quality=quality or 1; itemLevel=tonumber(itemLevel) or 0
+        characterUI.equipment[slotId]={link=link,name=name or link,quality=quality,itemLevel=itemLevel,texture=texture,label=slot.slotLabel}
+        slot.icon:SetTexture(texture or GetInventoryItemTexture(unit,slotId)); slot:SetBackdropBorderColor(GetItemQualityColor(quality)); equipped=equipped+1
+      else
+        slot.icon:SetTexture("Interface\\PaperDoll\\UI-PaperDoll-Slot-"..slot.slotName); slot:SetBackdropBorderColor(unpack(C.border))
+      end
+    end
+    local tabs={}; local dominantIndex,dominantPoints=1,-1
+    for tabIndex=1,3 do
+      local tabName,tabIcon,pointsSpent,background=GetTalentTabInfo(tabIndex,inspectOther,false)
+      pointsSpent=tonumber(pointsSpent) or 0
+      local tab={name=tabName or ("Tree "..tabIndex),icon=tabIcon,points=pointsSpent,background=background,talents={}}
+      if pointsSpent>dominantPoints then dominantIndex,dominantPoints=tabIndex,pointsSpent end
+      local count=GetNumTalents(tabIndex,inspectOther,false) or 0
+      for talentIndex=1,count do
+        local talentName,talentIcon,tier,column,rank,maxRank=GetTalentInfo(tabIndex,talentIndex,inspectOther,false)
+        rank=tonumber(rank) or 0
+        if rank>0 then table.insert(tab.talents,{name=talentName or ("Talent "..talentIndex),icon=talentIcon,tier=tier,column=column,rank=rank,maxRank=maxRank or rank}) end
+      end
+      tabs[tabIndex]=tab
+    end
+    characterUI.talents=tabs
+    local _,classToken=UnitClass(unit); local roles=roleByClass[classToken or ""] or {}
+    characterUI.detectedRole=dominantPoints>0 and (roles[dominantIndex] or "Damage") or "Unknown"
+    characterUI.detectedSpec=dominantPoints>0 and tabs[dominantIndex] and tabs[dominantIndex].name or nil
+    if characterUI.roleText then characterUI.roleText:SetText(characterUI.detectedRole..(characterUI.detectedSpec and ("\n|cffaaaaaa"..characterUI.detectedSpec.."|r") or "")) end
+    if characterUI.roleIcon then
+      if characterUI.detectedSpec and tabs[dominantIndex] then characterUI.roleIcon:SetTexture(tabs[dominantIndex].icon); characterUI.roleIcon:Show() else characterUI.roleIcon:Hide() end
+    end
+    characterUI.inspectionState="LOADED"
+    characterUI.inspectedAt=date("%H:%M:%S")
+    if characterUI.equipmentSummary then characterUI.equipmentSummary:SetText(string.format("%d / 19 equipped  •  inspected %s",equipped,characterUI.inspectedAt)) end
+    if characterUI.equipmentActionStatus then characterUI.equipmentActionStatus:SetText("Inspection loaded for "..tostring(characterUI.inspectionPlayer or UnitName(unit) or "character")) end
+    if characterUI.equipmentNotice then characterUI.equipmentNotice:SetText("Mouse over an item for its full tooltip. Inspection follows the selected target automatically.") end
+    if characterUI.equipmentModel then characterUI.equipmentModel:SetUnit(unit) end
+    if characterUI.Render then characterUI.Render() end
+    return true
+  end
+  characterUI.CaptureClientInspection=CaptureClientInspection
+  characterUI.RequestClientInspection=function(manual)
+    local unit=CharacterUnit()
+    if not UnitExists(unit) or not UnitIsPlayer(unit) then return end
+    characterUI.inspectionPlayer=UnitName(unit); characterUI.inspectionGuid=UnitGUID(unit); characterUI.inspectionState="LOADING"
+    characterUI.equipment={}; characterUI.talents={}; characterUI.detectedRole="Detecting..."; characterUI.detectedSpec=nil
+    for _,slot in pairs(characterUI.equipmentSlots) do slot.icon:SetTexture("Interface\\PaperDoll\\UI-PaperDoll-Slot-"..slot.slotName); slot:SetBackdropBorderColor(unpack(C.border)) end
+    if characterUI.equipmentSummary then characterUI.equipmentSummary:SetText("Loading live equipment...") end
+    if characterUI.equipmentActionStatus then characterUI.equipmentActionStatus:SetText((manual and "Refreshing " or "Inspecting ")..tostring(characterUI.inspectionPlayer).."...") end
+    if characterUI.equipmentNotice then characterUI.equipmentNotice:SetText("Requesting inspection data from the selected target...") end
+    if characterUI.roleText then characterUI.roleText:SetText("Detecting...") end
+    if characterUI.roleIcon then characterUI.roleIcon:Hide() end
+    if characterUI.equipmentModel then characterUI.equipmentModel:SetUnit(unit) end
+    if UnitIsUnit(unit,"player") then After(.05,CaptureClientInspection) else NotifyInspect(unit) end
+    After(2,function()
+      local currentUnit=CharacterUnit()
+      if characterUI.inspectionState=="LOADING" and UnitGUID(currentUnit)==characterUI.inspectionGuid then
+        characterUI.inspectionState="UNAVAILABLE"; characterUI.detectedRole="Unknown"; if characterUI.roleText then characterUI.roleText:SetText("Unknown\n|cffaaaaaaOut of range|r") end
+        if characterUI.equipmentSummary then characterUI.equipmentSummary:SetText("Inspection unavailable") end
+        if characterUI.equipmentActionStatus then characterUI.equipmentActionStatus:SetText("Inspection unavailable — move closer and refresh") end
+        if characterUI.equipmentNotice then characterUI.equipmentNotice:SetText("The target must be nearby, visible, friendly and online. Move closer and press Refresh.") end
+        if characterUI.Render then characterUI.Render() end
+      end
+    end)
+    if characterUI.statusText then characterUI.statusText:SetText((manual and "Refreshing " or "Inspecting ")..tostring(characterUI.inspectionPlayer).."...") end
+  end
+  characterUI.RefreshInspection=function() characterUI.RequestClientInspection(true) end
+
+  local function EquipmentReport()
+    local target=characterUI.target; local lines={"AzerCore Ops — Equipment Inspection","Generated: "..date("%Y-%m-%d %H:%M:%S"),"Target: "..(target and target.name or "None"),"Role: "..(characterUI.detectedRole or "Unknown")..(characterUI.detectedSpec and (" ("..characterUI.detectedSpec..")") or ""),""}
+    if characterUI.inspectionState~="LOADED" then table.insert(lines,"Equipment inspection is not complete. The target must be a nearby, visible player.") return table.concat(lines,"\n") end
+    local ordered={1,2,3,15,5,4,19,9,10,6,7,8,11,12,13,14,16,17,18}
+    for _,slotId in ipairs(ordered) do local slot=characterUI.equipmentSlots[slotId]; local item=characterUI.equipment[slotId]; table.insert(lines,string.format("%-10s  %s",slot.slotLabel..":",item and ("["..tostring(item.name or "Unknown item").."] — item level "..tostring(item.itemLevel or "?")) or "Empty")) end
+    return table.concat(lines,"\n")
+  end
+  local function TalentsReport()
+    local target=characterUI.target; local lines={"AzerCore Ops — Talent Inspection","Generated: "..date("%Y-%m-%d %H:%M:%S"),"Target: "..(target and target.name or "None"),"Detected role: "..(characterUI.detectedRole or "Unknown"),"Specialization: "..(characterUI.detectedSpec or "Unknown"),""}
+    if characterUI.inspectionState~="LOADED" or not characterUI.talents[1] then table.insert(lines,"Talent inspection is not complete. The target must be a nearby, visible player.") return table.concat(lines,"\n") end
+    local build={}; for i=1,3 do table.insert(build,tostring(characterUI.talents[i].points or 0)) end; table.insert(lines,"Build: "..table.concat(build," / ")); table.insert(lines,"")
+    for _,tab in ipairs(characterUI.talents) do
+      table.insert(lines,string.format("%s — %d points",tab.name,tab.points or 0))
+      if #tab.talents==0 then table.insert(lines,"  No points spent") else for _,talent in ipairs(tab.talents) do table.insert(lines,string.format("  %s — %d/%d",talent.name,talent.rank,talent.maxRank)) end end
+      table.insert(lines,"")
+    end
+    return table.concat(lines,"\n")
+  end
+
   local function CharacterReport()
+    if characterUI.view=="EQUIPMENT" then return EquipmentReport() end
+    if characterUI.view=="TALENTS" then return TalentsReport():gsub("|c%x%x%x%x%x%x%x%x",""):gsub("|r","") end
     local target=characterUI.target
-    local lines={"AzerCore Ops — Character Inspector","Generated: "..date("%Y-%m-%d %H:%M:%S"),"Target: "..(target and target.name or "None"),"",characterUI.overviewText:GetText() or "", "",characterUI.stateText:GetText() or "", "",characterUI.locationText:GetText() or "", "",characterUI.contextText:GetText() or ""}
+    local lines={"AzerCore Ops — Character Inspector","Generated: "..date("%Y-%m-%d %H:%M:%S"),"Target: "..(target and target.name or "None"),"Detected role: "..(characterUI.detectedRole or "Unknown")..(characterUI.detectedSpec and (" ("..characterUI.detectedSpec..")") or ""),"",characterUI.overviewText:GetText() or "", "",characterUI.stateText:GetText() or "", "",characterUI.locationText:GetText() or "", "",characterUI.contextText:GetText() or ""}
     local server=characterUI.server or {}
     if server.inventory then local r=server.inventory; table.insert(lines,""); table.insert(lines,"INVENTORY SUMMARY"); table.insert(lines,string.format("Bag slots: %s / %s | Equipped: %s | Average item level: %s",r.used or "?",r.capacity or "?",r.equipped or "?",r.average or "?")) end
     if server.professions and #server.professions>0 then table.insert(lines,""); table.insert(lines,"PROFESSIONS"); for _,r in ipairs(server.professions) do table.insert(lines,string.format("%s | %s | %s/%s",r.category or "Skill",r.name or "Unknown",r.value or "?",r.maximum or "?")) end end
@@ -479,10 +646,9 @@ local function BuildCharacter()
   end
   characterUI.Log=LogCharacter
   characterUI.RequestRaid=function()
-    if not UnitExists("target") or not UnitIsPlayer("target") then return end
     local settings=Settings(); characterUI.server.raid={}; characterUI.server.raidSelection=nil
     SendCommand(string.format(CMD.characterRaid,settings.characterRaid,settings.characterRaidDifficulty))
-    characterUI.statusText:SetText("Loading locked Raid Experience selection for "..tostring(UnitName("target")).."...")
+    characterUI.statusText:SetText("Loading locked Raid Experience selection for "..tostring(CharacterContextName()).."...")
   end
   local function SelectedTarget()
     if not UnitExists("target") or not UnitIsPlayer("target") then SetStatus("Select a player before using this Character operation.",true); return end
@@ -499,9 +665,10 @@ local function BuildCharacter()
   end
   characterUI.Inspect=function(automatic)
     characterUI.Update(); characterUI.server={professions={},raid={}}
-    local target=UnitExists("target") and UnitIsPlayer("target") and UnitName("target") or nil
+    local target=CharacterContextName()
     characterUI.capturePlayer=target
-    if not target then characterUI.statusText:SetText("Automatic inspection is waiting for a player target."); return end
+    if not target then return end
+    if characterUI.RequestClientInspection then characterUI.RequestClientInspection(false) end
     SendCommand(CMD.characterInspect)
     After(.05,function() if characterUI.RequestRaid then characterUI.RequestRaid() end end)
     LogCharacter(automatic and "Auto Inspect" or "Inspect","Requested authoritative Character data for "..target)
@@ -509,9 +676,9 @@ local function BuildCharacter()
   end
   local inspectOperation=OpButton("Inspect Character",-34,function()
     characterUI.autoInspect=true; characterUI.Inspect(false)
-  end,"Activate automatic Character inspection. Changing player targets then refreshes this workspace immediately.",true,false)
+  end,"Automatic Character inspection is active in this workspace. It uses the selected player, or your own character when no player target is selected.",false,false)
   inspectOperation:SetScript("OnLeave",function(self)
-    if characterUI.autoInspect and UnitExists("target") and UnitIsPlayer("target") then self:SetBackdropColor(unpack(C.selected)); self:SetBackdropBorderColor(unpack(C.gold))
+    if characterUI.autoInspect then self:SetBackdropColor(unpack(C.selected)); self:SetBackdropBorderColor(unpack(C.gold))
     else self:SetBackdropColor(unpack(C.button)); self:SetBackdropBorderColor(unpack(C.border)) end
     GameTooltip:Hide()
   end)
@@ -532,10 +699,17 @@ local function BuildCharacter()
   end,"Review Character operations attempted during this session")
 
   local footer=CreateFrame("Frame",nil,workspace); footer:SetPoint("BOTTOMLEFT",8,8); footer:SetPoint("BOTTOMRIGHT",-8,8); footer:SetHeight(28); Backdrop(footer,C.bg)
+  characterUI.footer=footer
   characterUI.statusText=footer:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); characterUI.statusText:SetPoint("LEFT",8,0); characterUI.statusText:SetPoint("RIGHT",-190,0); characterUI.statusText:SetJustifyH("LEFT"); characterUI.statusText:SetTextColor(unpack(C.white))
-  Button(footer,"Copy",48,20,function() ShowSelectableReport("Copy Character report",CharacterReport()) end,"Open the complete Character report as selectable text"):SetPoint("RIGHT",-128,0)
-  Button(footer,"Share",54,20,function() local text=CharacterReport(); local f=EnsureShareFrame(); f:SetCapturedMessage(text,"CHARACTER",function() return CharacterReport(),"CHARACTER" end); f:Show(); f:Raise(); SetStatus("Courier opened with the Character report.") end,"Open Courier with the Character report"):SetPoint("RIGHT",-70,0)
-  Button(footer,"Export",62,20,function() ShowSelectableReport("Export Character report",CharacterReport()) end,"Export the complete Character report"):SetPoint("RIGHT",-4,0)
+  local function CopyCharacterReport() ShowSelectableReport("Copy Character report",CharacterReport()) end
+  local function ShareCharacterReport() local text=CharacterReport(); local f=EnsureShareFrame(); f:SetCapturedMessage(text,"CHARACTER",function() return CharacterReport(),"CHARACTER" end); f:Show(); f:Raise(); SetStatus("Courier opened with the Character report.") end
+  local function ExportCharacterReport() ShowSelectableReport("Export Character report",CharacterReport()) end
+  Button(footer,"Copy",48,20,CopyCharacterReport,"Open the complete Character report as selectable text"):SetPoint("RIGHT",-128,0)
+  Button(footer,"Share",54,20,ShareCharacterReport,"Open Courier with the Character report"):SetPoint("RIGHT",-70,0)
+  Button(footer,"Export",62,20,ExportCharacterReport,"Export the complete Character report"):SetPoint("RIGHT",-4,0)
+  Button(equipmentActionBar,"Copy",48,20,CopyCharacterReport,"Open the complete Equipment report as selectable text"):SetPoint("RIGHT",-128,0)
+  Button(equipmentActionBar,"Share",54,20,ShareCharacterReport,"Open Courier with the Equipment report"):SetPoint("RIGHT",-70,0)
+  Button(equipmentActionBar,"Export",62,20,ExportCharacterReport,"Export the complete Equipment report"):SetPoint("RIGHT",-4,0)
 
   local function CharacterViewText(view)
     local s=characterUI.server or {}
@@ -545,6 +719,8 @@ local function BuildCharacter()
       if not r then return "Inventory summary has not been loaded.\n\nSelect Inspect Character to request the module-authoritative summary." end
       local used,capacity=tonumber(r.used) or 0,tonumber(r.capacity) or 0
       return string.format("|cffffd100INVENTORY SUMMARY|r\n\nBag slots used: %d / %d\nFree bag slots: %d\nEquipped items: %s / %d\nAverage item level: %s\n\nThis summary deliberately excludes private item-level detail from shared reports.",used,capacity,math.max(0,capacity-used),r.equipped or "?",19,r.average or "?")
+    elseif view=="TALENTS" then
+      return TalentsReport()
     elseif view=="PROFESSIONS" then
       local lines={"|cffffd100PROFESSIONS|r",""}; local rows=s.professions or {}
       if #rows==0 then table.insert(lines,"No professions were reported. Select Inspect Character to refresh.")
@@ -569,25 +745,34 @@ local function BuildCharacter()
 
   characterUI.Render=function()
     local overviewMode=characterUI.view=="OVERVIEW"
+    local equipmentMode=characterUI.view=="EQUIPMENT"
     local raidMode=characterUI.view=="RAID"
+    local talentMode=characterUI.view=="TALENTS"
     if raidMode then characterUI.raidControls:Show() else characterUI.raidControls:Hide(); characterUI.raidMenu:Hide(); characterUI.difficultyMenu:Hide() end
-    characterUI.reportScroll:ClearAllPoints(); characterUI.reportScroll:SetPoint("TOPLEFT",8,raidMode and -48 or -8); characterUI.reportScroll:SetPoint("BOTTOMRIGHT",-28,8)
+    if talentMode then characterUI.talentControls:Show(); characterUI.talentStatus:SetText(characterUI.inspectionState=="LOADED" and ("Live talents inspected at "..tostring(characterUI.inspectedAt or "now")) or "Waiting for live talent inspection...") else characterUI.talentControls:Hide() end
+    characterUI.reportScroll:ClearAllPoints(); characterUI.reportScroll:SetPoint("TOPLEFT",8,(raidMode or talentMode) and -48 or -8); characterUI.reportScroll:SetPoint("BOTTOMRIGHT",-28,8)
     for _,panel in ipairs(characterUI.overviewPanels) do if overviewMode then panel:Show() else panel:Hide() end end
-    if overviewMode then characterUI.reportPanel:Hide() else
+    if equipmentMode then characterUI.reportPanel:Hide(); characterUI.equipmentFrame:Show(); characterUI.footer:Hide()
+    elseif overviewMode then characterUI.reportPanel:Hide(); characterUI.equipmentFrame:Hide()
+    else
+      characterUI.equipmentFrame:Hide()
       characterUI.reportPanel:Show(); local text=CharacterViewText(characterUI.view); characterUI.reportText:SetText(text)
       local lines=1; for _ in text:gmatch("\n") do lines=lines+1 end; local height=math.max(360,lines*16+18); characterUI.reportText:SetHeight(height); characterUI.reportChild:SetHeight(height+8)
     end
+    if not equipmentMode then characterUI.footer:Show() end
     for view,button in pairs(characterUI.viewButtons) do button:SetBackdropColor(unpack(view==characterUI.view and C.selected or C.button)); button:SetBackdropBorderColor(unpack(view==characterUI.view and C.gold or C.border)) end
   end
 
   characterUI.Update=function()
-    local identityData=ApplyPlayerTargetIdentity(characterUI.portrait,characterUI.identityFrame)
+    local unit=CharacterUnit()
+    local explicitTarget=unit=="target"
+    local identityData=ApplyPlayerTargetIdentity(characterUI.portrait,characterUI.identityFrame,unit)
     characterUI.target=identityData
     local gmMode=EffectiveCharacterMode()=="GM"
     Platform:UpdateWorkspaceMode()
     for _,button in pairs(characterUI.buttons) do
       if button.requiresTarget or button.gmOnly then
-        local enabled=(not button.requiresTarget or identityData) and (not button.gmOnly or gmMode)
+        local enabled=(not button.requiresTarget or explicitTarget) and (not button.gmOnly or gmMode)
         if enabled then button:Enable(); button.disabledReason=nil; button:SetNormalFontObject(GameFontNormalSmall); button:SetBackdropColor(unpack(C.button))
         else
           button:Disable(); button:SetNormalFontObject(GameFontDisableSmall); button:SetBackdropColor(.08,.08,.08,1)
@@ -598,11 +783,13 @@ local function BuildCharacter()
       end
     end
     local inspectButton=characterUI.buttons["Inspect Character"]
-    if inspectButton and characterUI.autoInspect and identityData then inspectButton:SetBackdropColor(unpack(C.selected)); inspectButton:SetBackdropBorderColor(unpack(C.gold)) end
+    if inspectButton and characterUI.autoInspect then inspectButton:SetBackdropColor(unpack(C.selected)); inspectButton:SetBackdropBorderColor(unpack(C.gold)) end
     local technicalButton=characterUI.viewButtons.TECHNICAL
     if technicalButton then if gmMode then technicalButton:Enable(); technicalButton.disabledReason=nil; technicalButton:SetNormalFontObject(GameFontNormalSmall) else technicalButton:Disable(); technicalButton.disabledReason="Unavailable in Player Mode. Technical Character details require server-authorized GM Mode."; technicalButton:SetNormalFontObject(GameFontDisableSmall); if characterUI.view=="TECHNICAL" then characterUI.view="OVERVIEW" end end end
     if not identityData then
       characterUI.nameText:SetText("No player selected"); characterUI.metaText:SetText("Select a player target to inspect Character information.")
+      characterUI.detectedRole="Unknown"; characterUI.detectedSpec=nil; if characterUI.roleText then characterUI.roleText:SetText("Unknown") end; if characterUI.roleIcon then characterUI.roleIcon:Hide() end
+      if characterUI.equipmentActionStatus then characterUI.equipmentActionStatus:SetText("Select a player target to inspect equipment") end
       characterUI.overviewText:SetText("No Character information loaded.")
       characterUI.stateText:SetText("No player state available.")
       characterUI.locationText:SetText("No target location available.")
@@ -611,19 +798,19 @@ local function BuildCharacter()
       characterUI.Render()
       return
     end
-    local name=identityData.name; local faction=UnitFactionGroup("target") or "Unknown"; local guild=identityData.guild or "None"
+    local name=identityData.name; local faction=UnitFactionGroup(unit) or "Unknown"; local guild=identityData.guild or "None"
     characterUI.nameText:SetText(name)
     characterUI.metaText:SetText(string.format("Level %s %s %s\nGuild: %s",tostring(identityData.level),identityData.race or "Unknown",identityData.class or "Player",guild))
-    local relation=UnitIsUnit("target","player") and "Self" or (UnitInRaid("target") and "Raid member" or (UnitInParty("target") and "Party member" or "Outside your group"))
+    local relation=UnitIsUnit(unit,"player") and "Self" or (UnitInRaid(unit) and "Raid member" or (UnitInParty(unit) and "Party member" or "Outside your group"))
     characterUI.overviewText:SetText(string.format("Name: %s\nLevel: %s\nRace: %s\nClass: %s\nFaction: %s\nGuild: %s\nRelationship: %s",name,tostring(identityData.level),identityData.race or "Unknown",identityData.class or "Player",faction,guild,relation))
-    local maximum=math.max(1,UnitHealthMax("target") or 1); local health=UnitHealth("target") or 0
-    local powerMaximum=math.max(1,UnitManaMax("target") or 1); local power=UnitMana("target") or 0
-    local life=UnitIsGhost("target") and "Ghost" or (UnitIsDead("target") and "Dead" or "Alive")
-    local connection=UnitIsConnected("target") and "Online" or "Offline"
-    local combat=UnitAffectingCombat("target") and "In combat" or "Not in combat"
-    local flags=(UnitIsAFK("target") and "AFK" or (UnitIsDND("target") and "DND" or "Available"))
-    characterUI.stateText:SetText(string.format("Connection: %s\nLife state: %s\nHealth: %d / %d  (%d%%)\nPower: %d / %d  (%d%%)\nCombat: %s\nPlayer flag: %s\nVisibility: %s",connection,life,health,maximum,math.floor(health/maximum*100+.5),power,powerMaximum,math.floor(power/powerMaximum*100+.5),combat,flags,UnitIsVisible("target") and "Visible" or "Not currently visible"))
-    if UnitIsUnit("target","player") then
+    local maximum=math.max(1,UnitHealthMax(unit) or 1); local health=UnitHealth(unit) or 0
+    local powerMaximum=math.max(1,UnitManaMax(unit) or 1); local power=UnitMana(unit) or 0
+    local life=UnitIsGhost(unit) and "Ghost" or (UnitIsDead(unit) and "Dead" or "Alive")
+    local connection=UnitIsConnected(unit) and "Online" or "Offline"
+    local combat=UnitAffectingCombat(unit) and "In combat" or "Not in combat"
+    local flags=(UnitIsAFK(unit) and "AFK" or (UnitIsDND(unit) and "DND" or "Available"))
+    characterUI.stateText:SetText(string.format("Connection: %s\nLife state: %s\nHealth: %d / %d  (%d%%)\nPower: %d / %d  (%d%%)\nCombat: %s\nPlayer flag: %s\nVisibility: %s",connection,life,health,maximum,math.floor(health/maximum*100+.5),power,powerMaximum,math.floor(power/powerMaximum*100+.5),combat,flags,UnitIsVisible(unit) and "Visible" or "Not currently visible"))
+    if UnitIsUnit(unit,"player") then
       characterUI.locationText:SetText(string.format("Zone: %s\nArea: %s\n\nExact map, coordinates, orientation and instance context require the planned Character module integration.",GetRealZoneText() or "Unknown",GetSubZoneText() or "Unknown"))
     else
       characterUI.locationText:SetText("Target location is not exposed reliably by the client.\n\nExact map, zone, coordinates, orientation and instance context require the planned Character module integration.")
@@ -1953,14 +2140,15 @@ local function SelectedPlayerName()
   if UnitExists("target") and UnitIsPlayer("target") then return UnitName("target") end
 end
 
-ApplyPlayerTargetIdentity=function(portrait,borderFrame)
-  if UnitExists("target") and UnitIsPlayer("target") then
+ApplyPlayerTargetIdentity=function(portrait,borderFrame,unit)
+  unit=unit or "target"
+  if UnitExists(unit) and UnitIsPlayer(unit) then
     local identity={
-      name=UnitName("target") or "Unknown",level=UnitLevel("target") or "?",
-      class=select(1,UnitClass("target")) or "Player",classToken=select(2,UnitClass("target")),
-      race=UnitRace("target") or "Unknown",guild=GetGuildInfo("target"),
+      name=UnitName(unit) or "Unknown",level=UnitLevel(unit) or "?",
+      class=select(1,UnitClass(unit)) or "Player",classToken=select(2,UnitClass(unit)),
+      race=UnitRace(unit) or "Unknown",guild=GetGuildInfo(unit),unit=unit,
     }
-    if portrait then SetPortraitTexture(portrait,"target") end
+    if portrait then SetPortraitTexture(portrait,unit) end
     if borderFrame then
       local color=identity.classToken and RAID_CLASS_COLORS and RAID_CLASS_COLORS[identity.classToken]
       borderFrame:SetBackdropBorderColor(color and color.r or C.gold[1],color and color.g or C.gold[2],color and color.b or C.gold[3],1)
@@ -3157,18 +3345,19 @@ local function BuildUI()
   if Settings().startMinimized then HideMain() end
 end
 
-local events=CreateFrame("Frame"); events:RegisterEvent("ADDON_LOADED"); events:RegisterEvent("PLAYER_ENTERING_WORLD"); events:RegisterEvent("CHAT_MSG_SYSTEM"); events:RegisterEvent("UPDATE_INSTANCE_INFO"); events:RegisterEvent("PLAYER_TARGET_CHANGED"); events:RegisterEvent("PARTY_MEMBERS_CHANGED"); events:RegisterEvent("RAID_ROSTER_UPDATE")
+local events=CreateFrame("Frame"); events:RegisterEvent("ADDON_LOADED"); events:RegisterEvent("PLAYER_ENTERING_WORLD"); events:RegisterEvent("CHAT_MSG_SYSTEM"); events:RegisterEvent("UPDATE_INSTANCE_INFO"); events:RegisterEvent("PLAYER_TARGET_CHANGED"); events:RegisterEvent("PARTY_MEMBERS_CHANGED"); events:RegisterEvent("RAID_ROSTER_UPDATE"); events:RegisterEvent("INSPECT_TALENT_READY")
 local compatibilityRequested=false
 events:SetScript("OnEvent",function(_,event,arg1)
   if event=="ADDON_LOADED" then if arg1~=ADDON then return end; AzerCoreOpsDB=AzerCoreOpsDB or {}; Settings(); BuildOptions(); BuildUI(); Print("v"..ADDON_VERSION.." loaded. Type /azercoreops help")
   elseif event=="PLAYER_ENTERING_WORLD" and not compatibilityRequested then compatibilityRequested=true; SendChatMessage(CMD.version,"SAY")
   elseif event=="UPDATE_INSTANCE_INFO" and activeTab=="Instances" and instanceUI.bindPage and instanceUI.bindPage:IsShown() then RefreshMyInstances()
+  elseif event=="INSPECT_TALENT_READY" then
+    if characterUI.CaptureClientInspection and (not arg1 or arg1==characterUI.inspectionGuid) then characterUI.CaptureClientInspection() end
   elseif event=="PLAYER_TARGET_CHANGED" then
-    characterUI.server={professions={},raid={}}; characterUI.capturePlayer=nil; characterUI.ignoreStream=false
+    characterUI.server={professions={},raid={}}; characterUI.capturePlayer=nil; characterUI.ignoreStream=false; characterUI.inspectionState="UNLOADED"; characterUI.inspectionGuid=nil; characterUI.equipment={}; characterUI.talents={}
     if characterUI.Update then characterUI.Update() end
     if activeTab=="Character" and characterUI.autoInspect and characterUI.Inspect then
-      if UnitExists("target") and UnitIsPlayer("target") then After(.05,function() characterUI.Inspect(true) end)
-      elseif characterUI.statusText then characterUI.statusText:SetText("Automatic inspection is waiting for a player target.") end
+      After(.05,function() characterUI.Inspect(true) end)
     end
     UpdateInstanceTargetIdentity()
     After(.08,UpdateInstanceTargetIdentity)
@@ -3220,7 +3409,7 @@ events:SetScript("OnEvent",function(_,event,arg1)
       local state=Platform:Compatibility(PROTOCOL_VERSION)
       SetStatus(state=="compatible" and "Platform ready: fully compatible." or state=="limited" and "Platform ready with limited compatibility." or "Platform compatibility check completed.",state=="incompatible")
     elseif kind=="CHARACTER_BEGIN" then
-      local selected=UnitExists("target") and UnitIsPlayer("target") and UnitName("target") or nil
+      local selected=CharacterContextName()
       characterUI.ignoreStream=not selected or selected~=f.player
       if not characterUI.ignoreStream then characterUI.capturePlayer=f.player; characterUI.server={begin=f,professions={},raid={}}; characterUI.statusText:SetText("Receiving Character data for "..tostring(f.player).."...") end
     elseif kind=="CHARACTER_OVERVIEW" then
@@ -3237,7 +3426,7 @@ events:SetScript("OnEvent",function(_,event,arg1)
       local settings=Settings()
       if f.raidkey==settings.characterRaid and f.difficultykey==settings.characterRaidDifficulty then table.insert(characterUI.server.raid,f) end
     elseif kind=="CHARACTER_RAID_END" then
-      local settings=Settings(); local selected=UnitExists("target") and UnitIsPlayer("target") and UnitName("target") or nil
+      local settings=Settings(); local selected=CharacterContextName()
       if selected==f.player and f.raidkey==settings.characterRaid and f.difficultykey==settings.characterRaidDifficulty then
         characterUI.server.raidSelection=f; if characterUI.Update then characterUI.Update() end
         characterUI.statusText:SetText("Raid Experience loaded for "..tostring(f.player).."; selection remains locked.")
