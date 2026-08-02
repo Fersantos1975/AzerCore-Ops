@@ -14,7 +14,7 @@ void SendVersion(ChatHandler* handler, BuildInfo const& info)
     std::string permissions = std::string("CHARACTER_MODE=") + (gm ? "GM" : "PLAYER") +
         ";CHARACTER_TECHNICAL=" + (gm ? "GRANTED" : "RESTRICTED") +
         ";CHARACTER_SAVE_TARGET=" + (gm ? "GRANTED" : "RESTRICTED");
-    std::string features = "CHARACTER:CHARACTER_INSPECT,CHARACTER_INVENTORY,CHARACTER_PROFESSIONS,CHARACTER_RAID_EXPERIENCE;NPC:NPC_INSPECT,NPC_QUEST_RELATIONS,NPC_LOOT,NPC_STORY,NPC_TECHNICAL;INSTANCE:INSTANCE_SEARCH,INSTANCE_AUDIT,INSTANCE_STRUCTURED_BINDS;QUEST:QUEST_SEARCH,QUEST_INFO,QUEST_TARGET_LOG";
+    std::string features = "CHARACTER:CHARACTER_INSPECT,CHARACTER_INVENTORY,CHARACTER_PROFESSIONS,CHARACTER_RAID_EXPERIENCE;NPC:NPC_INSPECT,NPC_QUEST_RELATIONS,NPC_LOOT,NPC_STORY,NPC_TECHNICAL;ITEM:ITEM_INSPECT,ITEM_CRAFTING,ITEM_SOURCES,ITEM_USES;INSTANCE:INSTANCE_SEARCH,INSTANCE_AUDIT,INSTANCE_STRUCTURED_BINDS;QUEST:QUEST_SEARCH,QUEST_INFO,QUEST_TARGET_LOG";
     handler->PSendSysMessage(
         "AZERCORE_OPS|VERSION|module={}|protocol={}|capschema=1|release={}|capabilities={}|features={}|permissions={}|modulegit={}|moduledirty={}|core={}|coredate={}|coredirty={}|playerbots={}|playerbotsdirty={}|build={}|built={}",
         info.moduleVersion, info.protocolVersion, info.releaseChannel, info.capabilities, features, permissions, info.moduleCommit, info.moduleWorkspace,
@@ -97,4 +97,12 @@ std::uint32_t SendNPCStory(ChatHandler* handler, std::string const& category, st
 }
 void SendNPCStoryEnd(ChatHandler* handler, std::uint32_t count) { handler->PSendSysMessage("AZERCORE_OPS|NPC_STORY_END|count={}", count); }
 void SendNPCEnd(ChatHandler* handler, std::string const& name, std::uint32_t entry, std::uint32_t quests) { handler->PSendSysMessage("AZERCORE_OPS|NPC_END|name={}|entry={}|quests={}", Clean(name), entry, quests); }
+void SendItemError(ChatHandler* handler, std::string const& reason) { handler->PSendSysMessage("AZERCORE_OPS|ITEM_ERROR|reason={}", Clean(reason)); }
+void SendItemBegin(ChatHandler* handler, std::uint32_t id, std::string const& name, std::uint32_t quality, std::uint32_t itemLevel, std::uint32_t requiredLevel) { handler->PSendSysMessage("AZERCORE_OPS|ITEM_BEGIN|id={}|name={}|quality={}|itemlevel={}|requiredlevel={}", id, Clean(name), quality, itemLevel, requiredLevel); }
+void SendItemCraft(ChatHandler* handler, std::uint32_t spell, std::string const& spellName, std::uint32_t skill, std::string const& profession, std::uint32_t rank, std::uint32_t produced, std::string const& resultType, std::string const& chance) { handler->PSendSysMessage("AZERCORE_OPS|ITEM_CRAFT|spell={}|spellname={}|skill={}|profession={}|rank={}|produced={}|resulttype={}|chance={}", spell, Clean(spellName), skill, Clean(profession), rank, produced, Clean(resultType), Clean(chance)); }
+void SendItemReagent(ChatHandler* handler, std::uint32_t spell, std::uint32_t id, std::string const& name, std::uint32_t quality, std::uint32_t count) { handler->PSendSysMessage("AZERCORE_OPS|ITEM_REAGENT|spell={}|id={}|name={}|quality={}|count={}", spell, id, Clean(name), quality, count); }
+void SendItemRecipe(ChatHandler* handler, std::uint32_t id, std::string const& name, std::uint32_t quality, std::uint32_t spell) { handler->PSendSysMessage("AZERCORE_OPS|ITEM_RECIPE|id={}|name={}|quality={}|spell={}", id, Clean(name), quality, spell); }
+void SendItemSource(ChatHandler* handler, std::string const& type, std::uint32_t id, std::string const& name, std::string const& detail) { handler->PSendSysMessage("AZERCORE_OPS|ITEM_SOURCE|type={}|id={}|name={}|detail={}", Clean(type), id, Clean(name), Clean(detail)); }
+void SendItemUse(ChatHandler* handler, std::uint32_t spell, std::string const& spellName, std::string const& profession, std::uint32_t rank, std::uint32_t resultId, std::string const& resultName, std::uint32_t count) { handler->PSendSysMessage("AZERCORE_OPS|ITEM_USE|spell={}|spellname={}|profession={}|rank={}|resultid={}|resultname={}|count={}", spell, Clean(spellName), Clean(profession), rank, resultId, Clean(resultName), count); }
+void SendItemEnd(ChatHandler* handler, std::uint32_t id, std::uint32_t crafts) { handler->PSendSysMessage("AZERCORE_OPS|ITEM_END|id={}|crafts={}", id, crafts); }
 }

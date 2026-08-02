@@ -58,6 +58,14 @@ void SendNPCLoot(ChatHandler* handler, std::uint32_t id, std::string const& name
 std::uint32_t SendNPCStory(ChatHandler* handler, std::string const& category, std::uint32_t sourceId, std::string const& title, std::string const& text);
 void SendNPCStoryEnd(ChatHandler* handler, std::uint32_t count);
 void SendNPCEnd(ChatHandler* handler, std::string const& name, std::uint32_t entry, std::uint32_t quests);
+void SendItemError(ChatHandler* handler, std::string const& reason);
+void SendItemBegin(ChatHandler* handler, std::uint32_t id, std::string const& name, std::uint32_t quality, std::uint32_t itemLevel, std::uint32_t requiredLevel);
+void SendItemCraft(ChatHandler* handler, std::uint32_t spell, std::string const& spellName, std::uint32_t skill, std::string const& profession, std::uint32_t rank, std::uint32_t produced, std::string const& resultType, std::string const& chance);
+void SendItemReagent(ChatHandler* handler, std::uint32_t spell, std::uint32_t id, std::string const& name, std::uint32_t quality, std::uint32_t count);
+void SendItemRecipe(ChatHandler* handler, std::uint32_t id, std::string const& name, std::uint32_t quality, std::uint32_t spell);
+void SendItemSource(ChatHandler* handler, std::string const& type, std::uint32_t id, std::string const& name, std::string const& detail);
+void SendItemUse(ChatHandler* handler, std::uint32_t spell, std::string const& spellName, std::string const& profession, std::uint32_t rank, std::uint32_t resultId, std::string const& resultName, std::uint32_t count);
+void SendItemEnd(ChatHandler* handler, std::uint32_t id, std::uint32_t crafts);
 }
 
 #endif

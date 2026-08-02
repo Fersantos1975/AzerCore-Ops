@@ -5,6 +5,7 @@
 #include "Inspectors/Character/CharacterInspector.h"
 #include "Inspectors/Quest/QuestInspector.h"
 #include "Inspectors/NPC/NPCInspector.h"
+#include "Inspectors/Item/ItemInspector.h"
 #include "Manifest/AzerCoreOpsManifest.h"
 #include "Protocol/ChatProtocol.h"
 #include "RBAC.h"
@@ -44,12 +45,17 @@ public:
         {
             { "inspect", AzerCoreOps::NPCInspector::Inspect, rbac::RBAC_PERM_COMMAND_LOOKUP_QUEST, Console::No },
         };
+        static ChatCommandTable itemTable =
+        {
+            { "inspect", AzerCoreOps::ItemInspector::Inspect, rbac::RBAC_PERM_COMMAND_LOOKUP_ITEM, Console::No },
+        };
         static ChatCommandTable azerCoreOpsTable =
         {
             { "instance", instanceTable },
             { "quest", questTable },
             { "character", characterTable },
             { "npc", npcTable },
+            { "item", itemTable },
             { "version", HandleVersion, rbac::RBAC_PERM_COMMAND_LOOKUP_QUEST, Console::No },
         };
         static ChatCommandTable commands = { { "azercoreops", azerCoreOpsTable } };
