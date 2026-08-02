@@ -4,6 +4,8 @@
 #include "Utilities/AzerCoreOpsText.h"
 #include "WorldSession.h"
 
+#include <algorithm>
+
 namespace AzerCoreOps::Protocol
 {
 void SendVersion(ChatHandler* handler, BuildInfo const& info)
@@ -12,7 +14,7 @@ void SendVersion(ChatHandler* handler, BuildInfo const& info)
     std::string permissions = std::string("CHARACTER_MODE=") + (gm ? "GM" : "PLAYER") +
         ";CHARACTER_TECHNICAL=" + (gm ? "GRANTED" : "RESTRICTED") +
         ";CHARACTER_SAVE_TARGET=" + (gm ? "GRANTED" : "RESTRICTED");
-    std::string features = "CHARACTER:CHARACTER_INSPECT,CHARACTER_INVENTORY,CHARACTER_PROFESSIONS,CHARACTER_RAID_EXPERIENCE;INSTANCE:INSTANCE_SEARCH,INSTANCE_AUDIT,INSTANCE_STRUCTURED_BINDS;QUEST:QUEST_SEARCH,QUEST_INFO,QUEST_TARGET_LOG";
+    std::string features = "CHARACTER:CHARACTER_INSPECT,CHARACTER_INVENTORY,CHARACTER_PROFESSIONS,CHARACTER_RAID_EXPERIENCE;NPC:NPC_INSPECT,NPC_QUEST_RELATIONS,NPC_LOOT,NPC_STORY,NPC_TECHNICAL;INSTANCE:INSTANCE_SEARCH,INSTANCE_AUDIT,INSTANCE_STRUCTURED_BINDS;QUEST:QUEST_SEARCH,QUEST_INFO,QUEST_TARGET_LOG";
     handler->PSendSysMessage(
         "AZERCORE_OPS|VERSION|module={}|protocol={}|capschema=1|release={}|capabilities={}|features={}|permissions={}|modulegit={}|moduledirty={}|core={}|coredate={}|coredirty={}|playerbots={}|playerbotsdirty={}|build={}|built={}",
         info.moduleVersion, info.protocolVersion, info.releaseChannel, info.capabilities, features, permissions, info.moduleCommit, info.moduleWorkspace,
@@ -63,4 +65,36 @@ void SendCharacterRaid(ChatHandler* handler, std::string const& raidKey, std::st
 void SendCharacterRaidEnd(ChatHandler* handler, std::string const& player, std::string const& raidKey, std::string const& difficultyKey, std::uint32_t count) { handler->PSendSysMessage("AZERCORE_OPS|CHARACTER_RAID_END|player={}|raidkey={}|difficultykey={}|count={}", Clean(player), raidKey, difficultyKey, count); }
 void SendCharacterEnd(ChatHandler* handler, std::string const& player) { handler->PSendSysMessage("AZERCORE_OPS|CHARACTER_END|player={}", Clean(player)); }
 void SendCharacterSaveResult(ChatHandler* handler, std::string const& player, std::string const& result, std::string const& reason) { handler->PSendSysMessage("AZERCORE_OPS|CHARACTER_SAVE_RESULT|player={}|result={}|reason={}", Clean(player), result, Clean(reason)); }
+void SendNPCError(ChatHandler* handler, std::string const& reason) { handler->PSendSysMessage("AZERCORE_OPS|NPC_ERROR|reason={}", Clean(reason)); }
+void SendNPCBegin(ChatHandler* handler, std::string const& name, std::uint32_t entry, std::string const& guid, std::string const& player) { handler->PSendSysMessage("AZERCORE_OPS|NPC_BEGIN|name={}|entry={}|guid={}|player={}", Clean(name), entry, Clean(guid), Clean(player)); }
+void SendNPCOverview(ChatHandler* handler, std::uint32_t level, std::uint32_t minLevel, std::uint32_t maxLevel, std::uint32_t rank, std::uint32_t type, std::uint32_t family, std::uint32_t faction, std::uint32_t npcFlags) { handler->PSendSysMessage("AZERCORE_OPS|NPC_OVERVIEW|level={}|min={}|max={}|rank={}|type={}|family={}|faction={}|npcflags={}", level, minLevel, maxLevel, rank, type, family, faction, npcFlags); }
+void SendNPCState(ChatHandler* handler, bool alive, bool combat, std::uint32_t health, std::uint32_t maxHealth, std::uint32_t powerType, std::uint32_t power, std::uint32_t maxPower) { handler->PSendSysMessage("AZERCORE_OPS|NPC_STATE|alive={}|combat={}|health={}|maxhealth={}|powertype={}|power={}|maxpower={}", alive ? 1 : 0, combat ? 1 : 0, health, maxHealth, powerType, power, maxPower); }
+void SendNPCLocation(ChatHandler* handler, std::uint32_t map, std::uint32_t zone, std::uint32_t area, std::uint32_t instance, std::uint32_t phase, float x, float y, float z, float orientation) { handler->PSendSysMessage("AZERCORE_OPS|NPC_LOCATION|map={}|zone={}|area={}|instance={}|phase={}|x={:.2f}|y={:.2f}|z={:.2f}|o={:.2f}", map, zone, area, instance, phase, x, y, z, orientation); }
+void SendNPCTechnical(ChatHandler* handler, std::uint32_t unitFlags, std::uint32_t dynamicFlags, std::uint32_t loot, std::uint32_t pickpocket, std::uint32_t skin, std::uint32_t minGold, std::uint32_t maxGold, std::string const& ai, std::uint32_t script) { handler->PSendSysMessage("AZERCORE_OPS|NPC_TECHNICAL|unitflags={}|dynamicflags={}|loot={}|pickpocket={}|skin={}|mingold={}|maxgold={}|ai={}|script={}", unitFlags, dynamicFlags, loot, pickpocket, skin, minGold, maxGold, Clean(ai), script); }
+void SendNPCQuest(ChatHandler* handler, std::string const& relation, std::uint32_t id, std::string const& title, std::string const& status, std::string const& eligibility, std::string const& reason, std::int32_t minLevel, std::int32_t level, std::string const& type, bool repeatable) { handler->PSendSysMessage("AZERCORE_OPS|NPC_QUEST|relation={}|id={}|title={}|status={}|eligibility={}|reason={}|min={}|level={}|type={}|repeatable={}", relation, id, Clean(title), status, eligibility, Clean(reason), minLevel, level, Clean(type), repeatable ? 1 : 0); }
+void SendNPCLoot(ChatHandler* handler, std::uint32_t id, std::string const& name, std::uint32_t quality, float chance, std::uint32_t minimum, std::uint32_t maximum, bool questRequired) { handler->PSendSysMessage("AZERCORE_OPS|NPC_LOOT|id={}|name={}|quality={}|chance={:.2f}|min={}|max={}|quest={}", id, Clean(name), quality, chance, minimum, maximum, questRequired ? 1 : 0); }
+std::uint32_t SendNPCStory(ChatHandler* handler, std::string const& category, std::uint32_t sourceId, std::string const& title, std::string const& value)
+{
+    std::string story = Clean(value);
+    if (!handler || story.empty()) return 0;
+    constexpr std::size_t chunkSize = 80;
+    std::string safeTitle = Clean(title).substr(0, 48);
+    std::uint32_t part = 0;
+    for (std::size_t offset = 0; offset < story.size();)
+    {
+        std::size_t length = std::min(chunkSize, story.size() - offset);
+        if (offset + length < story.size())
+        {
+            std::size_t space = story.rfind(' ', offset + length);
+            if (space != std::string::npos && space > offset + 50) length = space - offset;
+        }
+        ++part;
+        handler->PSendSysMessage("AZERCORE_OPS|NPC_STORY|category={}|id={}|title={}|part={}|text={}", Clean(category), sourceId, safeTitle, part, story.substr(offset, length));
+        offset += length;
+        while (offset < story.size() && story[offset] == ' ') ++offset;
+    }
+    return part;
+}
+void SendNPCStoryEnd(ChatHandler* handler, std::uint32_t count) { handler->PSendSysMessage("AZERCORE_OPS|NPC_STORY_END|count={}", count); }
+void SendNPCEnd(ChatHandler* handler, std::string const& name, std::uint32_t entry, std::uint32_t quests) { handler->PSendSysMessage("AZERCORE_OPS|NPC_END|name={}|entry={}|quests={}", Clean(name), entry, quests); }
 }
