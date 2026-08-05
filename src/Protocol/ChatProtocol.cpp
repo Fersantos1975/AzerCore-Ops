@@ -14,7 +14,7 @@ void SendVersion(ChatHandler* handler, BuildInfo const& info)
     std::string permissions = std::string("CHARACTER_MODE=") + (gm ? "GM" : "PLAYER") +
         ";CHARACTER_TECHNICAL=" + (gm ? "GRANTED" : "RESTRICTED") +
         ";CHARACTER_SAVE_TARGET=" + (gm ? "GRANTED" : "RESTRICTED");
-    std::string features = "CHARACTER:CHARACTER_INSPECT,CHARACTER_INVENTORY,CHARACTER_PROFESSIONS,CHARACTER_RAID_EXPERIENCE;NPC:NPC_INSPECT,NPC_QUEST_RELATIONS,NPC_LOOT,NPC_STORY,NPC_TECHNICAL;ITEM:ITEM_INSPECT,ITEM_CRAFTING,ITEM_SOURCES,ITEM_USES;INSTANCE:INSTANCE_SEARCH,INSTANCE_AUDIT,INSTANCE_STRUCTURED_BINDS;QUEST:QUEST_SEARCH,QUEST_INFO,QUEST_TARGET_LOG";
+    std::string features = "CHARACTER:CHARACTER_INSPECT,CHARACTER_INVENTORY,CHARACTER_PROFESSIONS,CHARACTER_RAID_EXPERIENCE;NPC:NPC_INSPECT,NPC_QUEST_RELATIONS,NPC_LOOT,NPC_STORY,NPC_TECHNICAL;ITEM:ITEM_INSPECT,ITEM_CRAFTING,ITEM_SOURCES,ITEM_USES;MOVEMENT:MOVEMENT_CATALOG,MOVEMENT_PERSONAL_LOCATIONS,MOVEMENT_RETURN,MOVEMENT_SHARING_DISABLED;INSTANCE:INSTANCE_SEARCH,INSTANCE_AUDIT,INSTANCE_STRUCTURED_BINDS;QUEST:QUEST_SEARCH,QUEST_INFO,QUEST_TARGET_LOG";
     handler->PSendSysMessage(
         "AZERCORE_OPS|VERSION|module={}|protocol={}|capschema=1|release={}|capabilities={}|features={}|permissions={}|modulegit={}|moduledirty={}|core={}|coredate={}|coredirty={}|playerbots={}|playerbotsdirty={}|build={}|built={}",
         info.moduleVersion, info.protocolVersion, info.releaseChannel, info.capabilities, features, permissions, info.moduleCommit, info.moduleWorkspace,
@@ -105,4 +105,10 @@ void SendItemRecipe(ChatHandler* handler, std::uint32_t id, std::string const& n
 void SendItemSource(ChatHandler* handler, std::string const& type, std::uint32_t id, std::string const& name, std::string const& detail) { handler->PSendSysMessage("AZERCORE_OPS|ITEM_SOURCE|type={}|id={}|name={}|detail={}", Clean(type), id, Clean(name), Clean(detail)); }
 void SendItemUse(ChatHandler* handler, std::uint32_t spell, std::string const& spellName, std::string const& profession, std::uint32_t rank, std::uint32_t resultId, std::string const& resultName, std::uint32_t count) { handler->PSendSysMessage("AZERCORE_OPS|ITEM_USE|spell={}|spellname={}|profession={}|rank={}|resultid={}|resultname={}|count={}", spell, Clean(spellName), Clean(profession), rank, resultId, Clean(resultName), count); }
 void SendItemEnd(ChatHandler* handler, std::uint32_t id, std::uint32_t crafts) { handler->PSendSysMessage("AZERCORE_OPS|ITEM_END|id={}|crafts={}", id, crafts); }
+void SendMovementCatalogBegin(ChatHandler* handler) { handler->SendSysMessage("AZERCORE_OPS|MOVEMENT_CATALOG_BEGIN"); }
+void SendMovementDestination(ChatHandler* handler, std::uint32_t id, std::string const& name, std::string const& category, std::uint32_t map, float x, float y, float z, float orientation) { handler->PSendSysMessage("AZERCORE_OPS|MOVEMENT_DESTINATION|id={}|name={}|category={}|map={}|x={:.3f}|y={:.3f}|z={:.3f}|o={:.3f}",id,Clean(name),Clean(category),map,x,y,z,orientation); }
+void SendMovementCatalogEnd(ChatHandler* handler, std::uint32_t count) { handler->PSendSysMessage("AZERCORE_OPS|MOVEMENT_CATALOG_END|count={}",count); }
+void SendMovementCurrent(ChatHandler* handler, std::uint32_t map, std::uint32_t zone, std::uint32_t area, std::uint32_t phase, float x, float y, float z, float orientation) { handler->PSendSysMessage("AZERCORE_OPS|MOVEMENT_CURRENT|map={}|zone={}|area={}|phase={}|x={:.3f}|y={:.3f}|z={:.3f}|o={:.3f}",map,zone,area,phase,x,y,z,orientation); }
+void SendMovementResult(ChatHandler* handler, std::string const& result, std::string const& reason) { handler->PSendSysMessage("AZERCORE_OPS|MOVEMENT_RESULT|result={}|reason={}",Clean(result),Clean(reason)); }
+void SendMovementError(ChatHandler* handler, std::string const& reason) { handler->PSendSysMessage("AZERCORE_OPS|MOVEMENT_ERROR|reason={}",Clean(reason)); }
 }

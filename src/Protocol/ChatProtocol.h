@@ -66,6 +66,12 @@ void SendItemRecipe(ChatHandler* handler, std::uint32_t id, std::string const& n
 void SendItemSource(ChatHandler* handler, std::string const& type, std::uint32_t id, std::string const& name, std::string const& detail);
 void SendItemUse(ChatHandler* handler, std::uint32_t spell, std::string const& spellName, std::string const& profession, std::uint32_t rank, std::uint32_t resultId, std::string const& resultName, std::uint32_t count);
 void SendItemEnd(ChatHandler* handler, std::uint32_t id, std::uint32_t crafts);
+void SendMovementCatalogBegin(ChatHandler* handler);
+void SendMovementDestination(ChatHandler* handler, std::uint32_t id, std::string const& name, std::string const& category, std::uint32_t map, float x, float y, float z, float orientation);
+void SendMovementCatalogEnd(ChatHandler* handler, std::uint32_t count);
+void SendMovementCurrent(ChatHandler* handler, std::uint32_t map, std::uint32_t zone, std::uint32_t area, std::uint32_t phase, float x, float y, float z, float orientation);
+void SendMovementResult(ChatHandler* handler, std::string const& result, std::string const& reason);
+void SendMovementError(ChatHandler* handler, std::string const& reason);
 }
 
 #endif

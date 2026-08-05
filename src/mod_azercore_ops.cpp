@@ -6,6 +6,7 @@
 #include "Inspectors/Quest/QuestInspector.h"
 #include "Inspectors/NPC/NPCInspector.h"
 #include "Inspectors/Item/ItemInspector.h"
+#include "Inspectors/Movement/MovementInspector.h"
 #include "Manifest/AzerCoreOpsManifest.h"
 #include "Protocol/ChatProtocol.h"
 #include "RBAC.h"
@@ -49,6 +50,13 @@ public:
         {
             { "inspect", AzerCoreOps::ItemInspector::Inspect, rbac::RBAC_PERM_COMMAND_LOOKUP_ITEM, Console::No },
         };
+        static ChatCommandTable movementTable =
+        {
+            { "catalog", AzerCoreOps::MovementInspector::Catalog, rbac::RBAC_PERM_COMMAND_TELE_NAME, Console::No },
+            { "current", AzerCoreOps::MovementInspector::Current, rbac::RBAC_PERM_COMMAND_TELE_NAME, Console::No },
+            { "go", AzerCoreOps::MovementInspector::Go, rbac::RBAC_PERM_COMMAND_TELE_NAME, Console::No },
+            { "return", AzerCoreOps::MovementInspector::Return, rbac::RBAC_PERM_COMMAND_TELE_NAME, Console::No },
+        };
         static ChatCommandTable azerCoreOpsTable =
         {
             { "instance", instanceTable },
@@ -56,6 +64,7 @@ public:
             { "character", characterTable },
             { "npc", npcTable },
             { "item", itemTable },
+            { "movement", movementTable },
             { "version", HandleVersion, rbac::RBAC_PERM_COMMAND_LOOKUP_QUEST, Console::No },
         };
         static ChatCommandTable commands = { { "azercoreops", azerCoreOpsTable } };
