@@ -1,5 +1,45 @@
 # Changelog
 
+## 0.6.0 — First Public Release
+
+### Fixed
+
+- Redirected NPC Info from AzerothCore's raw chat output to the structured Technical workspace inside AzerCore Ops.
+- Prevented Courier preview controls from appearing active before the transport and authorization design is complete.
+- Replaced long development build names with a short release-candidate version.
+- Updated the in-game Credits description to include Player Mode and ensured the complete credits and license remain visible.
+- Forced the MBF-collected minimap logo above its background layer while preserving the working tooltip and click handlers.
+- Added compatibility for MBF 3.1.1's repeated overlay hiding and reskinning behavior.
+
+### Release notes
+
+- Release builds use short semantic versions, beginning with `0.6.0`.
+- Courier is explicitly excluded from the active `0.6.0` feature set.
+
+## 0.5.6-alpha4 — Minimap and MBF Compatibility
+
+### Fixed
+
+- Exposed the AzerCore Ops logo through standard normal and pushed button textures so Minimap Button Frame can retain the icon when collecting the button.
+- Added the missing AzerCore Ops minimap-button tooltip with concise click instructions.
+
+### Documentation
+
+- Expanded the project description to include the safe, server-authorized Player Mode for regular players.
+
+## 0.5.6-alpha3 — Information Workspace
+
+### Changed
+
+- Reorganized Information into Overview, Capabilities, Build Information, Credits, and Resources workspaces.
+- Added consistent Information action navigation and scrollable content regions.
+- Separated compatibility data into readable status, capability/permission, and build/revision reports.
+
+### Fixed
+
+- Prevented long capability lists, credits, and resource buttons from being clipped or extending outside their panels.
+- Added an in-project working backlog for pending operational verification, Movement tests, and repository cleanup.
+
 ## 0.5.6-alpha2 — Validated Movement Catalogue
 
 ### Added

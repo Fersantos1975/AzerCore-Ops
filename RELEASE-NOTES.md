@@ -1,33 +1,26 @@
-# AzerCore Ops Platform 0.5.3 — Character Intelligence
+# AzerCore Ops 0.6.0
 
-AzerCore Ops Platform 0.5.3 adds a role-aware Character Inspector while retaining the completed Instance Access, Quest Intelligence, and Target Quest Log workflows.
+AzerCore Ops 0.6.0 is the first public release of the combined AzerothCore server module and World of Warcraft 3.3.5a addon.
 
-## Included
+## Highlights
 
-- Quest Intelligence workspace with search, inspection, context switching, group analysis, history, activity logging, and export workflows
-- Inspection of every active quest in the selected online player's Quest Log
-- Structured target-log status, level, type, faction, copy, share, export, refresh, and empty/error reporting
-- C++ foundations for inspectors, diagnostics, reports, protocol messages, manifest data, and build information
-- Shared addon design, UI, platform, search, and report frameworks
-- Structured SELF and TARGET bind inventories with map, difficulty, Instance ID, permanence, extension, reset, applicability, and exact reset duration
-- Encounter masks, defeated-boss totals, and defeated/remaining boss names where AzerothCore DBC data is available
-- Structured bind IDs and encounter progress in group access audits
-- Explicit multi-select batch unbinding with stale-ID protection, per-bind results, operation IDs, server verification, activity logging, and automatic target reinspection
-- Direct instance search by exact numeric Map ID or partial title, with explicit zero-result completion reporting
-- Quest-style target identity card with synchronized portrait, name, level, class, guild, and class-colored context border
-- Boss-lockout terminology and scheduled-reset information that avoids presenting technical permanent binds as lifetime lockouts
-- Numbered quest chains with selected-quest position and player-specific status
-- Numbered Courier chunks for complete long-report delivery through Blizzard chat
-- Repository architecture, design-system documentation, contribution guidance, and release validation tooling
-- Server-authoritative Automatic, Player, and GM operation modes
-- Character Overview, Inventory, Professions, Raid Experience, restricted Technical Details, and Character Activity
-- Locked raid and valid-difficulty selectors covering Wrath raid achievement evidence without presenting Ulduar or Obsidian Sanctum hard modes as heroic difficulties
-- Guarded target saving with structured success or denial results and no logout side effect
+- Safe Player Mode for permitted inspection and reporting features.
+- Server-authorized administrator and Game Master operations.
+- Quest, Character, Instance Access, NPC, Item, and Movement workspaces.
+- Validated and attributed Movement destination catalogue.
+- Structured in-addon reports that keep internal command output out of Blizzard chat where supported.
+- Automatic, Player, and GM operation modes backed by the module permission handshake.
+- Minimap button support, including Minimap Button Frame 3.1.1 icon and tooltip compatibility.
+- Platform Information pages for compatibility, capabilities, build details, credits, and resources.
 
-## Verification state
+## Installation
 
-The addon workspaces have passed Lua parsing and repository preflight validation. The combined 0.5.3 repository still requires a clean AzerothCore compilation and the Character Intelligence smoke tests in `RELEASE-CHECKLIST.md` before publication.
+Install the repository as `mod-azercore-ops` in the AzerothCore modules directory and rebuild the core. Copy `addon/AzerCoreOps` into the WoW client's `Interface/AddOns` directory. The addon and module must use matching release revisions.
 
-## Known limitation
+## Not included
 
-Protocol responses still use server system messages internally. The addon consumes and hides them, while a dedicated addon communication transport remains planned.
+Courier is visible as an under-construction preview but remains unavailable and non-interactive. Location sharing also remains disabled pending its authorization, verification, abuse-reporting, and safe-landing design.
+
+## Verification
+
+The 0.6.0 release candidate passed repository validation and in-game regression testing. The final server module must be rebuilt after installing this release so its reported version and release channel become `0.6.0` and `stable`.

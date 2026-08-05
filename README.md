@@ -3,9 +3,9 @@
 **Operational intelligence for AzerothCore.**  
 **Understand. Diagnose. Resolve.**
 
-AzerCore Ops Platform combines an AzerothCore C++ module with a World of Warcraft: Wrath of the Lich King 3.3.5a addon. Its flagship workspace, **Quest Intelligence**, provides quest inspection, contextual analysis, group auditing, history, diagnostics, and report export for administrators and Game Masters.
+AzerCore Ops Platform combines an AzerothCore C++ module with a World of Warcraft: Wrath of the Lich King 3.3.5a addon. It provides server-authoritative operations for administrators and Game Masters alongside a safe Player Mode for regular players. Player Mode exposes only permitted gameplay, inspection, and reporting features and cannot grant administrative authority.
 
-> **Development status:** `0.5.6-alpha2-movement-catalog`. The source requires compilation and in-game validation against a supported AzerothCore checkout before production use.
+> **Current release:** `0.6.0` — the first public AzerCore Ops release, tested with the matching addon and server module.
 
 ## Features
 
@@ -26,6 +26,24 @@ AzerCore Ops Platform combines an AzerothCore C++ module with a World of Warcraf
 - Shared addon design, search, reporting, and platform frameworks
 - Validated Movement catalogue with Region, Zone/Instance, and Destination selection
 - Personal saved locations, server-specific `game_tele` destinations, and Emergency Return
+
+## Screenshots
+
+| Operations Center | Character Inspector |
+| --- | --- |
+| ![AzerCore Ops Operations Center](docs/images/screenshots/dashboard.png) | ![Character equipment inspection](docs/images/screenshots/character-equipment.png) |
+
+| Quest Inspector | Instance Access |
+| --- | --- |
+| ![Target quest inspection](docs/images/screenshots/quest-inspector.png) | ![Group instance-access audit](docs/images/screenshots/instance-access.png) |
+
+| NPC Inspector | Movement Control |
+| --- | --- |
+| ![NPC inspection workspace](docs/images/screenshots/npc-inspector.png) | ![Movement destination catalogue](docs/images/screenshots/movement-control.png) |
+
+| Courier status | Platform Information |
+| --- | --- |
+| ![Courier under construction](docs/images/screenshots/courier-under-construction.png) | ![Platform compatibility information](docs/images/screenshots/platform-information.png) |
 
 ## Repository layout
 

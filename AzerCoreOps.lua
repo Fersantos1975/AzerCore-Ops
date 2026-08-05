@@ -1,12 +1,12 @@
 local ADDON = ...
 
--- AzerCore Ops Platform 0.5.6-alpha2-movement-catalog
+-- AzerCore Ops Platform 0.6.0
 -- Target: WoW 3.3.5a / AzerothCore. All server commands live here so that
 -- branch-specific command names can be changed without touching the UI.
 local CMD = {
   revive = ".revive", repair = ".gear repair", summon = ".summon",
   appear = ".appear", combatStop = ".combatstop", save = ".save",
-  npcInfo = ".npc info", npcKill = ".die", npcRespawn = ".respawn",
+  npcKill = ".die", npcRespawn = ".respawn",
   npcMove = ".npc move", npcNear = ".npc near", npcAdd = ".npc add %d",
   npcDelete = ".npc delete",
   questLookup = ".lookup quest %s", questStatus = ".quest status %d",
@@ -110,7 +110,7 @@ local defaults={
   rememberAuditFilter=true,autoReaudit=false,confirmResetSelected=true,
   warnNoTarget=true,compactAuditRows=false,auditFontSize=10,shiftClickInsert=true,
 }
-local ADDON_VERSION="0.5.6-alpha2-movement-catalog"
+local ADDON_VERSION="0.6.0"
 local PROTOCOL_VERSION="1"
 local TESTED_CORE="190184a04539"
 local TESTED_PLAYERBOTS="ba46fcdecde3"
@@ -1003,7 +1003,7 @@ local function BuildNPC()
   local opTitle=Section(operations,"OPERATIONS",C.gold); opTitle:SetPoint("TOPLEFT",10,-10)
   local opDefs={
     {"Inspect NPC",function() Platform.NPCUI.autoInspect=true; Platform.NPCUI.activeOperation="Inspect NPC"; Platform.NPCUI.Inspect(false) end,"Inspect the selected creature and resume automatic target inspection"},
-    {"NPC Info",function() Platform.NPCUI.autoInspect=false; Platform.NPCUI.activeOperation="NPC Info"; SendCommand(CMD.npcInfo) end,"Show the core NPC information command","GM_REQUIRED"},
+    {"NPC Info",function() Platform.NPCUI.autoInspect=false; Platform.NPCUI.activeOperation="NPC Info"; Platform.NPCUI.view="TECHNICAL"; Platform.NPCUI.Inspect(false); Platform.NPCUI.Render() end,"Load technical NPC information inside AzerCore Ops","GM_REQUIRED"},
     {"Kill",function() Platform.NPCUI.autoInspect=false; Platform.NPCUI.activeOperation="Kill"; Confirm(CMD.npcKill) end,"Kill the selected creature","GM_REQUIRED"},
     {"Respawn",function() Platform.NPCUI.autoInspect=false; Platform.NPCUI.activeOperation="Respawn"; SendCommand(CMD.npcRespawn) end,"Respawn the selected creature","GM_REQUIRED"},
     {"Move Here",function() Platform.NPCUI.autoInspect=false; Platform.NPCUI.activeOperation="Move Here"; Confirm(CMD.npcMove) end,"Move the selected spawn to your position","GM_REQUIRED"},
@@ -3481,6 +3481,9 @@ local function RenderCompatibility()
     local initial="AzerCore Ops\nAddon      |cffffffff"..ADDON_VERSION.."|r\nModule     |cffaaaaaaNot checked|r\nProtocol   v"..PROTOCOL_VERSION.."\n\nSelect Check compatibility to query the running worldserver."
     if target then target:SetText(initial) end
     if compatUI.informationText then compatUI.informationText:SetText(initial) end
+    if compatUI.informationOverviewText then compatUI.informationOverviewText:SetText(initial) end
+    if compatUI.informationCapabilitiesText then compatUI.informationCapabilitiesText:SetText("Capabilities and permissions have not been requested from the server.") end
+    if compatUI.informationBuildText then compatUI.informationBuildText:SetText("Build and revision information has not been requested from the server.") end
     return
   end
 
@@ -3505,6 +3508,16 @@ local function RenderCompatibility()
   local permissions=Platform:SortedPermissions()
   local capabilityText=#capabilities>0 and table.concat(capabilities, "\n") or "Not advertised"
   local permissionText=#permissions>0 and table.concat(permissions, "\n") or "Not advertised"
+  local overviewText=string.format(
+    "Compatibility\n%s\n|cffaaaaaa%s|r\n\nSoftware\nAddon      |cffffffff%s|r\nModule     |cffffffff%s|r\nProtocol   v%s\nSchema     v%s\nRelease    %s (%s)",
+    status,compatibilityReason,ADDON_VERSION,f.module or "unknown",f.protocol or "?",f.capschema or "?",release,f.release or "unknown")
+  local capabilitiesViewText=string.format(
+    "Capabilities\n|cffffffff%s|r\n\nPermissions\n|cffffffff%s|r",
+    capabilityText,permissionText)
+  local buildViewText=string.format(
+    "Commits\nAzerCore Ops |cffffffff%s|r\nCore         |cffffffff%s|r\nPlayerbots   |cffffffff%s|r\n\nWorkspace\nAzerCore Ops %s\nCore         %s\nPlayerbots   %s\n\nBuild\n|cffffffff%s|r\nBuilt |cffffffff%s|r",
+    f.modulegit or "unknown",f.core or "unknown",f.playerbots or "unknown",
+    Workspace(f.moduledirty),Workspace(f.coredirty),Workspace(f.playerbotsdirty),f.build or "unknown",f.built or "unknown")
   local text=string.format(
     "Compatibility\n%s\n|cffaaaaaa%s|r\n\nSoftware\nAddon      |cffffffff%s|r\nModule     |cffffffff%s|r\nProtocol   v%s\nSchema     v%s\nRelease    %s (%s)\n\nCapabilities\n|cffffffff%s|r\n\nPermissions\n|cffffffff%s|r\n\nCommits\nAzerCore Ops |cffffffff%s|r\nCore         |cffffffff%s|r\nPlayerbots   |cffffffff%s|r\n\nWorkspace\nAzerCore Ops %s\nCore         %s\nPlayerbots   %s\n\nBuild\n%s\nBuilt %s",
     status,compatibilityReason,ADDON_VERSION,f.module or "unknown",f.protocol or "?",f.capschema or "?",release,f.release or "unknown",
@@ -3512,6 +3525,9 @@ local function RenderCompatibility()
     Workspace(f.moduledirty),Workspace(f.coredirty),Workspace(f.playerbotsdirty),f.build or "unknown",f.built or "unknown")
   if target then target:SetText(text) end
   if compatUI.informationText then compatUI.informationText:SetText(text) end
+  if compatUI.informationOverviewText then compatUI.informationOverviewText:SetText(overviewText) end
+  if compatUI.informationCapabilitiesText then compatUI.informationCapabilitiesText:SetText(capabilitiesViewText) end
+  if compatUI.informationBuildText then compatUI.informationBuildText:SetText(buildViewText) end
 end
 
 local function RequestCompatibility()
@@ -3676,7 +3692,7 @@ end
 local function BuildDashboard()
   local p=NewPage("Dashboard")
   local title=Label(p,"AzerCore Ops Operations Center","GameFontNormalLarge"); title:SetPoint("TOPLEFT",18,-18)
-  local intro=p:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); intro:SetPoint("TOPLEFT",18,-48); intro:SetPoint("TOPRIGHT",-18,-48); intro:SetJustifyH("LEFT"); intro:SetTextColor(unpack(C.white)); intro:SetText("A unified operations platform for AzerothCore administrators and Game Masters.")
+  local intro=p:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); intro:SetPoint("TOPLEFT",18,-48); intro:SetPoint("TOPRIGHT",-18,-48); intro:SetJustifyH("LEFT"); intro:SetTextColor(unpack(C.white)); intro:SetText("A server-authorized operations and gameplay platform for players, administrators and Game Masters.")
   WorkflowStrip(p,18,-76,726)
   Card(p,"Instance Access","Check a dungeon or raid and identify the first access blocker for every group member.",18,-126,355,105)
   Card(p,"Quest Intelligence","Inspect faction rules, requirements, character status, and linked quest chains.",389,-126,355,105)
@@ -3688,7 +3704,7 @@ local function BuildDashboard()
   Button(quick,"Inspect Quest",150,30,function() SelectTab("Quest") end,"Open quest search and chain analysis"):SetPoint("TOPLEFT",174,-42)
   Button(quick,"Check Compatibility",150,30,function() RequestCompatibility(); OpenOptions() end,"Query the running AzerCoreOps module"):SetPoint("TOPLEFT",336,-42)
   Button(quick,"Information & Credits",170,30,function() SelectTab("Information") end,"View project links, credits, and acknowledgements"):SetPoint("TOPLEFT",498,-42)
-  local note=quick:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); note:SetPoint("TOPLEFT",12,-92); note:SetPoint("BOTTOMRIGHT",-12,12); note:SetJustifyH("LEFT"); note:SetJustifyV("TOP"); note:SetWordWrap(true); note:SetTextColor(unpack(C.white)); note:SetText("Release candidate: v0.4.0-rc1\n\nThis release candidate completes the AzerCore Ops v0.4 platform foundation: unified design tokens, workflow semantics, compatibility reporting, instance access analysis, quest intelligence, instance operations, movement tools, reports, and guarded administrative actions. It is ready for server compilation and the final in-game release validation.")
+  local note=quick:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); note:SetPoint("TOPLEFT",12,-92); note:SetPoint("BOTTOMRIGHT",-12,12); note:SetJustifyH("LEFT"); note:SetJustifyV("TOP"); note:SetWordWrap(true); note:SetTextColor(unpack(C.white)); note:SetText("Release: v0.6.0\n\nAzerCore Ops combines safe Player Mode inspection and reporting with server-authorized administrator and Game Master operations. Courier remains under construction and is not included as an active release feature.")
 end
 
 
@@ -3785,29 +3801,54 @@ Message retention
 Pinned Couriers never expire. Expired Couriers are automatically deleted.]])
 
   ShowView("INBOX","Inbox")
+  local unavailable=CreateFrame("Frame",nil,p); unavailable:SetPoint("TOPLEFT",14,-70); unavailable:SetPoint("BOTTOMRIGHT",-14,14); unavailable:SetFrameLevel(p:GetFrameLevel()+40); unavailable:EnableMouse(true); Backdrop(unavailable,C.bg)
+  local unavailableTitle=unavailable:CreateFontString(nil,"OVERLAY","GameFontNormalLarge"); unavailableTitle:SetPoint("CENTER",0,42); unavailableTitle:SetText("Courier — Under Construction"); unavailableTitle:SetTextColor(unpack(C.gold))
+  local unavailableText=unavailable:CreateFontString(nil,"OVERLAY","GameFontHighlight"); unavailableText:SetPoint("TOP",unavailableTitle,"BOTTOM",0,-18); unavailableText:SetWidth(500); unavailableText:SetJustifyH("CENTER"); unavailableText:SetTextColor(unpack(C.white)); unavailableText:SetText("Courier transport, inbox, delivery and user-management features are not active in this release.\n\nThe preview is intentionally locked until its protocol, permissions, privacy and delivery safeguards are complete.")
+  courierUI.unavailable=unavailable
 end
 
 local function BuildInformation()
   local p=NewPage("Information")
   local title=Label(p,"Platform Information & Credits","GameFontNormalLarge"); title:SetPoint("TOPLEFT",18,-18)
 
-  local platform=CreateFrame("Frame",nil,p); platform:SetPoint("TOPLEFT",18,-55); platform:SetPoint("TOPRIGHT",-18,-55); platform:SetHeight(360); Backdrop(platform,C.panel)
-  local ph=Label(platform,"Platform status"); ph:SetPoint("TOPLEFT",12,-12)
-  compatUI.informationText=platform:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall")
-  compatUI.informationText:SetPoint("TOPLEFT",12,-38); compatUI.informationText:SetPoint("BOTTOMRIGHT",-12,48)
-  compatUI.informationText:SetJustifyH("LEFT"); compatUI.informationText:SetJustifyV("TOP"); compatUI.informationText:SetWordWrap(true); compatUI.informationText:SetTextColor(unpack(C.white))
-  Button(platform,"Check compatibility",155,26,RequestCompatibility,"Query module, registry, permissions, and build information"):SetPoint("BOTTOMLEFT",12,14)
+  local actions=CreateFrame("Frame",nil,p); actions:SetPoint("TOPLEFT",18,-55); actions:SetPoint("BOTTOMLEFT",18,18); actions:SetWidth(150); Backdrop(actions,C.panel)
+  local ah=Label(actions,"INFORMATION","GameFontNormalSmall"); ah:SetPoint("TOPLEFT",12,-12)
+  local content=CreateFrame("Frame",nil,p); content:SetPoint("TOPLEFT",178,-55); content:SetPoint("BOTTOMRIGHT",-18,18); Backdrop(content,C.panel)
+  local views,buttons={},{ }
 
-  local credits=CreateFrame("Frame",nil,p); credits:SetPoint("TOPLEFT",18,-431); credits:SetPoint("BOTTOMRIGHT",-389,18); Backdrop(credits,C.panel)
-  local ch=Label(credits,"Project & credits"); ch:SetPoint("TOPLEFT",12,-12)
-  local ct=credits:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); ct:SetPoint("TOPLEFT",12,-38); ct:SetPoint("BOTTOMRIGHT",-12,12); ct:SetJustifyH("LEFT"); ct:SetJustifyV("TOP"); ct:SetWordWrap(true); ct:SetTextColor(unpack(C.white)); ct:SetText("AzerCore Ops is an open-source operations platform for AzerothCore administrators and Game Masters.\n\nCreated and maintained by |cffffd100Fernando Santos|r.\n\nBuilt with AzerothCore, mod-playerbots, and AI-assisted development from OpenAI ChatGPT.\n\nMovement destination data adapted from AzerothAdmin (GPLv3), derived from TrinityAdmin/MangAdmin. Our thanks to their contributors and the wider open-source community.\n\nLicense: GPL-3.0")
-
-  local resources=CreateFrame("Frame",nil,p); resources:SetPoint("TOPLEFT",389,-431); resources:SetPoint("BOTTOMRIGHT",-18,18); Backdrop(resources,C.panel)
-  local rh=Label(resources,"Project resources"); rh:SetPoint("TOPLEFT",12,-12)
-  for i,item in ipairs(PROJECT_LINKS) do
-    local entry=item
-    Button(resources,entry.label,315,26,function() ShowCopyLink(entry.label,entry.url) end,"Open a selectable copy box for this address"):SetPoint("TOPLEFT",20,-38-(i-1)*32)
+  local function ScrollView(key,heading,height)
+    local view=CreateFrame("Frame",nil,content); view:SetAllPoints(); view:Hide(); views[key]=view
+    local vh=Label(view,heading); vh:SetPoint("TOPLEFT",14,-14)
+    local scroll=CreateFrame("ScrollFrame",nil,view,"UIPanelScrollFrameTemplate"); scroll:SetPoint("TOPLEFT",12,-42); scroll:SetPoint("BOTTOMRIGHT",-30,12)
+    local child=CreateFrame("Frame",nil,scroll); child:SetWidth(520); child:SetHeight(height or 520); scroll:SetScrollChild(child)
+    scroll:EnableMouseWheel(true); scroll:SetScript("OnMouseWheel",function(self,delta) local maximum=math.max(0,child:GetHeight()-self:GetHeight()); self:SetVerticalScroll(math.max(0,math.min(maximum,self:GetVerticalScroll()-delta*32))) end)
+    return child
   end
+
+  local overview=ScrollView("OVERVIEW","Platform overview",440)
+  compatUI.informationOverviewText=overview:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); compatUI.informationOverviewText:SetPoint("TOPLEFT",4,-4); compatUI.informationOverviewText:SetPoint("TOPRIGHT",-4,-4); compatUI.informationOverviewText:SetJustifyH("LEFT"); compatUI.informationOverviewText:SetJustifyV("TOP"); compatUI.informationOverviewText:SetWordWrap(true); compatUI.informationOverviewText:SetTextColor(unpack(C.white))
+
+  local capabilities=ScrollView("CAPABILITIES","Capabilities & permissions",760)
+  compatUI.informationCapabilitiesText=capabilities:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); compatUI.informationCapabilitiesText:SetPoint("TOPLEFT",4,-4); compatUI.informationCapabilitiesText:SetPoint("TOPRIGHT",-4,-4); compatUI.informationCapabilitiesText:SetJustifyH("LEFT"); compatUI.informationCapabilitiesText:SetJustifyV("TOP"); compatUI.informationCapabilitiesText:SetWordWrap(true); compatUI.informationCapabilitiesText:SetTextColor(unpack(C.white))
+
+  local build=ScrollView("BUILD","Build information",520)
+  compatUI.informationBuildText=build:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); compatUI.informationBuildText:SetPoint("TOPLEFT",4,-4); compatUI.informationBuildText:SetPoint("TOPRIGHT",-4,-4); compatUI.informationBuildText:SetJustifyH("LEFT"); compatUI.informationBuildText:SetJustifyV("TOP"); compatUI.informationBuildText:SetWordWrap(true); compatUI.informationBuildText:SetTextColor(unpack(C.white))
+
+  local credits=ScrollView("CREDITS","Project & credits",620)
+  local ct=credits:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); ct:SetPoint("TOPLEFT",4,-4); ct:SetPoint("TOPRIGHT",-4,-4); ct:SetHeight(560); ct:SetJustifyH("LEFT"); ct:SetJustifyV("TOP"); ct:SetWordWrap(true); ct:SetTextColor(unpack(C.white)); ct:SetText("AzerCore Ops is an open-source operations and gameplay companion for AzerothCore players, administrators and Game Masters.\n\nPlayer Mode provides permitted gameplay, inspection and reporting features for regular players. It cannot grant administrative authority; privileged operations remain authorized and enforced by the server module.\n\nCreated and maintained by |cffffd100Fernando Santos|r.\n\nBuilt with AzerothCore, mod-playerbots, and AI-assisted development from OpenAI ChatGPT.\n\nMovement destination data adapted from AzerothAdmin under GPLv3 and derived from TrinityAdmin/MangAdmin. Our thanks to their contributors and the wider open-source community.\n\nAzerothCore and its contributors provide the server platform on which AzerCore Ops operates. mod-playerbots is acknowledged for the Playerbot integration and development environment.\n\nLicense\n|cffffffffGNU General Public License v3.0|r")
+
+  local resources=ScrollView("RESOURCES","Project resources",420)
+  for i,item in ipairs(PROJECT_LINKS) do local entry=item; Button(resources,entry.label,390,28,function() ShowCopyLink(entry.label,entry.url) end,"Open a selectable copy box for this address"):SetPoint("TOPLEFT",4,-4-(i-1)*36) end
+
+  local function Select(key)
+    for name,view in pairs(views) do if name==key then view:Show() else view:Hide() end end
+    for name,button in pairs(buttons) do button:SetBackdropColor(unpack(name==key and C.selected or C.button)); button:SetBackdropBorderColor(unpack(name==key and C.gold or C.border)) end
+  end
+  for i,definition in ipairs({{"OVERVIEW","Overview"},{"CAPABILITIES","Capabilities"},{"BUILD","Build Information"},{"CREDITS","Credits"},{"RESOURCES","Resources"}}) do
+    local key,label=definition[1],definition[2]; local b=Button(actions,label,126,26,function() Select(key) end); b:SetPoint("TOPLEFT",12,-38-(i-1)*32); buttons[key]=b
+  end
+  Button(actions,"Check Compatibility",126,28,RequestCompatibility,"Query module, registry, permissions, and build information"):SetPoint("BOTTOMLEFT",12,14)
+  Select("OVERVIEW")
   RenderCompatibility()
 end
 
@@ -3867,11 +3908,28 @@ local function BuildUI()
   minimapButton=CreateFrame("Button","AZERCORE_OPS_MinimapButton",Settings().mbfCompatibility and UIParent or Minimap); minimapButton:SetWidth(24); minimapButton:SetHeight(22); minimapButton:SetFrameStrata("HIGH"); minimapButton:SetFrameLevel(100); minimapButton:RegisterForClicks("LeftButtonUp","RightButtonUp"); minimapButton:RegisterForDrag("LeftButton")
   local bg=minimapButton:CreateTexture(nil,"BACKGROUND"); bg:SetTexture("Interface\\Minimap\\UI-Minimap-Background"); bg:SetAllPoints()
   local bd=minimapButton:CreateTexture(nil,"OVERLAY"); bd:SetTexture("Interface\\Minimap\\MiniMap-TrackingBorder"); bd:SetPoint("TOPLEFT",-6,6); bd:SetPoint("BOTTOMRIGHT",6,-6)
-  local icon=minimapButton:CreateTexture(nil,"ARTWORK"); icon:SetTexture("Interface\\AddOns\\AzerCoreOps\\Media\\azercoreops-icon.tga"); icon:SetPoint("TOPLEFT",2,-2); icon:SetPoint("BOTTOMRIGHT",-2,2)
+  local minimapIconPath="Interface\\AddOns\\AzerCoreOps\\Media\\azercoreops-icon.tga"
+  minimapButton:SetNormalTexture(minimapIconPath); local icon=minimapButton:GetNormalTexture(); icon:SetDrawLayer("ARTWORK",2); icon:ClearAllPoints(); icon:SetPoint("TOPLEFT",2,-2); icon:SetPoint("BOTTOMRIGHT",-2,2); icon:SetTexCoord(.06,.94,.06,.94); icon:SetVertexColor(1,1,1,1); icon:SetAlpha(1); icon:Show(); minimapButton.icon=icon
+  minimapButton:SetPushedTexture(minimapIconPath); local pushed=minimapButton:GetPushedTexture(); pushed:SetDrawLayer("ARTWORK",3); pushed:ClearAllPoints(); pushed:SetPoint("TOPLEFT",3,-3); pushed:SetPoint("BOTTOMRIGHT",-1,1); pushed:SetTexCoord(.06,.94,.06,.94); pushed:SetVertexColor(1,1,1,1); pushed:SetAlpha(1)
+  minimapButton:SetHighlightTexture("Interface\\Minimap\\UI-Minimap-ZoomButton-Highlight","ADD"); local highlight=minimapButton:GetHighlightTexture(); highlight:ClearAllPoints(); highlight:SetPoint("TOPLEFT",-2,2); highlight:SetPoint("BOTTOMRIGHT",2,-2)
+  minimapButton.tooltipText="AzerCore Ops"; minimapButton.tooltip="AzerCore Ops"
   local tx=minimapButton:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); tx:SetPoint("CENTER"); tx:SetText(""); tx:SetTextColor(unpack(C.gold))
   minimapButton:SetScript("OnClick",function(_,button) if button=="RightButton" then HideMain() elseif main:IsShown() then HideMain() else ShowMain() end end)
-  minimapButton:SetScript("OnDragStart",function(self) self:SetScript("OnUpdate",function() local mx,my=Minimap:GetCenter(); local px,py=GetCursorPosition(); local s=Minimap:GetEffectiveScale(); AzerCoreOpsDB.minimapAngle=math.deg(math.atan2(py/s-my,px/s-mx)); PositionMinimap() end) end)
-  minimapButton:SetScript("OnDragStop",function(self) self:SetScript("OnUpdate",nil) end); PositionMinimap(); ApplySettings()
+  minimapButton:SetScript("OnEnter",function(self) GameTooltip:SetOwner(self,"ANCHOR_LEFT"); GameTooltip:SetText("AzerCore Ops",1,.82,0); GameTooltip:AddLine("Operations and gameplay companion",1,1,1); GameTooltip:AddLine("Left-click: open or hide",.75,.75,.75); GameTooltip:AddLine("Right-click: hide",.75,.75,.75); GameTooltip:Show() end)
+  minimapButton:SetScript("OnLeave",function() GameTooltip:Hide() end)
+  local function MaintainMinimapIcon(self)
+    local parent=self:GetParent(); local inMBF=parent and parent.GetName and parent:GetName()=="MinimapButtonFrame"
+    if inMBF then
+      if self.icon:GetDrawLayer()~="OVERLAY" then self.icon:SetDrawLayer("OVERLAY",7) end
+      if not self.icon:IsShown() then self.icon:Show() end
+      if self.icon:GetAlpha()~=1 then self.icon:SetAlpha(1) end
+    elseif self.icon:GetDrawLayer()~="ARTWORK" then
+      self.icon:SetDrawLayer("ARTWORK",2); self.icon:Show(); self.icon:SetAlpha(1)
+    end
+  end
+  minimapButton:SetScript("OnUpdate",MaintainMinimapIcon)
+  minimapButton:SetScript("OnDragStart",function(self) self:SetScript("OnUpdate",function(button) MaintainMinimapIcon(button); local mx,my=Minimap:GetCenter(); local px,py=GetCursorPosition(); local s=Minimap:GetEffectiveScale(); AzerCoreOpsDB.minimapAngle=math.deg(math.atan2(py/s-my,px/s-mx)); PositionMinimap() end) end)
+  minimapButton:SetScript("OnDragStop",function(self) self:SetScript("OnUpdate",MaintainMinimapIcon) end); PositionMinimap(); ApplySettings()
   if Settings().startMinimized then HideMain() end
 end
 
@@ -4161,6 +4219,15 @@ if ChatFrame_AddMessageEventFilter then
   for _,eventName in ipairs({"CHAT_MSG_SYSTEM","CHAT_MSG_SAY","CHAT_MSG_YELL","CHAT_MSG_WHISPER","CHAT_MSG_PARTY","CHAT_MSG_PARTY_LEADER","CHAT_MSG_RAID","CHAT_MSG_RAID_LEADER","CHAT_MSG_GUILD","CHAT_MSG_OFFICER","CHAT_MSG_CHANNEL"}) do
     ChatFrame_AddMessageEventFilter(eventName,HideProtocol)
   end
+  ChatFrame_AddMessageEventFilter("CHAT_MSG_SYSTEM",function(_,event,message)
+    if event~="CHAT_MSG_SYSTEM" or not lookup.kind or GetTime()>lookup.expires then return false end
+    local raw=tostring(message or "")
+    local plain=raw:gsub("|c%x%x%x%x%x%x%x%x",""):gsub("|r","")
+    local expectedLink=lookup.kind=="quest" and "|Hquest:" or "|Hitem:"
+    if raw:find(expectedLink,1,true) or plain:match("^%s*%d+%s*%-%s*%b[]") then return true end
+    if plain:lower():find("could not parse",1,true) or plain:lower():find("no ",1,true) and plain:lower():find("found",1,true) then return true end
+    return false
+  end)
   ChatFrame_AddMessageEventFilter("CHAT_MSG_SAY",function(_,_,message)
     local plain=tostring(message or ""):gsub("|c%x%x%x%x%x%x%x%x",""):gsub("|r","")
     return Settings().hideAuditChat and plain:find("^%s*%.")~=nil
