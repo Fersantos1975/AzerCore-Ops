@@ -31,19 +31,19 @@ AzerCore Ops Platform combines an AzerothCore C++ module with a World of Warcraf
 
 | Operations Center | Character Inspector |
 | --- | --- |
-| ![AzerCore Ops Operations Center](docs/images/screenshots/dashboard.png) | ![Character equipment inspection](docs/images/screenshots/character-equipment.png) |
+| ![AzerCore Ops Operations Center](https://raw.githubusercontent.com/Fersantos1975/AzerCore-Ops/main/docs/images/screenshots/dashboard.png) | ![Character equipment inspection](https://raw.githubusercontent.com/Fersantos1975/AzerCore-Ops/main/docs/images/screenshots/character-equipment.png) |
 
 | Quest Inspector | Instance Access |
 | --- | --- |
-| ![Target quest inspection](docs/images/screenshots/quest-inspector.png) | ![Group instance-access audit](docs/images/screenshots/instance-access.png) |
+| ![Target quest inspection](https://raw.githubusercontent.com/Fersantos1975/AzerCore-Ops/main/docs/images/screenshots/quest-inspector.png) | ![Group instance-access audit](https://raw.githubusercontent.com/Fersantos1975/AzerCore-Ops/main/docs/images/screenshots/instance-access.png) |
 
 | NPC Inspector | Movement Control |
 | --- | --- |
-| ![NPC inspection workspace](docs/images/screenshots/npc-inspector.png) | ![Movement destination catalogue](docs/images/screenshots/movement-control.png) |
+| ![NPC inspection workspace](https://raw.githubusercontent.com/Fersantos1975/AzerCore-Ops/main/docs/images/screenshots/npc-inspector.png) | ![Movement destination catalogue](https://raw.githubusercontent.com/Fersantos1975/AzerCore-Ops/main/docs/images/screenshots/movement-control.png) |
 
 | Courier status | Platform Information |
 | --- | --- |
-| ![Courier under construction](docs/images/screenshots/courier-under-construction.png) | ![Platform compatibility information](docs/images/screenshots/platform-information.png) |
+| ![Courier under construction](https://raw.githubusercontent.com/Fersantos1975/AzerCore-Ops/main/docs/images/screenshots/courier-under-construction.png) | ![Platform compatibility information](https://raw.githubusercontent.com/Fersantos1975/AzerCore-Ops/main/docs/images/screenshots/platform-information.png) |
 
 ## Repository layout
 
