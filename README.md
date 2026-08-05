@@ -124,13 +124,13 @@ Before treating a build as production-ready:
 
 ## Documentation
 
-- [Architecture](ARCHITECTURE.md)
-- [Vision](VISION.md)
-- [Manifesto](MANIFESTO.md)
-- [Philosophy](PHILOSOPHY.md)
-- [Roadmap](ROADMAP.md)
-- [Contributing](CONTRIBUTING.md)
-- [Design system](docs/design-system/README.md)
+- [Architecture](https://github.com/Fersantos1975/AzerCore-Ops/blob/main/ARCHITECTURE.md)
+- [Vision](https://github.com/Fersantos1975/AzerCore-Ops/blob/main/VISION.md)
+- [Manifesto](https://github.com/Fersantos1975/AzerCore-Ops/blob/main/MANIFESTO.md)
+- [Philosophy](https://github.com/Fersantos1975/AzerCore-Ops/blob/main/PHILOSOPHY.md)
+- [Roadmap](https://github.com/Fersantos1975/AzerCore-Ops/blob/main/ROADMAP.md)
+- [Contributing](https://github.com/Fersantos1975/AzerCore-Ops/blob/main/CONTRIBUTING.md)
+- [Design system](https://github.com/Fersantos1975/AzerCore-Ops/blob/main/docs/design-system/README.md)
 
 ## Support policy
 
@@ -138,4 +138,4 @@ This project tracks active AzerothCore development. Compatibility can vary by co
 
 ## License
 
-GNU General Public License v3.0. See [LICENSE](LICENSE).
+GNU General Public License v3.0. See [LICENSE](https://github.com/Fersantos1975/AzerCore-Ops/blob/main/LICENSE).
