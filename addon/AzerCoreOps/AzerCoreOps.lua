@@ -1,6 +1,6 @@
 local ADDON = ...
 
--- AzerCore Ops Platform 0.5.3-alpha8-auto-character-inspection
+-- AzerCore Ops Platform 0.5.6-alpha2-movement-catalog
 -- Target: WoW 3.3.5a / AzerothCore. All server commands live here so that
 -- branch-specific command names can be changed without touching the UI.
 local CMD = {
@@ -14,6 +14,9 @@ local CMD = {
   questReward = ".quest reward %d", questRemove = ".quest remove %d",
   gps = ".gps", tele = ".tele %s", itemLookup = ".lookup item %s",
   itemAdd = ".additem %d %d", itemRemove = ".additem %d -%d",
+  itemInspect = ".azercoreops item inspect %d",
+  movementCatalog = ".azercoreops movement catalog", movementCurrent = ".azercoreops movement current",
+  movementGo = ".azercoreops movement go %d %.3f %.3f %.3f %.3f", movementReturn = ".azercoreops movement return",
   instanceBindsSelf = ".azercoreops instance binds self",
   instanceBindsTarget = ".azercoreops instance binds target",
   instanceUnbind = ".azercoreops instance unbind %s",
@@ -26,6 +29,7 @@ local CMD = {
   characterInspect = ".azercoreops character inspect",
   characterRaid = ".azercoreops character raid %s %s",
   characterSaveTarget = ".azercoreops character save",
+  npcInspect = ".azercoreops npc inspect",
   version = ".azercoreops version",
 }
 
@@ -62,7 +66,9 @@ local characterUI={activity={},buttons={},viewButtons={},target=nil,identityFram
   overviewText=nil,stateText=nil,locationText=nil,contextText=nil,statusText=nil,modeText=nil,Update=nil,Render=nil,Log=nil,
   view="OVERVIEW",overviewPanels={},reportPanel=nil,reportText=nil,reportChild=nil,server={},capturePlayer=nil,autoInspect=false,Inspect=nil,
   equipmentFrame=nil,equipmentSlots={},equipment={},talents={},inspectionPlayer=nil,inspectionGuid=nil,inspectionState="UNLOADED",
+  inspectionGeneration=0,inspectionRetries=0,inspectionClassToken=nil,activeOperation="Inspect Character",
   equipmentActionBar=nil,equipmentActionStatus=nil,footer=nil,roleText=nil,roleIcon=nil,detectedRole="Unknown",detectedSpec=nil,RequestClientInspection=nil,RefreshInspection=nil,
+  professionFrame=nil,professionRows={},RenderProfessions=nil,
   raidControls=nil,raidButton=nil,difficultyButton=nil,raidMenu=nil,difficultyMenu=nil,RequestRaid=nil,
   raidCatalog={
     {key="VOA",name="Vault of Archavon",difficulties={{key="10N",name="10 Player"},{key="25N",name="25 Player"}}},
@@ -75,6 +81,12 @@ local characterUI={activity={},buttons={},viewButtons={},target=nil,identityFram
     {key="ICC",name="Icecrown Citadel",difficulties={{key="10N",name="10 Player"},{key="25N",name="25 Player"},{key="10H",name="10 Player Heroic"},{key="25H",name="25 Player Heroic"}}},
     {key="RS",name="The Ruby Sanctum",difficulties={{key="10N",name="10 Player"},{key="25N",name="25 Player"},{key="10H",name="10 Player Heroic"},{key="25H",name="25 Player Heroic"}}},
   }}
+Platform.NPCUI={activity={},buttons={},viewButtons={},server={quests={},loot={},story={}},captureEntry=nil,ignoreStream=false,
+  view="OVERVIEW",activeOperation="Inspect NPC",autoInspect=false,Update=nil,Render=nil,Inspect=nil,
+  identityName=nil,identityMeta=nil,portrait=nil,workspaceTitle=nil,text=nil,textChild=nil,model=nil,modelViewport=nil,
+  questRows={},lootRows={}}
+Platform.ItemUI={view="OVERVIEW",selected=nil,buttons={},viewButtons={},Select=nil,Render=nil,Report=nil,server={crafts={},reagents={},recipes={},sources={},uses={}},linkRows={}}
+Platform.MovementUI={view="DESTINATIONS",serverCatalog={},regions={},selectedRegion=nil,selectedZone=nil,selected=nil,current=nil,loading=false,Render=nil,Report=nil,RefreshCatalog=nil}
 local instanceUI={my={},target={},captureUntil=0,myRows={},targetRows={},myOffset=0,targetOffset=0,targetLabel=nil,
   selectedBind=nil,filter="ALL",filterButtons={},detailText=nil,summaryText=nil,myEmpty=nil,targetEmpty=nil,inspectionText=nil,
   inspectedPlayer=nil,inspectedAt=nil,statusText=nil,myScroll=nil,targetScroll=nil,detailScroll=nil,horizontals={},activity={},
@@ -92,12 +104,13 @@ local ApplyPlayerTargetIdentity
 local defaults={
   startMinimized=true,showMinimap=true,showMini=true,mbfCompatibility=true,scale=1,roleMode="AUTOMATIC",
   characterRaid="ICC",characterRaidDifficulty="10N",
+  characterRaidLocked=true,
   confirmCommands=true,hideAuditChat=true,defaultDifficulty=0,
   auditTooltips=true,wrapAuditReasons=true,mouseWheelAudit=true,problemsFirst=false,
   rememberAuditFilter=true,autoReaudit=false,confirmResetSelected=true,
   warnNoTarget=true,compactAuditRows=false,auditFontSize=10,shiftClickInsert=true,
 }
-local ADDON_VERSION="0.5.3-alpha8-auto-character-inspection"
+local ADDON_VERSION="0.5.6-alpha2-movement-catalog"
 local PROTOCOL_VERSION="1"
 local TESTED_CORE="190184a04539"
 local TESTED_PLAYERBOTS="ba46fcdecde3"
@@ -358,8 +371,12 @@ local function SelectTab(name)
   for n,p in pairs(pages) do if n==name then p:Show() else p:Hide() end end
   for n,b in pairs(tabs) do b:SetBackdropColor(unpack(n==name and C.selected or C.button)); b:SetBackdropBorderColor(unpack(n==name and C.gold or C.border)) end
   if name=="Character" and characterUI.Update then
-    characterUI.autoInspect=true; characterUI.Update()
+    characterUI.activeOperation="Inspect Character"; characterUI.autoInspect=true; characterUI.Update()
     if characterUI.Inspect then characterUI.Inspect(true) end
+  end
+  if name=="NPC" and Platform.NPCUI.Update then
+    Platform.NPCUI.activeOperation="Inspect NPC"; Platform.NPCUI.autoInspect=true; Platform.NPCUI.Update()
+    if Platform.NPCUI.Inspect then Platform.NPCUI.Inspect(true) end
   end
   Platform:UpdateWorkspaceMode(); Platform:ApplyRoleButtonPolicies()
   SetStatus(name=="Teleport" and "Movement workspace" or name.." workspace")
@@ -388,57 +405,78 @@ local function BuildCharacter()
   local roleIcon=roleBox:CreateTexture(nil,"ARTWORK"); roleIcon:SetWidth(24); roleIcon:SetHeight(24); roleIcon:SetPoint("BOTTOMLEFT",8,5); characterUI.roleIcon=roleIcon
   local roleText=roleBox:CreateFontString(nil,"OVERLAY","GameFontNormalSmall"); roleText:SetPoint("LEFT",roleIcon,"RIGHT",7,0); roleText:SetPoint("RIGHT",-5,0); roleText:SetJustifyH("LEFT"); roleText:SetText("Unknown"); characterUI.roleText=roleText
 
-  local tabBar=CreateFrame("Frame",nil,workspace); tabBar:SetPoint("TOPLEFT",8,-108); tabBar:SetPoint("TOPRIGHT",-8,-108); tabBar:SetHeight(28)
-  local function CharacterViewButton(label,view,width,x)
-    local b=Button(tabBar,label,width,24,function()
+  local actionBar=CreateFrame("Frame",nil,workspace); actionBar:SetPoint("TOPLEFT",8,-108); actionBar:SetPoint("BOTTOMLEFT",8,8); actionBar:SetWidth(112); Backdrop(actionBar,C.panel); characterUI.actionBar=actionBar
+  local actionHeading=Section(actionBar,"ACTION BAR",C.gold); actionHeading:SetPoint("TOPLEFT",8,-9)
+  local function CharacterViewButton(label,view,index)
+    local b=Button(actionBar,label,96,24,function()
       characterUI.view=view
       if (view=="EQUIPMENT" or view=="TALENTS") and characterUI.RequestClientInspection and (characterUI.inspectionGuid~=UnitGUID(CharacterUnit()) or characterUI.inspectionState=="UNLOADED" or characterUI.inspectionState=="UNAVAILABLE") then characterUI.RequestClientInspection(false) end
       if characterUI.Render then characterUI.Render() end
-    end); b:SetPoint("TOPLEFT",x,0); b:SetScript("OnLeave",function() if characterUI.Render then characterUI.Render() end; GameTooltip:Hide() end); characterUI.viewButtons[view]=b; return b
+    end); b:SetPoint("TOPLEFT",8,-28-(index-1)*28); b:SetScript("OnLeave",function() if characterUI.Render then characterUI.Render() end; GameTooltip:Hide() end); characterUI.viewButtons[view]=b; return b
   end
-  CharacterViewButton("Overview","OVERVIEW",68,0)
-  CharacterViewButton("Inventory","INVENTORY",68,72)
-  CharacterViewButton("Equipment","EQUIPMENT",74,144)
-  CharacterViewButton("Talents","TALENTS",60,222)
-  CharacterViewButton("Professions","PROFESSIONS",78,286)
-  CharacterViewButton("Raid Experience","RAID",100,368)
-  CharacterViewButton("Technical","TECHNICAL",70,472)
+  CharacterViewButton("Overview","OVERVIEW",1)
+  CharacterViewButton("Inventory","INVENTORY",2)
+  CharacterViewButton("Equipment","EQUIPMENT",3)
+  CharacterViewButton("Talents","TALENTS",4)
+  CharacterViewButton("Professions","PROFESSIONS",5)
+  CharacterViewButton("Raid EXP","RAID",6)
+  CharacterViewButton("Technical","TECHNICAL",7)
 
-  local overview=CreateFrame("Frame",nil,workspace); overview:SetPoint("TOPLEFT",8,-140); overview:SetPoint("TOPRIGHT",workspace,"TOP",-4,-140); overview:SetHeight(132); Backdrop(overview,C.panel)
+  local viewArea=CreateFrame("Frame",nil,workspace); viewArea:SetPoint("TOPLEFT",128,-108); viewArea:SetPoint("BOTTOMRIGHT",-8,8); characterUI.viewArea=viewArea
+  local overview=CreateFrame("Frame",nil,viewArea); overview:SetPoint("TOPLEFT",0,0); overview:SetPoint("TOPRIGHT",viewArea,"TOP",-4,0); overview:SetHeight(132); Backdrop(overview,C.panel)
   local overviewHeading=Section(overview,"CHARACTER OVERVIEW",C.inspect); overviewHeading:SetPoint("TOPLEFT",10,-10)
   local overviewText=overview:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); overviewText:SetPoint("TOPLEFT",10,-34); overviewText:SetPoint("BOTTOMRIGHT",-10,8); overviewText:SetJustifyH("LEFT"); overviewText:SetJustifyV("TOP"); overviewText:SetTextColor(unpack(C.white)); characterUI.overviewText=overviewText
 
-  local state=CreateFrame("Frame",nil,workspace); state:SetPoint("TOPLEFT",workspace,"TOP",4,-140); state:SetPoint("TOPRIGHT",-8,-140); state:SetHeight(132); Backdrop(state,C.panel)
+  local state=CreateFrame("Frame",nil,viewArea); state:SetPoint("TOPLEFT",viewArea,"TOP",4,0); state:SetPoint("TOPRIGHT",0,0); state:SetHeight(132); Backdrop(state,C.panel)
   local stateHeading=Section(state,"CURRENT STATE",C.diagnose); stateHeading:SetPoint("TOPLEFT",10,-10)
   local stateText=state:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); stateText:SetPoint("TOPLEFT",10,-34); stateText:SetPoint("BOTTOMRIGHT",-10,8); stateText:SetJustifyH("LEFT"); stateText:SetJustifyV("TOP"); stateText:SetTextColor(unpack(C.white)); characterUI.stateText=stateText
 
-  local location=CreateFrame("Frame",nil,workspace); location:SetPoint("TOPLEFT",8,-280); location:SetPoint("TOPRIGHT",workspace,"TOP",-4,-280); location:SetPoint("BOTTOM",workspace,"BOTTOM",0,44); Backdrop(location,C.panel)
+  local location=CreateFrame("Frame",nil,viewArea); location:SetPoint("TOPLEFT",0,-140); location:SetPoint("TOPRIGHT",viewArea,"TOP",-4,-140); location:SetPoint("BOTTOM",viewArea,"BOTTOM",0,0); Backdrop(location,C.panel)
   local locationHeading=Section(location,"LOCATION",C.diagnose); locationHeading:SetPoint("TOPLEFT",10,-10)
   local locationText=location:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); locationText:SetPoint("TOPLEFT",10,-34); locationText:SetPoint("BOTTOMRIGHT",-10,8); locationText:SetJustifyH("LEFT"); locationText:SetJustifyV("TOP"); locationText:SetWordWrap(true); locationText:SetTextColor(unpack(C.white)); characterUI.locationText=locationText
 
-  local context=CreateFrame("Frame",nil,workspace); context:SetPoint("TOPLEFT",workspace,"TOP",4,-280); context:SetPoint("TOPRIGHT",-8,-280); context:SetPoint("BOTTOM",workspace,"BOTTOM",0,44); Backdrop(context,C.panel)
+  local context=CreateFrame("Frame",nil,viewArea); context:SetPoint("TOPLEFT",viewArea,"TOP",4,-140); context:SetPoint("TOPRIGHT",0,-140); context:SetPoint("BOTTOM",viewArea,"BOTTOM",0,0); Backdrop(context,C.panel)
   local contextHeading=Section(context,"SELECTION CONTEXT",C.operate); contextHeading:SetPoint("TOPLEFT",10,-10)
   local contextText=context:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); contextText:SetPoint("TOPLEFT",10,-34); contextText:SetPoint("BOTTOMRIGHT",-10,8); contextText:SetJustifyH("LEFT"); contextText:SetJustifyV("TOP"); contextText:SetWordWrap(true); contextText:SetTextColor(unpack(C.white)); characterUI.contextText=contextText
   characterUI.overviewPanels={overview,state,location,context}
 
-  local reportPanel=CreateFrame("Frame",nil,workspace); reportPanel:SetPoint("TOPLEFT",8,-140); reportPanel:SetPoint("BOTTOMRIGHT",-8,44); Backdrop(reportPanel,C.panel); reportPanel:Hide(); characterUI.reportPanel=reportPanel
+  local reportPanel=CreateFrame("Frame",nil,viewArea); reportPanel:SetAllPoints(viewArea); Backdrop(reportPanel,C.panel); reportPanel:Hide(); characterUI.reportPanel=reportPanel
 
-  local equipmentFrame=CreateFrame("Frame",nil,workspace); equipmentFrame:SetPoint("TOPLEFT",8,-140); equipmentFrame:SetPoint("BOTTOMRIGHT",-8,8); Backdrop(equipmentFrame,C.panel); equipmentFrame:Hide(); characterUI.equipmentFrame=equipmentFrame
-  local equipmentHeading=Section(equipmentFrame,"EQUIPMENT INSPECTION",C.inspect); equipmentHeading:SetPoint("TOPLEFT",10,-10)
-  local equipmentSummary=equipmentFrame:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); equipmentSummary:SetPoint("TOPLEFT",166,-11); equipmentSummary:SetPoint("TOPRIGHT",-130,-11); equipmentSummary:SetJustifyH("CENTER"); characterUI.equipmentSummary=equipmentSummary
-  local refreshEquipment=Button(equipmentFrame,"Refresh",76,22,function() if characterUI.RefreshInspection then characterUI.RefreshInspection() end end,"Request current equipment and talent information again for the selected target."); refreshEquipment:SetPoint("TOPRIGHT",-10,-7)
-  Button(equipmentFrame,"?",22,22,nil,"Equipment follows the selected target automatically. Mouse over a slot for its complete item tooltip and use the arrow buttons to rotate the character. The target must be nearby, visible, friendly and online."):SetPoint("RIGHT",refreshEquipment,"LEFT",-5,0)
+  local equipmentFrame=CreateFrame("Frame",nil,viewArea); equipmentFrame:SetAllPoints(viewArea); Backdrop(equipmentFrame,C.panel); equipmentFrame:Hide(); characterUI.equipmentFrame=equipmentFrame
+  local equipmentHeading=Section(equipmentFrame,"EQUIPMENT INSPECTION",C.inspect); equipmentHeading:SetPoint("TOPLEFT",10,-10); equipmentHeading:SetWidth(145); equipmentHeading:SetWordWrap(false)
+  local equipmentSummary=equipmentFrame:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); equipmentSummary:SetPoint("TOPLEFT",160,-11); equipmentSummary:SetPoint("TOPRIGHT",-10,-11); equipmentSummary:SetJustifyH("RIGHT"); equipmentSummary:SetWordWrap(false); characterUI.equipmentSummary=equipmentSummary
+  local refreshEquipment=Button(equipmentFrame,"",24,22,function() if characterUI.RefreshInspection then characterUI.RefreshInspection() end end,"Refresh equipment and talents for the selected character.")
+  local refreshTexture=refreshEquipment:CreateTexture(nil,"ARTWORK"); refreshTexture:SetTexture("Interface\\Buttons\\UI-RotationRight-Button-Up"); refreshTexture:SetPoint("TOPLEFT",2,-2); refreshTexture:SetPoint("BOTTOMRIGHT",-2,2)
+  local helpEquipment=Button(equipmentFrame,"?",22,22,nil,"Equipment follows the selected target automatically. Mouse over a slot for its complete item tooltip and use the arrow buttons beside the character's head to rotate. The target must be nearby, visible, friendly and online.")
 
-  local equipmentActionBar=CreateFrame("Frame",nil,equipmentFrame); equipmentActionBar:SetPoint("BOTTOMLEFT",50,5); equipmentActionBar:SetPoint("BOTTOMRIGHT",-5,5); equipmentActionBar:SetHeight(28); Backdrop(equipmentActionBar,C.bg); characterUI.equipmentActionBar=equipmentActionBar
+  local equipmentActionBar=CreateFrame("Frame",nil,equipmentFrame); equipmentActionBar:Hide(); characterUI.equipmentActionBar=equipmentActionBar
   local equipmentActionStatus=equipmentActionBar:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); equipmentActionStatus:SetPoint("LEFT",8,0); equipmentActionStatus:SetPoint("RIGHT",-190,0); equipmentActionStatus:SetJustifyH("LEFT"); equipmentActionStatus:SetTextColor(unpack(C.white)); equipmentActionStatus:SetText("Equipment inspection ready"); characterUI.equipmentActionStatus=equipmentActionStatus
 
   local leftRail=CreateFrame("Frame",nil,equipmentFrame); leftRail:SetPoint("TOPLEFT",5,-32); leftRail:SetPoint("BOTTOMLEFT",5,5); leftRail:SetWidth(42); Backdrop(leftRail,C.bg); characterUI.leftEquipmentRail=leftRail
-  local rightRail=CreateFrame("Frame",nil,equipmentFrame); rightRail:SetPoint("TOPRIGHT",-5,-32); rightRail:SetPoint("BOTTOMRIGHT",-5,38); rightRail:SetWidth(42); Backdrop(rightRail,C.bg); characterUI.rightEquipmentRail=rightRail
+  local rightRail=CreateFrame("Frame",nil,equipmentFrame); rightRail:SetPoint("TOPRIGHT",-5,-32); rightRail:SetPoint("BOTTOMRIGHT",-5,5); rightRail:SetWidth(42); Backdrop(rightRail,C.bg); characterUI.rightEquipmentRail=rightRail
 
-  local model=CreateFrame("PlayerModel",nil,equipmentFrame); model:SetPoint("TOPLEFT",50,-32); model:SetPoint("BOTTOMRIGHT",rightRail,"BOTTOMLEFT",-3,5); model:SetUnit("player"); characterUI.equipmentModel=model
+  local equipmentDock=CreateFrame("Frame",nil,equipmentFrame); equipmentDock:SetPoint("BOTTOMLEFT",leftRail,"BOTTOMRIGHT",5,0); equipmentDock:SetPoint("BOTTOMRIGHT",rightRail,"BOTTOMLEFT",-5,0); equipmentDock:SetHeight(38); Backdrop(equipmentDock,C.bg); characterUI.equipmentDock=equipmentDock
+
+  local modelViewport=CreateFrame("Frame",nil,equipmentFrame); modelViewport:SetPoint("TOPLEFT",50,-32); modelViewport:SetPoint("BOTTOMRIGHT",equipmentDock,"TOPRIGHT",0,4); characterUI.equipmentModelViewport=modelViewport
+  local model=CreateFrame("PlayerModel",nil,modelViewport); model:SetPoint("CENTER"); model:SetWidth(1); model:SetHeight(1); model:SetUnit("player"); characterUI.equipmentModel=model
+  characterUI.UpdateEquipmentCamera=function()
+    -- Keep the model width at 70%, but give its rendering surface the complete
+    -- workspace height so tall helmets, shoulders and weapons are not clipped.
+    local viewportWidth=math.max(1,modelViewport:GetWidth() or 1)
+    local viewportHeight=math.max(1,modelViewport:GetHeight() or 1)
+    model:SetWidth(viewportWidth*.70)
+    model:SetHeight(viewportHeight)
+    if model.SetCamDistanceScale then model:SetCamDistanceScale(1) end
+    -- Cancel the parent window scale so the 3D module retains one physical size.
+    model:SetScale(.75/math.max(.75,math.min(1.35,Settings().scale or 1)))
+  end
+  modelViewport:SetScript("OnSizeChanged",function() if characterUI.UpdateEquipmentCamera then characterUI.UpdateEquipmentCamera() end end)
+  characterUI.UpdateEquipmentCamera()
   model.azerFacing=0
-  Button(equipmentFrame,"<",26,20,function() model.azerFacing=model.azerFacing-.25; model:SetFacing(model.azerFacing) end,"Rotate character left"):SetPoint("BOTTOMLEFT",model,"BOTTOMLEFT",4,4)
-  Button(equipmentFrame,">",26,20,function() model.azerFacing=model.azerFacing+.25; model:SetFacing(model.azerFacing) end,"Rotate character right"):SetPoint("BOTTOMRIGHT",model,"BOTTOMRIGHT",-4,4)
+  Button(equipmentFrame,"<",26,20,function() model.azerFacing=model.azerFacing-.25; model:SetFacing(model.azerFacing) end,"Rotate character left"):SetPoint("TOP",modelViewport,"TOP",-118,-42)
+  Button(equipmentFrame,">",26,20,function() model.azerFacing=model.azerFacing+.25; model:SetFacing(model.azerFacing) end,"Rotate character right"):SetPoint("TOP",modelViewport,"TOP",118,-42)
+  helpEquipment:SetPoint("BOTTOMLEFT",equipmentDock,"BOTTOMLEFT",5,8)
+  refreshEquipment:SetPoint("LEFT",helpEquipment,"RIGHT",5,0)
 
   local slotLayout={
     {1,"HeadSlot","Head","LEFT",-4},{2,"NeckSlot","Neck","LEFT",-40},{3,"ShoulderSlot","Shoulders","LEFT",-76},{15,"BackSlot","Back","LEFT",-112},{5,"ChestSlot","Chest","LEFT",-148},{4,"ShirtSlot","Shirt","LEFT",-184},{19,"TabardSlot","Tabard","LEFT",-220},{9,"WristSlot","Wrist","LEFT",-256},
@@ -447,11 +485,12 @@ local function BuildCharacter()
   }
   for _,definition in ipairs(slotLayout) do
     local slotId,slotName,label,rail,y=definition[1],definition[2],definition[3],definition[4],definition[5]
-    local slotParent=rail=="LEFT" and leftRail or (rail=="RIGHT" and rightRail or equipmentFrame)
+    local slotParent=rail=="LEFT" and leftRail or (rail=="RIGHT" and rightRail or equipmentDock)
     local slot=CreateFrame("Button",nil,slotParent); slot:SetWidth(32); slot:SetHeight(32); Backdrop(slot,C.bg); slot.slotId=slotId; slot.slotName=slotName; slot.slotLabel=label
+    slot:RegisterForClicks("LeftButtonUp","RightButtonUp")
     local icon=slot:CreateTexture(nil,"ARTWORK"); icon:SetPoint("TOPLEFT",3,-3); icon:SetPoint("BOTTOMRIGHT",-3,3); icon:SetTexture("Interface\\PaperDoll\\UI-PaperDoll-Slot-"..slotName); slot.icon=icon
     local count=slot:CreateFontString(nil,"OVERLAY","NumberFontNormalSmall"); count:SetPoint("BOTTOMRIGHT",-3,3); slot.count=count
-    if rail=="BOTTOM" then slot:SetPoint("BOTTOM",model,"BOTTOM",y,4)
+    if rail=="BOTTOM" then slot:SetPoint("CENTER",equipmentDock,"CENTER",y,0)
     else slot:SetPoint("TOPLEFT",5,y) end
     slot:SetScript("OnEnter",function(self)
       local item=characterUI.equipment[self.slotId]
@@ -460,14 +499,85 @@ local function BuildCharacter()
       GameTooltip:Show()
     end)
     slot:SetScript("OnLeave",function() GameTooltip:Hide() end)
+    slot:SetScript("OnClick",function(self)
+      local item=characterUI.equipment[self.slotId]
+      if not item or not item.link or not IsShiftKeyDown() then return end
+      if HandleModifiedItemClick then HandleModifiedItemClick(item.link)
+      elseif ChatEdit_InsertLink then ChatEdit_InsertLink(item.link) end
+    end)
     characterUI.equipmentSlots[slotId]=slot
   end
+
+  local professionCatalog={
+    {id="164",name="Blacksmithing",category="Primary",icon="Interface\\Icons\\Trade_BlackSmithing"},
+    {id="165",name="Leatherworking",category="Primary",icon="Interface\\Icons\\Trade_LeatherWorking"},
+    {id="171",name="Alchemy",category="Primary",icon="Interface\\Icons\\Trade_Alchemy"},
+    {id="182",name="Herbalism",category="Primary",icon="Interface\\Icons\\Trade_Herbalism"},
+    {id="186",name="Mining",category="Primary",icon="Interface\\Icons\\Trade_Mining"},
+    {id="197",name="Tailoring",category="Primary",icon="Interface\\Icons\\Trade_Tailoring"},
+    {id="202",name="Engineering",category="Primary",icon="Interface\\Icons\\Trade_Engineering"},
+    {id="333",name="Enchanting",category="Primary",icon="Interface\\Icons\\Trade_Engraving"},
+    {id="393",name="Skinning",category="Primary",icon="Interface\\Icons\\INV_Misc_Pelt_Wolf_01"},
+    {id="755",name="Jewelcrafting",category="Primary",icon="Interface\\Icons\\INV_Misc_Gem_01"},
+    {id="129",name="First Aid",category="Secondary",icon="Interface\\Icons\\Spell_Holy_SealOfSacrifice"},
+    {id="185",name="Cooking",category="Secondary",icon="Interface\\Icons\\INV_Misc_Food_15"},
+    {id="356",name="Fishing",category="Secondary",icon="Interface\\Icons\\Trade_Fishing"},
+  }
+  local professionFrame=CreateFrame("Frame",nil,viewArea); professionFrame:SetAllPoints(viewArea); Backdrop(professionFrame,C.panel); professionFrame:Hide(); characterUI.professionFrame=professionFrame
+  local professionHeading=Section(professionFrame,"PROFESSIONS",C.inspect); professionHeading:SetPoint("TOPLEFT",10,-10)
+  local professionSummary=professionFrame:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); professionSummary:SetPoint("TOPLEFT",100,-10); professionSummary:SetPoint("TOPRIGHT",-10,-10); professionSummary:SetJustifyH("RIGHT"); professionSummary:SetWordWrap(false); characterUI.professionSummary=professionSummary
+  local professionScroll=CreateFrame("ScrollFrame","AZERCORE_OPS_CharacterProfessionScroll",professionFrame,"UIPanelScrollFrameTemplate"); professionScroll:SetPoint("TOPLEFT",8,-32); professionScroll:SetPoint("BOTTOMRIGHT",-28,8); professionScroll:EnableMouseWheel(true)
+  local professionChild=CreateFrame("Frame",nil,professionScroll); professionChild:SetWidth(410); professionChild:SetHeight(520); professionScroll:SetScrollChild(professionChild)
+  professionScroll:SetScript("OnMouseWheel",function(self,delta) self:SetVerticalScroll(math.max(0,self:GetVerticalScroll()-delta*45)) end)
+  local primaryHeading=Section(professionChild,"PRIMARY PROFESSIONS",C.gold)
+  local secondaryHeading=Section(professionChild,"SECONDARY PROFESSIONS",C.gold)
+  for index,definition in ipairs(professionCatalog) do
+    local row=CreateFrame("Frame",nil,professionChild); row:SetWidth(398); row:SetHeight(34); Backdrop(row,C.bg); row.definition=definition
+    local icon=row:CreateTexture(nil,"ARTWORK"); icon:SetWidth(26); icon:SetHeight(26); icon:SetPoint("LEFT",4,0); icon:SetTexture(definition.icon); row.icon=icon
+    local name=row:CreateFontString(nil,"OVERLAY","GameFontNormalSmall"); name:SetPoint("TOPLEFT",36,-4); name:SetWidth(150); name:SetJustifyH("LEFT"); name:SetText(definition.name); row.name=name
+    local bar=CreateFrame("StatusBar",nil,row); bar:SetStatusBarTexture("Interface\\TargetingFrame\\UI-StatusBar"); bar:SetPoint("BOTTOMLEFT",36,5); bar:SetWidth(248); bar:SetHeight(8); bar:SetMinMaxValues(0,450); row.bar=bar
+    local value=row:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); value:SetPoint("RIGHT",-7,0); value:SetWidth(100); value:SetJustifyH("RIGHT"); row.value=value
+    row:SetScript("OnEnter",function(self)
+      GameTooltip:SetOwner(self,"ANCHOR_RIGHT"); GameTooltip:SetText(self.definition.name,1,.82,0)
+      GameTooltip:AddLine(self.learned and ("Skill: "..tostring(self.current).." / "..tostring(self.maximum)) or "Not learned",1,1,1,true); GameTooltip:Show()
+    end)
+    row:SetScript("OnLeave",function() GameTooltip:Hide() end)
+    characterUI.professionRows[index]=row
+  end
+  characterUI.RenderProfessions=function()
+    local learnedById={}; local primaryLearned,secondaryLearned=0,0
+    for _,record in ipairs((characterUI.server and characterUI.server.professions) or {}) do learnedById[tostring(record.id or "")]=record end
+    local y=-4
+    local function RenderCategory(category,heading)
+      heading:ClearAllPoints(); heading:SetPoint("TOPLEFT",4,y); y=y-22
+      for learnedPass=1,2 do
+        for index,definition in ipairs(professionCatalog) do
+          if definition.category==category then
+            local record=learnedById[definition.id]; local learned=record~=nil
+            if (learnedPass==1 and learned) or (learnedPass==2 and not learned) then
+              local row=characterUI.professionRows[index]; local current=tonumber(record and record.value) or 0; local maximum=tonumber(record and record.maximum) or 450
+              row:ClearAllPoints(); row:SetPoint("TOPLEFT",4,y); row.learned=learned; row.current=current; row.maximum=maximum
+              row:SetAlpha(learned and 1 or .38); row.bar:SetMinMaxValues(0,math.max(1,maximum)); row.bar:SetValue(current); row.bar:SetStatusBarColor(learned and C.gold[1] or .3,learned and C.gold[2] or .3,learned and C.gold[3] or .3,1)
+              row.value:SetText(learned and string.format("%d / %d",current,maximum) or "Not learned"); row:Show(); y=y-38
+              if learned then if category=="Primary" then primaryLearned=primaryLearned+1 else secondaryLearned=secondaryLearned+1 end end
+            end
+          end
+        end
+      end
+      y=y-6
+    end
+    RenderCategory("Primary",primaryHeading); RenderCategory("Secondary",secondaryHeading)
+    professionChild:SetHeight(math.max(360,-y+8)); professionSummary:SetText(string.format("Primary: %d learned  •  Secondary: %d learned",primaryLearned,secondaryLearned))
+  end
+
   local raidControls=CreateFrame("Frame",nil,reportPanel); raidControls:SetPoint("TOPLEFT",8,-8); raidControls:SetPoint("TOPRIGHT",-28,-8); raidControls:SetHeight(34); raidControls:Hide(); characterUI.raidControls=raidControls
   local raidLabel=raidControls:CreateFontString(nil,"OVERLAY","GameFontNormalSmall"); raidLabel:SetPoint("LEFT",2,0); raidLabel:SetText("Raid")
-  local raidButton=Button(raidControls,"Select raid",190,24,nil,"Choose the raid whose recorded achievements will be inspected. This selection remains locked while targets change and after reload."); raidButton:SetPoint("LEFT",36,0); characterUI.raidButton=raidButton
-  local difficultyLabel=raidControls:CreateFontString(nil,"OVERLAY","GameFontNormalSmall"); difficultyLabel:SetPoint("LEFT",raidButton,"RIGHT",12,0); difficultyLabel:SetText("Difficulty")
-  local difficultyButton=Button(raidControls,"Select difficulty",170,24,nil,"Only difficulties applicable to the selected raid are listed."); difficultyButton:SetPoint("LEFT",difficultyLabel,"RIGHT",8,0); characterUI.difficultyButton=difficultyButton
-  local lockedLabel=raidControls:CreateFontString(nil,"OVERLAY","GameFontNormalSmall"); lockedLabel:SetPoint("LEFT",difficultyButton,"RIGHT",12,0); lockedLabel:SetText("|cffffd100SELECTION LOCKED|r")
+  local raidButton=Button(raidControls,"Select raid",132,24,nil,"Choose the raid whose recorded achievements will be inspected. This selection remains locked while targets change and after reload."); raidButton:SetPoint("LEFT",36,0); characterUI.raidButton=raidButton
+  local difficultyLabel=raidControls:CreateFontString(nil,"OVERLAY","GameFontNormalSmall"); difficultyLabel:SetPoint("LEFT",raidButton,"RIGHT",8,0); difficultyLabel:SetText("Difficulty")
+  local difficultyButton=Button(raidControls,"Select difficulty",112,24,nil,"Only difficulties applicable to the selected raid are listed."); difficultyButton:SetPoint("LEFT",difficultyLabel,"RIGHT",6,0); characterUI.difficultyButton=difficultyButton
+  local raidLockButton=Button(raidControls,"",24,24,nil); raidLockButton:SetPoint("LEFT",difficultyButton,"RIGHT",8,0); characterUI.raidLockButton=raidLockButton
+  local raidLockIcon=raidLockButton:CreateTexture(nil,"ARTWORK"); raidLockIcon:SetTexture("Interface\\LFGFrame\\UI-LFG-ICON-LOCK"); raidLockIcon:SetPoint("TOPLEFT",3,-3); raidLockIcon:SetPoint("BOTTOMRIGHT",-3,3)
+  local raidUnlockMark=raidLockButton:CreateFontString(nil,"OVERLAY","GameFontNormalLarge"); raidUnlockMark:SetPoint("CENTER",6,-5); raidUnlockMark:SetText("X"); raidUnlockMark:SetTextColor(1,.12,.12,1); raidUnlockMark:Hide()
 
   local talentControls=CreateFrame("Frame",nil,reportPanel); talentControls:SetPoint("TOPLEFT",8,-8); talentControls:SetPoint("TOPRIGHT",-28,-8); talentControls:SetHeight(34); talentControls:Hide(); characterUI.talentControls=talentControls
   local talentStatus=talentControls:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); talentStatus:SetPoint("LEFT",2,0); talentStatus:SetPoint("RIGHT",-88,0); talentStatus:SetJustifyH("LEFT"); talentStatus:SetText("Live inspected talents"); characterUI.talentStatus=talentStatus
@@ -490,6 +600,26 @@ local function BuildCharacter()
     raidButton:SetText(raid.name.."  v"); difficultyButton:SetText(difficulty.name.."  v")
     return raid,difficulty
   end
+  local function RefreshRaidLock()
+    local locked=Settings().characterRaidLocked~=false
+    if locked then
+      raidButton:Disable(); difficultyButton:Disable(); raidUnlockMark:Hide(); raidLockButton:SetBackdropBorderColor(unpack(C.gold))
+    else
+      raidButton:Enable(); difficultyButton:Enable(); raidUnlockMark:Show(); raidLockButton:SetBackdropBorderColor(unpack(C.red))
+    end
+    raidLockButton.locked=locked
+  end
+  raidLockButton:SetScript("OnClick",function()
+    Settings().characterRaidLocked=not (Settings().characterRaidLocked~=false)
+    raidMenu:Hide(); difficultyMenu:Hide(); RefreshRaidLock()
+    if Settings().characterRaidLocked then SetStatus("Raid Experience selection locked.") else SetStatus("Raid Experience selection unlocked; choose a raid and difficulty.") end
+  end)
+  raidLockButton:SetScript("OnEnter",function(self)
+    self:SetBackdropColor(unpack(C.hover)); GameTooltip:SetOwner(self,"ANCHOR_RIGHT")
+    GameTooltip:SetText(self.locked and "Unlock Raid Experience" or "Lock Raid Experience",1,.82,0)
+    GameTooltip:AddLine(self.locked and "Allow the raid and difficulty selection to be changed." or "Preserve this selection across targets and reloads.",1,1,1,true); GameTooltip:Show()
+  end)
+  raidLockButton:SetScript("OnLeave",function(self) self:SetBackdropColor(unpack(C.button)); RefreshRaidLock(); GameTooltip:Hide() end)
   local function SelectRaid(raid)
     local settings=Settings(); settings.characterRaid=raid.key
     settings.characterRaidDifficulty=DifficultyDefinition(raid,settings.characterRaidDifficulty).key
@@ -518,12 +648,12 @@ local function BuildCharacter()
   end
   raidButton:SetScript("OnClick",function() difficultyMenu:Hide(); if raidMenu:IsShown() then raidMenu:Hide() else raidMenu:Show(); raidMenu:Raise() end end)
   difficultyButton:SetScript("OnClick",function() raidMenu:Hide(); if difficultyMenu:IsShown() then difficultyMenu:Hide() else OpenDifficultyMenu() end end)
-  RefreshRaidSelectors()
+  RefreshRaidSelectors(); RefreshRaidLock()
 
   local reportScroll=CreateFrame("ScrollFrame","AZERCORE_OPS_CharacterReportScroll",reportPanel,"UIPanelScrollFrameTemplate"); reportScroll:SetPoint("TOPLEFT",8,-8); reportScroll:SetPoint("BOTTOMRIGHT",-28,8); reportScroll:EnableMouseWheel(true)
   characterUI.reportScroll=reportScroll
-  local reportChild=CreateFrame("Frame",nil,reportScroll); reportChild:SetWidth(540); reportChild:SetHeight(360); reportScroll:SetScrollChild(reportChild); characterUI.reportChild=reportChild
-  local reportText=reportChild:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); reportText:SetPoint("TOPLEFT",4,-4); reportText:SetWidth(526); reportText:SetJustifyH("LEFT"); reportText:SetJustifyV("TOP"); reportText:SetWordWrap(true); reportText:SetTextColor(unpack(C.white)); characterUI.reportText=reportText
+  local reportChild=CreateFrame("Frame",nil,reportScroll); reportChild:SetWidth(410); reportChild:SetHeight(360); reportScroll:SetScrollChild(reportChild); characterUI.reportChild=reportChild
+  local reportText=reportChild:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); reportText:SetPoint("TOPLEFT",4,-4); reportText:SetWidth(396); reportText:SetJustifyH("LEFT"); reportText:SetJustifyV("TOP"); reportText:SetWordWrap(true); reportText:SetTextColor(unpack(C.white)); characterUI.reportText=reportText
   reportScroll:SetScript("OnMouseWheel",function(self,delta) self:SetVerticalScroll(math.max(0,self:GetVerticalScroll()-delta*45)) end)
 
   local roleByClass={
@@ -532,30 +662,39 @@ local function BuildCharacter()
     MAGE={"Damage","Damage","Damage"}, WARLOCK={"Damage","Damage","Damage"}, DRUID={"Damage","Tank / Damage","Healer"},
     DEATHKNIGHT={"Tank / Damage","Tank / Damage","Damage"},
   }
-  local function CaptureClientInspection()
+  local talentTreesByClass={
+    WARRIOR={"Arms","Fury","Protection"}, PALADIN={"Holy","Protection","Retribution"}, HUNTER={"Beast Mastery","Marksmanship","Survival"},
+    ROGUE={"Assassination","Combat","Subtlety"}, PRIEST={"Discipline","Holy","Shadow"}, SHAMAN={"Elemental","Enhancement","Restoration"},
+    MAGE={"Arcane","Fire","Frost"}, WARLOCK={"Affliction","Demonology","Destruction"}, DRUID={"Balance","Feral Combat","Restoration"},
+    DEATHKNIGHT={"Blood","Frost","Unholy"},
+  }
+  local function CaptureClientInspection(generation)
+    if generation and generation~=characterUI.inspectionGeneration then return false end
     local unit=CharacterUnit()
     if not UnitExists(unit) or not UnitIsPlayer(unit) then return false end
     local inspectOther=not UnitIsUnit(unit,"player")
     local selectedGuid=UnitGUID(unit)
+    local _,classToken=UnitClass(unit)
     if characterUI.inspectionGuid and selectedGuid~=characterUI.inspectionGuid then return false end
-    characterUI.equipment={}
+    if characterUI.inspectionClassToken and classToken~=characterUI.inspectionClassToken then return false end
+    local candidateEquipment={}
     local equipped=0
     for slotId,slot in pairs(characterUI.equipmentSlots) do
       local link=GetInventoryItemLink(unit,slotId)
       if link then
         local name,_,quality,itemLevel,_,_,_,_,_,texture=GetItemInfo(link)
         quality=quality or 1; itemLevel=tonumber(itemLevel) or 0
-        characterUI.equipment[slotId]={link=link,name=name or link,quality=quality,itemLevel=itemLevel,texture=texture,label=slot.slotLabel}
-        slot.icon:SetTexture(texture or GetInventoryItemTexture(unit,slotId)); slot:SetBackdropBorderColor(GetItemQualityColor(quality)); equipped=equipped+1
-      else
-        slot.icon:SetTexture("Interface\\PaperDoll\\UI-PaperDoll-Slot-"..slot.slotName); slot:SetBackdropBorderColor(unpack(C.border))
+        candidateEquipment[slotId]={link=link,name=name or link,quality=quality,itemLevel=itemLevel,texture=texture or GetInventoryItemTexture(unit,slotId),label=slot.slotLabel}; equipped=equipped+1
       end
     end
+    if inspectOther and equipped==0 then return false end
     local tabs={}; local dominantIndex,dominantPoints=1,-1
+    local expectedTrees=talentTreesByClass[classToken or ""]
     for tabIndex=1,3 do
       local tabName,tabIcon,pointsSpent,background=GetTalentTabInfo(tabIndex,inspectOther,false)
+      if not tabName or (expectedTrees and tabName~=expectedTrees[tabIndex]) then return false end
       pointsSpent=tonumber(pointsSpent) or 0
-      local tab={name=tabName or ("Tree "..tabIndex),icon=tabIcon,points=pointsSpent,background=background,talents={}}
+      local tab={name=tabName,icon=tabIcon,points=pointsSpent,background=background,talents={}}
       if pointsSpent>dominantPoints then dominantIndex,dominantPoints=tabIndex,pointsSpent end
       local count=GetNumTalents(tabIndex,inspectOther,false) or 0
       for talentIndex=1,count do
@@ -565,8 +704,15 @@ local function BuildCharacter()
       end
       tabs[tabIndex]=tab
     end
-    characterUI.talents=tabs
-    local _,classToken=UnitClass(unit); local roles=roleByClass[classToken or ""] or {}
+    if generation and generation~=characterUI.inspectionGeneration then return false end
+    characterUI.equipment=candidateEquipment; characterUI.talents=tabs
+    for slotId,slot in pairs(characterUI.equipmentSlots) do
+      local item=candidateEquipment[slotId]
+      if item then slot.icon:SetTexture(item.texture); slot:SetBackdropBorderColor(GetItemQualityColor(item.quality))
+      else slot.icon:SetTexture("Interface\\PaperDoll\\UI-PaperDoll-Slot-"..slot.slotName); slot:SetBackdropBorderColor(unpack(C.border)) end
+      slot:SetAlpha(1)
+    end
+    local roles=roleByClass[classToken or ""] or {}
     characterUI.detectedRole=dominantPoints>0 and (roles[dominantIndex] or "Damage") or "Unknown"
     characterUI.detectedSpec=dominantPoints>0 and tabs[dominantIndex] and tabs[dominantIndex].name or nil
     if characterUI.roleText then characterUI.roleText:SetText(characterUI.detectedRole..(characterUI.detectedSpec and ("\n|cffaaaaaa"..characterUI.detectedSpec.."|r") or "")) end
@@ -574,11 +720,12 @@ local function BuildCharacter()
       if characterUI.detectedSpec and tabs[dominantIndex] then characterUI.roleIcon:SetTexture(tabs[dominantIndex].icon); characterUI.roleIcon:Show() else characterUI.roleIcon:Hide() end
     end
     characterUI.inspectionState="LOADED"
+    characterUI.inspectionRequestSent=false
     characterUI.inspectedAt=date("%H:%M:%S")
     if characterUI.equipmentSummary then characterUI.equipmentSummary:SetText(string.format("%d / 19 equipped  •  inspected %s",equipped,characterUI.inspectedAt)) end
     if characterUI.equipmentActionStatus then characterUI.equipmentActionStatus:SetText("Inspection loaded for "..tostring(characterUI.inspectionPlayer or UnitName(unit) or "character")) end
     if characterUI.equipmentNotice then characterUI.equipmentNotice:SetText("Mouse over an item for its full tooltip. Inspection follows the selected target automatically.") end
-    if characterUI.equipmentModel then characterUI.equipmentModel:SetUnit(unit) end
+    if characterUI.equipmentModel then characterUI.equipmentModel:SetUnit(unit); After(.05,function() if characterUI.UpdateEquipmentCamera then characterUI.UpdateEquipmentCamera() end end) end
     if characterUI.Render then characterUI.Render() end
     return true
   end
@@ -586,26 +733,35 @@ local function BuildCharacter()
   characterUI.RequestClientInspection=function(manual)
     local unit=CharacterUnit()
     if not UnitExists(unit) or not UnitIsPlayer(unit) then return end
-    characterUI.inspectionPlayer=UnitName(unit); characterUI.inspectionGuid=UnitGUID(unit); characterUI.inspectionState="LOADING"
-    characterUI.equipment={}; characterUI.talents={}; characterUI.detectedRole="Detecting..."; characterUI.detectedSpec=nil
-    for _,slot in pairs(characterUI.equipmentSlots) do slot.icon:SetTexture("Interface\\PaperDoll\\UI-PaperDoll-Slot-"..slot.slotName); slot:SetBackdropBorderColor(unpack(C.border)) end
-    if characterUI.equipmentSummary then characterUI.equipmentSummary:SetText("Loading live equipment...") end
+    characterUI.inspectionGeneration=(characterUI.inspectionGeneration or 0)+1
+    local generation=characterUI.inspectionGeneration
+    characterUI.inspectionPlayer=UnitName(unit); characterUI.inspectionGuid=UnitGUID(unit); characterUI.inspectionClassToken=select(2,UnitClass(unit)); characterUI.inspectionState="LOADING"; characterUI.inspectionRetries=0; characterUI.inspectionRequestSent=false
+    for _,slot in pairs(characterUI.equipmentSlots) do slot:SetAlpha(.38) end
+    if characterUI.equipmentSummary then characterUI.equipmentSummary:SetText("Refreshing "..tostring(characterUI.inspectionPlayer).."...") end
     if characterUI.equipmentActionStatus then characterUI.equipmentActionStatus:SetText((manual and "Refreshing " or "Inspecting ")..tostring(characterUI.inspectionPlayer).."...") end
-    if characterUI.equipmentNotice then characterUI.equipmentNotice:SetText("Requesting inspection data from the selected target...") end
-    if characterUI.roleText then characterUI.roleText:SetText("Detecting...") end
-    if characterUI.roleIcon then characterUI.roleIcon:Hide() end
-    if characterUI.equipmentModel then characterUI.equipmentModel:SetUnit(unit) end
-    if UnitIsUnit(unit,"player") then After(.05,CaptureClientInspection) else NotifyInspect(unit) end
-    After(2,function()
+    if characterUI.equipmentModel then characterUI.equipmentModel:SetUnit(unit); After(.05,function() if generation==characterUI.inspectionGeneration and characterUI.UpdateEquipmentCamera then characterUI.UpdateEquipmentCamera() end end) end
+    local inspectOther=not UnitIsUnit(unit,"player")
+    local inspectionReady=not inspectOther
+    local function Attempt()
+      if generation~=characterUI.inspectionGeneration or characterUI.inspectionState~="LOADING" then return end
       local currentUnit=CharacterUnit()
-      if characterUI.inspectionState=="LOADING" and UnitGUID(currentUnit)==characterUI.inspectionGuid then
-        characterUI.inspectionState="UNAVAILABLE"; characterUI.detectedRole="Unknown"; if characterUI.roleText then characterUI.roleText:SetText("Unknown\n|cffaaaaaaOut of range|r") end
-        if characterUI.equipmentSummary then characterUI.equipmentSummary:SetText("Inspection unavailable") end
-        if characterUI.equipmentActionStatus then characterUI.equipmentActionStatus:SetText("Inspection unavailable — move closer and refresh") end
-        if characterUI.equipmentNotice then characterUI.equipmentNotice:SetText("The target must be nearby, visible, friendly and online. Move closer and press Refresh.") end
+      if UnitGUID(currentUnit)~=characterUI.inspectionGuid then return end
+      if inspectionReady and CaptureClientInspection(generation) then return end
+      inspectionReady=not inspectOther
+      characterUI.inspectionRetries=(characterUI.inspectionRetries or 0)+1
+      if characterUI.inspectionRetries>=4 then
+        characterUI.inspectionState="UNAVAILABLE"
+        for _,slot in pairs(characterUI.equipmentSlots) do slot:SetAlpha(.38) end
+        if characterUI.equipmentSummary then characterUI.equipmentSummary:SetText("Inspection unavailable for "..tostring(characterUI.inspectionPlayer)) end
         if characterUI.Render then characterUI.Render() end
+        return
       end
-    end)
+      if ClearInspectPlayer then ClearInspectPlayer() end
+      characterUI.inspectionRequestSent=true; NotifyInspect(currentUnit); After(1.5,Attempt)
+    end
+    characterUI.OnInspectionReady=function() inspectionReady=true; Attempt() end
+    if not inspectOther then After(.08,Attempt)
+    else if ClearInspectPlayer then ClearInspectPlayer() end; After(.3,function() if generation==characterUI.inspectionGeneration then characterUI.inspectionRequestSent=true; NotifyInspect(CharacterUnit()); After(1.35,Attempt) end end) end
     if characterUI.statusText then characterUI.statusText:SetText((manual and "Refreshing " or "Inspecting ")..tostring(characterUI.inspectionPlayer).."...") end
   end
   characterUI.RefreshInspection=function() characterUI.RequestClientInspection(true) end
@@ -629,15 +785,20 @@ local function BuildCharacter()
     return table.concat(lines,"\n")
   end
 
+  local CharacterViewText
   local function CharacterReport()
     if characterUI.view=="EQUIPMENT" then return EquipmentReport() end
     if characterUI.view=="TALENTS" then return TalentsReport():gsub("|c%x%x%x%x%x%x%x%x",""):gsub("|r","") end
+    if characterUI.view~="OVERVIEW" and CharacterViewText then
+      local target=characterUI.target; local body=CharacterViewText(characterUI.view)
+      return table.concat({"AzerCore Ops — Character "..characterUI.view,"Generated: "..date("%Y-%m-%d %H:%M:%S"),"Target: "..(target and target.name or "None"),"",body or ""},"\n"):gsub("|c%x%x%x%x%x%x%x%x",""):gsub("|r","")
+    end
     local target=characterUI.target
     local lines={"AzerCore Ops — Character Inspector","Generated: "..date("%Y-%m-%d %H:%M:%S"),"Target: "..(target and target.name or "None"),"Detected role: "..(characterUI.detectedRole or "Unknown")..(characterUI.detectedSpec and (" ("..characterUI.detectedSpec..")") or ""),"",characterUI.overviewText:GetText() or "", "",characterUI.stateText:GetText() or "", "",characterUI.locationText:GetText() or "", "",characterUI.contextText:GetText() or ""}
     local server=characterUI.server or {}
     if server.inventory then local r=server.inventory; table.insert(lines,""); table.insert(lines,"INVENTORY SUMMARY"); table.insert(lines,string.format("Bag slots: %s / %s | Equipped: %s | Average item level: %s",r.used or "?",r.capacity or "?",r.equipped or "?",r.average or "?")) end
     if server.professions and #server.professions>0 then table.insert(lines,""); table.insert(lines,"PROFESSIONS"); for _,r in ipairs(server.professions) do table.insert(lines,string.format("%s | %s | %s/%s",r.category or "Skill",r.name or "Unknown",r.value or "?",r.maximum or "?")) end end
-    if server.raid and #server.raid>0 then local raid,difficulty=RefreshRaidSelectors(); table.insert(lines,""); table.insert(lines,"RAID EXPERIENCE — "..raid.name.." — "..difficulty.name.." (LOCKED SELECTION)"); for _,r in ipairs(server.raid) do table.insert(lines,string.format("%s | %s | Achievement %s",r.complete=="1" and "COMPLETED" or "NOT RECORDED",r.section or "Unknown section",r.achievement or "?")) end; table.insert(lines,"Achievement records indicate completion, not mastery of the current role.") end
+    if server.raid and #server.raid>0 then local raid,difficulty=RefreshRaidSelectors(); table.insert(lines,""); table.insert(lines,"RAID EXPERIENCE — "..raid.name.." — "..difficulty.name..(Settings().characterRaidLocked~=false and " (LOCKED)" or " (UNLOCKED)")); for _,r in ipairs(server.raid) do table.insert(lines,string.format("%s | %s | Achievement %s",r.complete=="1" and "COMPLETED" or "NOT RECORDED",r.section or "Unknown section",r.achievement or "?")) end; table.insert(lines,"Achievement records indicate completion, not mastery of the current role.") end
     return table.concat(lines,"\n"):gsub("|c%x%x%x%x%x%x%x%x",""):gsub("|r","")
   end
   local function LogCharacter(action,result)
@@ -648,7 +809,7 @@ local function BuildCharacter()
   characterUI.RequestRaid=function()
     local settings=Settings(); characterUI.server.raid={}; characterUI.server.raidSelection=nil
     SendCommand(string.format(CMD.characterRaid,settings.characterRaid,settings.characterRaidDifficulty))
-    characterUI.statusText:SetText("Loading locked Raid Experience selection for "..tostring(CharacterContextName()).."...")
+    characterUI.statusText:SetText("Loading Raid Experience selection for "..tostring(CharacterContextName()).."...")
   end
   local function SelectedTarget()
     if not UnitExists("target") or not UnitIsPlayer("target") then SetStatus("Select a player before using this Character operation.",true); return end
@@ -660,8 +821,21 @@ local function BuildCharacter()
     local after=function() LogCharacter(label,result); SetStatus(label.." submitted for "..target..". Check the server response for confirmation.") end
     if confirm then Confirm(command,nil,after) else SendCommand(command); after() end
   end
+  local function RefreshOperationButtons()
+    for name,button in pairs(characterUI.buttons) do
+      if name==characterUI.activeOperation and button:IsEnabled() then button:SetBackdropColor(unpack(C.selected)); button:SetBackdropBorderColor(unpack(C.gold))
+      elseif button:IsEnabled() then button:SetBackdropColor(unpack(C.button)); button:SetBackdropBorderColor(unpack(C.border)) end
+    end
+  end
+  characterUI.RefreshOperationButtons=RefreshOperationButtons
   local function OpButton(text,y,click,tip,requiresTarget,gmOnly)
-    local b=Button(operations,text,128,28,click,tip); b:SetPoint("TOPLEFT",10,y); b.requiresTarget=requiresTarget; b.gmOnly=gmOnly; characterUI.buttons[text]=b; return b
+    local b=Button(operations,text,128,28,function()
+      characterUI.activeOperation=text; characterUI.autoInspect=text=="Inspect Character"
+      if characterUI.Update then characterUI.Update() else RefreshOperationButtons() end
+      if click then click() end
+    end,tip); b:SetPoint("TOPLEFT",10,y); b.requiresTarget=requiresTarget; b.gmOnly=gmOnly; characterUI.buttons[text]=b
+    b:SetScript("OnLeave",function(self) RefreshOperationButtons(); GameTooltip:Hide() end)
+    return b
   end
   characterUI.Inspect=function(automatic)
     characterUI.Update(); characterUI.server={professions={},raid={}}
@@ -677,11 +851,7 @@ local function BuildCharacter()
   local inspectOperation=OpButton("Inspect Character",-34,function()
     characterUI.autoInspect=true; characterUI.Inspect(false)
   end,"Automatic Character inspection is active in this workspace. It uses the selected player, or your own character when no player target is selected.",false,false)
-  inspectOperation:SetScript("OnLeave",function(self)
-    if characterUI.autoInspect then self:SetBackdropColor(unpack(C.selected)); self:SetBackdropBorderColor(unpack(C.gold))
-    else self:SetBackdropColor(unpack(C.button)); self:SetBackdropBorderColor(unpack(C.border)) end
-    GameTooltip:Hide()
-  end)
+  inspectOperation:SetScript("OnLeave",function() RefreshOperationButtons(); GameTooltip:Hide() end)
   OpButton("Revive",-70,function() RunTargetCommand("Revive",CMD.revive,true) end,"Revive the explicitly selected player",true,true)
   OpButton("Repair Equipment",-106,function() RunTargetCommand("Repair",CMD.repair,true) end,"Repair the explicitly selected player's equipment",true,true)
   OpButton("Summon",-142,function() RunTargetCommand("Summon",CMD.summon,true) end,"Summon the explicitly selected player to your location",true,true)
@@ -698,20 +868,16 @@ local function BuildCharacter()
     ShowSelectableReport("Character activity and operation output",table.concat(lines,"\n"))
   end,"Review Character operations attempted during this session")
 
-  local footer=CreateFrame("Frame",nil,workspace); footer:SetPoint("BOTTOMLEFT",8,8); footer:SetPoint("BOTTOMRIGHT",-8,8); footer:SetHeight(28); Backdrop(footer,C.bg)
-  characterUI.footer=footer
-  characterUI.statusText=footer:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); characterUI.statusText:SetPoint("LEFT",8,0); characterUI.statusText:SetPoint("RIGHT",-190,0); characterUI.statusText:SetJustifyH("LEFT"); characterUI.statusText:SetTextColor(unpack(C.white))
+  local footer=CreateFrame("Frame",nil,workspace); footer:SetWidth(1); footer:SetHeight(1); footer:Hide(); characterUI.footer=footer
+  characterUI.statusText=footer:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); characterUI.statusText:SetPoint("CENTER"); characterUI.statusText:SetTextColor(unpack(C.white))
   local function CopyCharacterReport() ShowSelectableReport("Copy Character report",CharacterReport()) end
   local function ShareCharacterReport() local text=CharacterReport(); local f=EnsureShareFrame(); f:SetCapturedMessage(text,"CHARACTER",function() return CharacterReport(),"CHARACTER" end); f:Show(); f:Raise(); SetStatus("Courier opened with the Character report.") end
   local function ExportCharacterReport() ShowSelectableReport("Export Character report",CharacterReport()) end
-  Button(footer,"Copy",48,20,CopyCharacterReport,"Open the complete Character report as selectable text"):SetPoint("RIGHT",-128,0)
-  Button(footer,"Share",54,20,ShareCharacterReport,"Open Courier with the Character report"):SetPoint("RIGHT",-70,0)
-  Button(footer,"Export",62,20,ExportCharacterReport,"Export the complete Character report"):SetPoint("RIGHT",-4,0)
-  Button(equipmentActionBar,"Copy",48,20,CopyCharacterReport,"Open the complete Equipment report as selectable text"):SetPoint("RIGHT",-128,0)
-  Button(equipmentActionBar,"Share",54,20,ShareCharacterReport,"Open Courier with the Equipment report"):SetPoint("RIGHT",-70,0)
-  Button(equipmentActionBar,"Export",62,20,ExportCharacterReport,"Export the complete Equipment report"):SetPoint("RIGHT",-4,0)
+  Button(actionBar,"Copy",96,22,CopyCharacterReport,"Copy the currently selected Character workspace"):SetPoint("BOTTOMLEFT",8,62)
+  Button(actionBar,"Share",96,22,ShareCharacterReport,"Share the currently selected Character workspace through Courier"):SetPoint("BOTTOMLEFT",8,35)
+  Button(actionBar,"Export",96,22,ExportCharacterReport,"Export the currently selected Character workspace"):SetPoint("BOTTOMLEFT",8,8)
 
-  local function CharacterViewText(view)
+  CharacterViewText=function(view)
     local s=characterUI.server or {}
     if not characterUI.target then return "Select and inspect a player to load this workspace." end
     if view=="INVENTORY" then
@@ -722,15 +888,15 @@ local function BuildCharacter()
     elseif view=="TALENTS" then
       return TalentsReport()
     elseif view=="PROFESSIONS" then
-      local lines={"|cffffd100PROFESSIONS|r",""}; local rows=s.professions or {}
-      if #rows==0 then table.insert(lines,"No professions were reported. Select Inspect Character to refresh.")
-      else
-        table.sort(rows,function(a,b) if a.category==b.category then return tostring(a.name)<tostring(b.name) end return tostring(a.category)<tostring(b.category) end)
-        for _,r in ipairs(rows) do table.insert(lines,string.format("%-10s  %s — %s / %s",r.category or "Skill",r.name or "Unknown",r.value or "?",r.maximum or "?")) end
+      local lines={"|cffffd100PROFESSIONS|r",""}; local learned={}; for _,record in ipairs(s.professions or {}) do learned[tostring(record.id or "")]=record end
+      for _,category in ipairs({"Primary","Secondary"}) do
+        table.insert(lines,category:upper().." PROFESSIONS")
+        for pass=1,2 do for _,definition in ipairs(professionCatalog) do if definition.category==category then local record=learned[definition.id]; if (pass==1 and record) or (pass==2 and not record) then table.insert(lines,string.format("%-18s  %s",definition.name,record and ((record.value or "?").." / "..(record.maximum or "?")) or "Not learned")) end end end end
+        table.insert(lines,"")
       end
       return table.concat(lines,"\n")
     elseif view=="RAID" then
-      local raid,difficulty=RefreshRaidSelectors(); local lines={"|cffffd100"..raid.name.." — "..difficulty.name.."|r","|cffffff55Selection locked across target changes and reloads.|r","Achievements are evidence of recorded completion; they do not prove mastery of the current role.",""}; local rows=s.raid or {}
+      local raid,difficulty=RefreshRaidSelectors(); local lines={"|cffffd100"..raid.name.." — "..difficulty.name.."|r",Settings().characterRaidLocked~=false and "|cffffff55Selection is locked across target changes and reloads.|r" or "|cffff7777Selection is unlocked and may be changed.|r","Achievements are evidence of recorded completion; they do not prove mastery of the current role.",""}; local rows=s.raid or {}
       if not s.raidSelection then table.insert(lines,"Loading the selected raid experience from the module...")
       elseif #rows==0 then table.insert(lines,"No achievement records are defined for this selection.")
       else for _,r in ipairs(rows) do table.insert(lines,string.format("%s  %s  [Achievement %s]",r.complete=="1" and "|cff55ff55COMPLETED|r" or "|cffaaaaaaNOT RECORDED|r",r.section or "Unknown",r.achievement or "?")) end end
@@ -746,20 +912,21 @@ local function BuildCharacter()
   characterUI.Render=function()
     local overviewMode=characterUI.view=="OVERVIEW"
     local equipmentMode=characterUI.view=="EQUIPMENT"
+    local professionMode=characterUI.view=="PROFESSIONS"
     local raidMode=characterUI.view=="RAID"
     local talentMode=characterUI.view=="TALENTS"
     if raidMode then characterUI.raidControls:Show() else characterUI.raidControls:Hide(); characterUI.raidMenu:Hide(); characterUI.difficultyMenu:Hide() end
     if talentMode then characterUI.talentControls:Show(); characterUI.talentStatus:SetText(characterUI.inspectionState=="LOADED" and ("Live talents inspected at "..tostring(characterUI.inspectedAt or "now")) or "Waiting for live talent inspection...") else characterUI.talentControls:Hide() end
     characterUI.reportScroll:ClearAllPoints(); characterUI.reportScroll:SetPoint("TOPLEFT",8,(raidMode or talentMode) and -48 or -8); characterUI.reportScroll:SetPoint("BOTTOMRIGHT",-28,8)
     for _,panel in ipairs(characterUI.overviewPanels) do if overviewMode then panel:Show() else panel:Hide() end end
-    if equipmentMode then characterUI.reportPanel:Hide(); characterUI.equipmentFrame:Show(); characterUI.footer:Hide()
-    elseif overviewMode then characterUI.reportPanel:Hide(); characterUI.equipmentFrame:Hide()
+    if equipmentMode then characterUI.reportPanel:Hide(); characterUI.professionFrame:Hide(); characterUI.equipmentFrame:Show()
+    elseif professionMode then characterUI.reportPanel:Hide(); characterUI.equipmentFrame:Hide(); characterUI.professionFrame:Show(); if characterUI.RenderProfessions then characterUI.RenderProfessions() end
+    elseif overviewMode then characterUI.reportPanel:Hide(); characterUI.equipmentFrame:Hide(); characterUI.professionFrame:Hide()
     else
-      characterUI.equipmentFrame:Hide()
+      characterUI.equipmentFrame:Hide(); characterUI.professionFrame:Hide()
       characterUI.reportPanel:Show(); local text=CharacterViewText(characterUI.view); characterUI.reportText:SetText(text)
       local lines=1; for _ in text:gmatch("\n") do lines=lines+1 end; local height=math.max(360,lines*16+18); characterUI.reportText:SetHeight(height); characterUI.reportChild:SetHeight(height+8)
     end
-    if not equipmentMode then characterUI.footer:Show() end
     for view,button in pairs(characterUI.viewButtons) do button:SetBackdropColor(unpack(view==characterUI.view and C.selected or C.button)); button:SetBackdropBorderColor(unpack(view==characterUI.view and C.gold or C.border)) end
   end
 
@@ -782,8 +949,7 @@ local function BuildCharacter()
         end
       end
     end
-    local inspectButton=characterUI.buttons["Inspect Character"]
-    if inspectButton and characterUI.autoInspect then inspectButton:SetBackdropColor(unpack(C.selected)); inspectButton:SetBackdropBorderColor(unpack(C.gold)) end
+    if characterUI.RefreshOperationButtons then characterUI.RefreshOperationButtons() end
     local technicalButton=characterUI.viewButtons.TECHNICAL
     if technicalButton then if gmMode then technicalButton:Enable(); technicalButton.disabledReason=nil; technicalButton:SetNormalFontObject(GameFontNormalSmall) else technicalButton:Disable(); technicalButton.disabledReason="Unavailable in Player Mode. Technical Character details require server-authorized GM Mode."; technicalButton:SetNormalFontObject(GameFontDisableSmall); if characterUI.view=="TECHNICAL" then characterUI.view="OVERVIEW" end end end
     if not identityData then
@@ -828,18 +994,166 @@ local function BuildCharacter()
 end
 
 local function BuildNPC()
-  local p=NewPage("NPC"); local h=Label(p,"Creature commands"); h:SetPoint("TOPLEFT",18,-18)
-  local entry=AddField(p,"Creature entry ID",18,-56,145,true)
-  Button(p,"Use Target",120,24,function() local id,err=TargetCreatureEntry(); if not id then SetStatus(err,true); return end; entry:SetText(id); SetStatus("Creature entry: "..id) end,"Read entry ID from selected creature"):SetPoint("TOPLEFT",180,-73)
-  local addNpc=Button(p,"Add NPC",120,24,function() local id=PositiveId(entry,"creature"); if id then SendCommand(string.format(CMD.npcAdd,id)) end end,"Spawn creature at your position"); addNpc:SetPoint("TOPLEFT",315,-73); Platform:RegisterRoleButton(addNpc,"GM_REQUIRED")
-  AddCommandGrid(p,{
-    {"NPC Info",function() SendCommand(CMD.npcInfo) end,"Show selected creature information","GM_REQUIRED"},
-    {"Kill",function() SendCommand(CMD.npcKill) end,"Kill selected unit","GM_REQUIRED"},
-    {"Respawn",function() SendCommand(CMD.npcRespawn) end,"Respawn selected creature","GM_REQUIRED"},
-    {"Move Here",function() Confirm(CMD.npcMove) end,"Move selected spawn to your position","GM_REQUIRED"},
-    {"NPC Near",function() SendCommand(CMD.npcNear) end,"List nearby creature spawns","GM_REQUIRED"},
-    {"Delete NPC",function() Confirm(CMD.npcDelete) end,"Permanently delete selected creature spawn","GM_REQUIRED"},
-  },-130)
+  local p=NewPage("NPC")
+  local header=CreateFrame("Frame",nil,p); header:SetPoint("TOPLEFT",10,-10); header:SetPoint("TOPRIGHT",-10,-10); header:SetHeight(52); Backdrop(header,C.bg)
+  local h=Label(header,"NPC Inspector","GameFontNormalLarge"); h:SetPoint("TOPLEFT",12,-8)
+  local sub=header:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); sub:SetPoint("TOPLEFT",12,-31); sub:SetText("Creature identity, quests, services, location and controlled GM operations")
+
+  local operations=CreateFrame("Frame",nil,p); operations:SetPoint("TOPLEFT",10,-70); operations:SetPoint("BOTTOMLEFT",10,36); operations:SetWidth(148); Backdrop(operations,C.panel)
+  local opTitle=Section(operations,"OPERATIONS",C.gold); opTitle:SetPoint("TOPLEFT",10,-10)
+  local opDefs={
+    {"Inspect NPC",function() Platform.NPCUI.autoInspect=true; Platform.NPCUI.activeOperation="Inspect NPC"; Platform.NPCUI.Inspect(false) end,"Inspect the selected creature and resume automatic target inspection"},
+    {"NPC Info",function() Platform.NPCUI.autoInspect=false; Platform.NPCUI.activeOperation="NPC Info"; SendCommand(CMD.npcInfo) end,"Show the core NPC information command","GM_REQUIRED"},
+    {"Kill",function() Platform.NPCUI.autoInspect=false; Platform.NPCUI.activeOperation="Kill"; Confirm(CMD.npcKill) end,"Kill the selected creature","GM_REQUIRED"},
+    {"Respawn",function() Platform.NPCUI.autoInspect=false; Platform.NPCUI.activeOperation="Respawn"; SendCommand(CMD.npcRespawn) end,"Respawn the selected creature","GM_REQUIRED"},
+    {"Move Here",function() Platform.NPCUI.autoInspect=false; Platform.NPCUI.activeOperation="Move Here"; Confirm(CMD.npcMove) end,"Move the selected spawn to your position","GM_REQUIRED"},
+    {"Summon Here",function() Platform.NPCUI.autoInspect=false; Platform.NPCUI.activeOperation="Summon Here"; SendCommand(CMD.summon) end,"Summon the selected creature to you","GM_REQUIRED"},
+    {"NPC Near",function() Platform.NPCUI.autoInspect=false; Platform.NPCUI.activeOperation="NPC Near"; SendCommand(CMD.npcNear) end,"List nearby creature spawns","GM_REQUIRED"},
+    {"Delete NPC",function() Platform.NPCUI.autoInspect=false; Platform.NPCUI.activeOperation="Delete NPC"; Confirm(CMD.npcDelete) end,"Permanently delete the selected spawn","GM_REQUIRED"},
+  }
+  local function RefreshNPCOperationButtons()
+    for name,button in pairs(Platform.NPCUI.buttons) do
+      if name==Platform.NPCUI.activeOperation and button:IsEnabled() then button:SetBackdropColor(unpack(C.selected)); button:SetBackdropBorderColor(unpack(C.gold))
+      elseif button:IsEnabled() then button:SetBackdropColor(unpack(C.button)); button:SetBackdropBorderColor(unpack(C.border)) end
+    end
+  end
+  Platform.NPCUI.RefreshOperationButtons=RefreshNPCOperationButtons
+  for i,d in ipairs(opDefs) do
+    local operationName,operationClick=d[1],d[2]
+    local b=Button(operations,operationName,128,24,function()
+      Platform.NPCUI.activeOperation=operationName; Platform.NPCUI.autoInspect=operationName=="Inspect NPC"; RefreshNPCOperationButtons(); operationClick()
+    end,d[3]); b:SetPoint("TOPLEFT",10,-30-(i-1)*31); Platform.NPCUI.buttons[operationName]=b
+    b:SetScript("OnLeave",function() RefreshNPCOperationButtons(); GameTooltip:Hide() end)
+    if d[4] then Platform:RegisterRoleButton(b,d[4]) end
+  end
+
+  local body=CreateFrame("Frame",nil,p); body:SetPoint("TOPLEFT",166,-70); body:SetPoint("BOTTOMRIGHT",-10,36); Backdrop(body,C.panel)
+  local identity=CreateFrame("Frame",nil,body); identity:SetPoint("TOPLEFT",8,-8); identity:SetPoint("TOPRIGHT",-8,-8); identity:SetHeight(82); Backdrop(identity,C.bg)
+  local ih=Section(identity,"SELECTED NPC",C.inspect); ih:SetPoint("TOPLEFT",10,-8)
+  local pf=CreateFrame("Frame",nil,identity); pf:SetPoint("TOPLEFT",10,-27); pf:SetSize(44,44); Backdrop(pf,C.panel)
+  local portrait=pf:CreateTexture(nil,"ARTWORK"); portrait:SetPoint("TOPLEFT",3,-3); portrait:SetPoint("BOTTOMRIGHT",-3,3); Platform.NPCUI.portrait=portrait
+  local iname=identity:CreateFontString(nil,"OVERLAY","GameFontNormalLarge"); iname:SetPoint("TOPLEFT",65,-31); iname:SetTextColor(unpack(C.white)); Platform.NPCUI.identityName=iname
+  local imeta=identity:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); imeta:SetPoint("TOPLEFT",65,-54); imeta:SetPoint("RIGHT",-8,0); imeta:SetJustifyH("LEFT"); Platform.NPCUI.identityMeta=imeta
+
+  local action=CreateFrame("Frame",nil,body); action:SetPoint("TOPLEFT",8,-98); action:SetPoint("BOTTOMLEFT",8,8); action:SetWidth(104); Backdrop(action,C.bg)
+  local ah=Section(action,"ACTION BAR",C.gold); ah:SetPoint("TOPLEFT",8,-9)
+  local views={{"Overview","OVERVIEW"},{"Story","STORY"},{"Quests","QUESTS"},{"Services","SERVICES"},{"Spawn","SPAWN"},{"Location","LOCATION"},{"Combat","COMBAT"},{"Loot","LOOT"},{"Technical","TECHNICAL"}}
+
+  local workspace=CreateFrame("Frame",nil,body); workspace:SetPoint("TOPLEFT",120,-98); workspace:SetPoint("BOTTOMRIGHT",-8,8); Backdrop(workspace,C.bg)
+  local wt=Section(workspace,"NPC OVERVIEW",C.inspect); wt:SetPoint("TOPLEFT",10,-10); Platform.NPCUI.workspaceTitle=wt
+  local refresh=Button(workspace,"",23,21,function() Platform.NPCUI.Inspect(false) end,"Refresh the selected NPC")
+  local rt=refresh:CreateTexture(nil,"ARTWORK"); rt:SetTexture("Interface\\Buttons\\UI-RotationRight-Button-Up"); rt:SetPoint("TOPLEFT",2,-2); rt:SetPoint("BOTTOMRIGHT",-2,2); refresh:SetPoint("BOTTOMLEFT",8,7)
+  local help=Button(workspace,"?",22,21,nil,"NPC inspection follows the selected creature automatically while Inspect NPC is active. Shift-click quest and item rows to insert game links into chat."); help:SetPoint("LEFT",refresh,"RIGHT",5,0)
+
+  local scroll=CreateFrame("ScrollFrame","AZERCORE_OPS_NPCScroll",workspace,"UIPanelScrollFrameTemplate"); scroll:SetPoint("TOPLEFT",8,-31); scroll:SetPoint("BOTTOMRIGHT",-29,34)
+  local child=CreateFrame("Frame",nil,scroll); child:SetWidth(380); child:SetHeight(420); scroll:SetScrollChild(child); Platform.NPCUI.textChild=child
+  local text=child:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); text:SetPoint("TOPLEFT",4,-4); text:SetWidth(360); text:SetJustifyH("LEFT"); text:SetJustifyV("TOP"); text:SetTextColor(unpack(C.white)); Platform.NPCUI.text=text
+
+  local modelViewport=CreateFrame("Frame",nil,workspace); modelViewport:SetPoint("TOPLEFT",workspace,"TOP",4,-35); modelViewport:SetPoint("BOTTOMRIGHT",-8,34); Platform.NPCUI.modelViewport=modelViewport
+  local model=CreateFrame("PlayerModel",nil,modelViewport); model:SetAllPoints(modelViewport); model:SetUnit("player"); if model.SetCamDistanceScale then model:SetCamDistanceScale(1) end; model.azerFacing=0; Platform.NPCUI.model=model
+  Button(modelViewport,"<",25,20,function() model.azerFacing=model.azerFacing-.25; model:SetFacing(model.azerFacing) end,"Rotate NPC left"):SetPoint("TOPLEFT",8,-8)
+  Button(modelViewport,">",25,20,function() model.azerFacing=model.azerFacing+.25; model:SetFacing(model.azerFacing) end,"Rotate NPC right"):SetPoint("TOPRIGHT",-8,-8)
+
+  local function QuestLink(q)
+    if GetQuestLink then local link=GetQuestLink(tonumber(q.id)); if link then return link end end
+    return string.format("|cffffff00|Hquest:%d:%d|h[%s]|h|r",tonumber(q.id) or 0,tonumber(q.level) or 0,q.title or ("Quest "..tostring(q.id)))
+  end
+  local function ItemLink(item)
+    local quality=tonumber(item.quality) or 1
+    local color=(ITEM_QUALITY_COLORS and ITEM_QUALITY_COLORS[quality] and ITEM_QUALITY_COLORS[quality].hex) or "ffffffff"
+    color=tostring(color):gsub("^|c","")
+    return string.format("|c%s|Hitem:%d:0:0:0:0:0:0:0|h[%s]|h|r",color,tonumber(item.id) or 0,item.name or ("Item "..tostring(item.id)))
+  end
+  local function InsertLink(link)
+    if not link then return end
+    if HandleModifiedItemClick then HandleModifiedItemClick(link) elseif ChatEdit_InsertLink then ChatEdit_InsertLink(link) end
+  end
+  local function AddLinkedRow(i)
+    local row=Button(child,"",355,24,function(self) if IsShiftKeyDown() and self.link then InsertLink(self.link) end end,"Shift-click to insert this quest link in chat")
+    local rowLabel=row:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); rowLabel:SetPoint("LEFT",7,0); rowLabel:SetPoint("RIGHT",-7,0); rowLabel:SetJustifyH("LEFT"); rowLabel:SetWordWrap(false)
+    row:SetFontString(rowLabel); row:SetPoint("TOPLEFT",2,-2-(i-1)*27); row:Hide(); Platform.NPCUI.questRows[i]=row
+  end
+  for i=1,14 do AddLinkedRow(i) end
+  local function EnsureLinkedRows(count) for i=#Platform.NPCUI.questRows+1,count do AddLinkedRow(i) end end
+
+  local function ServicesText(flags)
+    flags=tonumber(flags) or 0; local names={}
+    local defs={{1,"Gossip"},{2,"Quest giver"},{16,"Trainer"},{32,"Class trainer"},{64,"Profession trainer"},{128,"Vendor"},{256,"Ammo vendor"},{512,"Food vendor"},{1024,"Poison vendor"},{2048,"Reagent vendor"},{4096,"Repair"},{8192,"Flight master"},{16384,"Spirit healer"},{32768,"Spirit guide"},{65536,"Innkeeper"},{131072,"Banker"},{262144,"Petitioner"},{524288,"Tabard designer"},{1048576,"Battlemaster"},{2097152,"Auctioneer"},{4194304,"Stable master"},{16777216,"Guild banker"}}
+    for _,d in ipairs(defs) do if bit.band(flags,d[1])~=0 then table.insert(names,"• "..d[2]) end end
+    return #names>0 and table.concat(names,"\n") or "No standard NPC services are advertised."
+  end
+  local function Report()
+    local s=Platform.NPCUI.server or {}; local o=s.overview or {}; local st=s.state or {}; local l=s.location or {}; local t=s.technical or {}
+    local lines={"AZERCORE OPS — NPC REPORT",string.format("%s  |  Entry %s",s.begin and s.begin.name or UnitName("target") or "No NPC",s.begin and s.begin.entry or "?"),"View: "..Platform.NPCUI.view,""}
+    if Platform.NPCUI.view=="QUESTS" then
+      for _,q in ipairs(s.quests or {}) do table.insert(lines,string.format("[%s] %s (ID %s) — %s / %s%s",q.relation or "?",q.title or "Quest",q.id or "?",q.status or "?",q.eligibility or "?",q.reason and q.reason~="" and (" — "..q.reason) or "")) end
+      if #(s.quests or {})==0 then table.insert(lines,"This NPC has no reported quest relations for this character.") end
+    elseif Platform.NPCUI.view=="STORY" then
+      table.insert(lines,"MY STORY PROGRESS")
+      for _,q in ipairs(s.quests or {}) do table.insert(lines,string.format("[%s] %s — %s%s",q.eligibility or q.status or "?",q.title or ("Quest "..tostring(q.id)),q.relation=="START" and "Begins here" or "Returns here",q.reason and q.reason~="" and (" — "..q.reason) or "")) end
+      if #(s.quests or {})==0 then table.insert(lines,"No quest chapters are connected to this NPC for the current character.") end
+      table.insert(lines,""); table.insert(lines,"DATABASE NARRATIVE")
+      local labels={GOSSIP="Introduction / gossip",GOSSIP_OPTION="Conversation option",SPOKEN_LINE="Spoken line",QUEST_DETAILS="Quest story",QUEST_OBJECTIVES="Quest objectives",QUEST_REQUEST="Quest progress dialogue",QUEST_REWARD="Quest completion dialogue",QUEST_COMPLETED="Completed text"}
+      local previous
+      for _,story in ipairs(s.story or {}) do
+        local key=tostring(story.category or "STORY")..":"..tostring(story.id or "0")..":"..tostring(story.title or "")
+        if story.part=="1" or key~=previous then table.insert(lines,""); table.insert(lines,string.format("%s — %s%s",labels[story.category] or story.category or "Story",story.title or "NPC",story.id and story.id~="0" and (" ["..story.id.."]") or "")) end
+        table.insert(lines,story.text or ""); previous=key
+      end
+      if #(s.story or {})==0 then table.insert(lines,"No database storyline was found for this NPC.") end
+    elseif Platform.NPCUI.view=="SERVICES" then table.insert(lines,ServicesText(o.npcflags))
+    elseif Platform.NPCUI.view=="LOCATION" or Platform.NPCUI.view=="SPAWN" then table.insert(lines,string.format("Map %s  Zone %s  Area %s\nInstance %s  Phase %s\nPosition %s, %s, %s  Orientation %s",l.map or "?",l.zone or "?",l.area or "?",l.instance or "?",l.phase or "?",l.x or "?",l.y or "?",l.z or "?",l.o or "?"))
+    elseif Platform.NPCUI.view=="COMBAT" then table.insert(lines,string.format("Alive: %s\nIn combat: %s\nHealth: %s / %s\nPower: %s / %s (type %s)",st.alive=="1" and "Yes" or "No",st.combat=="1" and "Yes" or "No",st.health or "?",st.maxhealth or "?",st.power or "?",st.maxpower or "?",st.powertype or "?"))
+    elseif Platform.NPCUI.view=="LOOT" then
+      table.insert(lines,string.format("Creature loot template: %s\nPickpocket loot template: %s\nSkinning loot template: %s\nMoney: %s–%s copper",t.loot or "0",t.pickpocket or "0",t.skin or "0",t.mingold or "0",t.maxgold or "0"))
+      for _,item in ipairs(s.loot or {}) do table.insert(lines,string.format("%s (ID %s) — %s%%, %s–%s%s",item.name or "Item",item.id or "?",item.chance or "?",item.min or "?",item.max or "?",item.quest=="1" and " — quest item" or "")) end
+    elseif Platform.NPCUI.view=="TECHNICAL" then table.insert(lines,string.format("GUID: %s\nEntry: %s\nFaction template: %s\nNPC flags: %s\nUnit flags: %s\nDynamic flags: %s\nAI: %s\nScript ID: %s",s.begin and s.begin.guid or "?",s.begin and s.begin.entry or "?",o.faction or "?",o.npcflags or "?",t.unitflags or "?",t.dynamicflags or "?",t.ai or "None",t.script or "0"))
+    else table.insert(lines,string.format("Level: %s (template %s–%s)\nRank: %s  Type: %s  Family: %s\nQuest relations: %d\n\nSelect another Action Bar view for detailed information.",o.level or UnitLevel("target") or "?",o.min or "?",o.max or "?",o.rank or "?",o.type or "?",o.family or "?",#(s.quests or {}))) end
+    return table.concat(lines,"\n")
+  end
+  Platform.NPCUI.Report=Report
+  Platform.NPCUI.Render=function()
+    local s=Platform.NPCUI.server or {}; local title={OVERVIEW="NPC OVERVIEW",STORY="NPC STORY",QUESTS="QUEST INTELLIGENCE",SERVICES="SERVICES",SPAWN="SPAWN INFORMATION",LOCATION="LOCATION",COMBAT="COMBAT STATE",LOOT="LOOT",TECHNICAL="TECHNICAL"}
+    wt:SetText(title[Platform.NPCUI.view] or "NPC")
+    for key,button in pairs(Platform.NPCUI.viewButtons) do
+      if key==Platform.NPCUI.view then button:SetBackdropColor(unpack(C.selected)); button:SetBackdropBorderColor(unpack(C.gold))
+      else button:SetBackdropColor(unpack(C.button)); button:SetBackdropBorderColor(unpack(C.border)) end
+    end
+    if Platform.NPCUI.view=="OVERVIEW" then modelViewport:Show(); scroll:Hide() else modelViewport:Hide(); scroll:Show() end
+    for _,row in ipairs(Platform.NPCUI.questRows) do row:Hide() end
+    if Platform.NPCUI.view=="QUESTS" then
+      text:SetText("")
+      EnsureLinkedRows(#(s.quests or {}))
+      for i,q in ipairs(s.quests or {}) do local row=Platform.NPCUI.questRows[i]; if row then row.link=QuestLink(q); row:SetText(string.format("%s  [%s]  %s — %s",q.relation or "?",q.eligibility or "?",q.title or ("Quest "..q.id),q.reason or "")); row:Show() end end
+      child:SetHeight(math.max(360,#(s.quests or {})*27+8))
+    elseif Platform.NPCUI.view=="LOOT" and #(s.loot or {})>0 then
+      text:SetText("")
+      EnsureLinkedRows(#(s.loot or {}))
+      for i,item in ipairs(s.loot or {}) do local row=Platform.NPCUI.questRows[i]; if row then row.link=ItemLink(item); row:SetText(string.format("%s  —  %s%%  •  %s–%s%s",item.name or ("Item "..tostring(item.id)),item.chance or "?",item.min or "?",item.max or "?",item.quest=="1" and "  •  Quest" or "")); row:Show() end end
+      child:SetHeight(math.max(360,#(s.loot or {})*27+8))
+    else text:SetText(Report()); child:SetHeight(math.max(360,text:GetStringHeight()+16)) end
+  end
+  for i,d in ipairs(views) do
+    local viewLabel,viewKey=d[1],d[2]
+    local b=Button(action,viewLabel,88,22,function() Platform.NPCUI.view=viewKey; Platform.NPCUI.Render() end,"Open the NPC "..viewLabel.." workspace"); b:SetPoint("TOPLEFT",8,-29-(i-1)*27); Platform.NPCUI.viewButtons[viewKey]=b
+    b:SetScript("OnLeave",function() if Platform.NPCUI.Render then Platform.NPCUI.Render() end; GameTooltip:Hide() end)
+  end
+  Button(action,"Copy",88,22,function() ShowSelectableReport("Copy NPC report",Report()) end,"Copy the active NPC workspace report"):SetPoint("BOTTOMLEFT",8,61)
+  Button(action,"Share",88,22,function() local f=EnsureShareFrame(); f:SetCapturedMessage(Report(),"NPC",function() return Report(),"NPC" end); f:Show(); f:Raise() end,"Share the active NPC workspace report"):SetPoint("BOTTOMLEFT",8,34)
+  Button(action,"Export",88,22,function() ShowSelectableReport("Export NPC report",Report()) end,"Export the active NPC workspace report"):SetPoint("BOTTOMLEFT",8,7)
+
+  Platform.NPCUI.Update=function()
+    local valid=UnitExists("target") and not UnitIsPlayer("target")
+    local name=valid and UnitName("target") or "No creature selected"
+    if valid then SetPortraitTexture(portrait,"target"); model:SetUnit("target") else portrait:SetTexture("Interface\\Icons\\INV_Misc_QuestionMark"); model:SetUnit("player") end
+    iname:SetText(name); imeta:SetText(valid and string.format("Level %s %s\n%s",UnitLevel("target") or "?",UnitClassification("target") or "Creature",UnitIsDeadOrGhost("target") and "Dead" or "Alive") or "Select an NPC to inspect its creature data and quest relations.")
+    RefreshNPCOperationButtons(); Platform.NPCUI.Render()
+  end
+  Platform.NPCUI.Inspect=function(silent)
+    local id,err=TargetCreatureEntry(); if not id then if not silent then SetStatus(err,true) end; Platform.NPCUI.Update(); return end
+    Platform.NPCUI.captureEntry=id; Platform.NPCUI.ignoreStream=false; SendCommand(CMD.npcInspect); if silent then SetStatus("Inspecting "..tostring(UnitName("target")).."...") end
+  end
+  Platform.NPCUI.Update()
 end
 
 local resultRows={quest={},item={}}
@@ -848,11 +1162,11 @@ local function RenderResults()
   for i,row in ipairs(rows) do
     local r=lookup.results[i]
     if r then
-      row.id=r.id; row.kind=lookup.kind
+      row.id=r.id; row.kind=lookup.kind; row.result=r
       row.label:SetText(r.link or r.title or (lookup.kind.." "..r.id))
       row:Show()
     else
-      row.id=nil; row.label:SetText(""); row:Hide()
+      row.id=nil; row.result=nil; row.label:SetText(""); row:Hide()
     end
   end
 end
@@ -881,6 +1195,7 @@ local function AddResultsPanel(parent,kind)
   for i=1,5 do
     local row=Button(box,"",458,20,function(self)
       if self.kind=="quest" then questIdBox:SetText(self.id) else itemIdBox:SetText(self.id) end
+      if self.kind=="item" and Platform.ItemUI.Select then Platform.ItemUI.Select(self.id,self.result) end
       SetStatus("Selected "..self.kind.." ID "..self.id)
     end)
     -- Use our own FontString: Button:SetText is unreliable for dynamically
@@ -2090,36 +2405,250 @@ local function BuildQuest()
 end
 
 local function BuildTeleport()
-  local p=NewPage("Teleport"); local h=Label(p,"Teleport tools"); h:SetPoint("TOPLEFT",18,-18)
-  local loc=AddField(p,"Teleport location",18,-56,260,false)
-  local teleportButton=Button(p,"Teleport",120,24,function() local s=NonEmpty(loc,"a teleport location"); if s then SendCommand(string.format(CMD.tele,s)) end end,"Use an AzerothCore teleport name"); teleportButton:SetPoint("TOPLEFT",295,-73); Platform:RegisterRoleButton(teleportButton,"GM_REQUIRED")
-  local playerName=AddField(p,"Player name",18,-125,210,false); playerName.azerCoreOpsExpected="player"; playerName.azerCoreOpsPlain=true
-  Button(p,"Use Target",100,24,function()
-    if UnitExists("target") and UnitIsPlayer("target") then playerName:SetText(UnitName("target") or ""); SetStatus("Selected player "..(UnitName("target") or ""))
-    else SetStatus("Select a player first.",true) end
-  end,"Copy the selected player's name"):SetPoint("TOPLEFT",245,-142)
-  local appearButton=Button(p,"Appear",100,24,function()
-    local name=NonEmpty(playerName,"a player name"); if name then Confirm(CMD.appear.." "..name) end
-  end,"Teleport to the named player"); appearButton:SetPoint("TOPLEFT",355,-142); Platform:RegisterRoleButton(appearButton,"GM_REQUIRED")
-  local summonButton=Button(p,"Summon",100,24,function()
-    local name=NonEmpty(playerName,"a player name"); if name then Confirm(CMD.summon.." "..name) end
-  end,"Summon the named player to you"); summonButton:SetPoint("TOPLEFT",465,-142); Platform:RegisterRoleButton(summonButton,"GM_REQUIRED")
-  AddCommandGrid(p,{
-    {"GPS",function() SendCommand(CMD.gps) end,"Show map and coordinates","GM_REQUIRED"},
-    {"Appear Target",function() if UnitExists("target") and UnitIsPlayer("target") then Confirm(CMD.appear) else SetStatus("Select a player first.",true) end end,"Teleport to selected player","GM_REQUIRED"},
-    {"Summon Target",function() if UnitExists("target") and UnitIsPlayer("target") then Confirm(CMD.summon) else SetStatus("Select a player first.",true) end end,"Summon selected player","GM_REQUIRED"},
-  },-205)
-  local note=Label(p,"Named-player commands are validated by AzerothCore. Confirm cross-map and instance movement before continuing.","GameFontHighlightSmall")
-  note:SetTextColor(unpack(C.white)); note:SetPoint("TOPLEFT",18,-300); note:SetWidth(550); note:SetJustifyH("LEFT")
+  local ui=Platform.MovementUI; AzerCoreOpsDB.movementLocations=AzerCoreOpsDB.movementLocations or {}; ui.saved=AzerCoreOpsDB.movementLocations; ui.serverCatalog=ui.serverCatalog or {}
+  local builtin=(AzerCoreOpsTeleportCatalog and AzerCoreOpsTeleportCatalog.regions) or {}
+  local p=NewPage("Teleport"); local header=CreateFrame("Frame",nil,p); header:SetPoint("TOPLEFT",10,-10); header:SetPoint("TOPRIGHT",-10,-10); header:SetHeight(52); Backdrop(header,C.bg)
+  local h=Label(header,"Movement Control","GameFontNormalLarge"); h:SetPoint("TOPLEFT",12,-8); local sub=header:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); sub:SetPoint("TOPLEFT",12,-31); sub:SetText("Named destinations, personal locations and controlled GM movement")
+  local ops=CreateFrame("Frame",nil,p); ops:SetPoint("TOPLEFT",10,-70); ops:SetPoint("BOTTOMLEFT",10,36); ops:SetWidth(148); Backdrop(ops,C.panel); local ot=Section(ops,"OPERATIONS",C.gold); ot:SetPoint("TOPLEFT",10,-10)
+  local function Op(text,y,fn,tip) local b=Button(ops,text,128,25,fn,tip); b:SetPoint("TOPLEFT",10,y); Platform:RegisterRoleButton(b,"GM_REQUIRED"); return b end
+  Op("Teleport",-31,function() local d=ui.selected; if not d then SetStatus("Select a destination first.",true); return end; Confirm(string.format(CMD.movementGo,d.map,d.x,d.y,d.z,d.o)) end,"Teleport to the selected validated destination")
+  Op("Save My Location",-64,function() ui.savePending=true; SendCommand(CMD.movementCurrent) end,"Capture the current position and give it a personal name")
+  Op("Emergency Return",-97,function() Confirm(CMD.movementReturn) end,"Return to the position recorded before the last custom teleport")
+  Op("GPS",-130,function() SendCommand(CMD.movementCurrent) end,"Load the current structured position")
+  Op("Appear Target",-163,function() if UnitExists("target") and UnitIsPlayer("target") then Confirm(CMD.appear) else SetStatus("Select a player first.",true) end end,"Teleport to the selected player")
+  Op("Summon Target",-196,function() if UnitExists("target") and UnitIsPlayer("target") then Confirm(CMD.summon) else SetStatus("Select a player first.",true) end end,"Summon the selected player")
+  local body=CreateFrame("Frame",nil,p); body:SetPoint("TOPLEFT",166,-70); body:SetPoint("BOTTOMRIGHT",-10,36); Backdrop(body,C.panel)
+  local identity=CreateFrame("Frame",nil,body); identity:SetPoint("TOPLEFT",8,-8); identity:SetPoint("TOPRIGHT",-8,-8); identity:SetHeight(72); Backdrop(identity,C.bg); local it=Section(identity,"SELECTED DESTINATION",C.inspect); it:SetPoint("TOPLEFT",10,-8)
+  local iname=identity:CreateFontString(nil,"OVERLAY","GameFontNormalLarge"); iname:SetPoint("TOPLEFT",10,-30); iname:SetText("No destination selected"); local imeta=identity:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); imeta:SetPoint("TOPLEFT",10,-53); imeta:SetPoint("RIGHT",-8,0); ui.nameText=iname; ui.metaText=imeta
+  local action=CreateFrame("Frame",nil,body); action:SetPoint("TOPLEFT",8,-88); action:SetPoint("BOTTOMLEFT",8,8); action:SetWidth(104); Backdrop(action,C.bg); local at=Section(action,"ACTION BAR",C.gold); at:SetPoint("TOPLEFT",8,-9)
+  local work=CreateFrame("Frame",nil,body); work:SetPoint("TOPLEFT",120,-88); work:SetPoint("BOTTOMRIGHT",-8,8); Backdrop(work,C.bg); local wt=Section(work,"DESTINATIONS",C.inspect); wt:SetPoint("TOPLEFT",10,-10)
+  local regionButton=Button(work,"Select region v",120,24,nil,"Choose a continent, instance group, battleground group, or server catalogue"); regionButton:SetPoint("TOPLEFT",10,-32)
+  local zoneButton=Button(work,"Select zone v",138,24,nil,"Choose a zone or instance"); zoneButton:SetPoint("LEFT",regionButton,"RIGHT",6,0)
+  local destinationButton=Button(work,"Select destination v",158,24,nil,"Choose a named destination"); destinationButton:SetPoint("LEFT",zoneButton,"RIGHT",6,0)
+  local menu=CreateFrame("Frame",nil,work); menu:SetWidth(210); menu:SetHeight(280); menu:SetPoint("TOPLEFT",regionButton,"BOTTOMLEFT",0,-2); menu:SetFrameStrata("FULLSCREEN_DIALOG"); menu:SetFrameLevel(260); Backdrop(menu,C.panel); menu:Hide(); ui.menu=menu
+  local text=work:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); text:SetPoint("TOPLEFT",10,-72); text:SetPoint("BOTTOMRIGHT",-10,10); text:SetJustifyH("LEFT"); text:SetJustifyV("TOP"); text:SetTextColor(unpack(C.white)); ui.text=text
+  menu:ClearAllPoints(); menu:SetPoint("TOPLEFT",regionButton,"BOTTOMLEFT",0,-2); menu:EnableMouseWheel(true)
+  local menuButtons={}; for i=1,10 do local b=Button(menu,"",200,22,nil); b:SetPoint("TOPLEFT",5,-5-(i-1)*24); b:Hide(); menuButtons[i]=b end
+  local menuPage=menu:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); menuPage:SetPoint("BOTTOM",0,7); menuPage:SetTextColor(unpack(C.muted))
+  local menuEntries,menuSelect,menuOffset={},{},0
+  local function RenderMenu()
+    local maxOffset=math.max(0,#menuEntries-#menuButtons); menuOffset=math.max(0,math.min(menuOffset,maxOffset))
+    for i,b in ipairs(menuButtons) do local entry=menuEntries[menuOffset+i]; if entry then b:SetText(entry.label); b:SetScript("OnClick",function() menu:Hide(); menuSelect(entry) end); b:Show() else b:Hide() end end
+    menuPage:SetText(#menuEntries>#menuButtons and string.format("%d-%d of %d  •  mouse wheel",menuOffset+1,math.min(menuOffset+#menuButtons,#menuEntries),#menuEntries) or tostring(#menuEntries).." entries")
+  end
+  local function ShowMenu(anchor,entries,onSelect)
+    if #entries==0 then SetStatus("No entries are available for this selection.",true); return end
+    menuEntries=entries; menuSelect=onSelect; menuOffset=0; menu:ClearAllPoints(); menu:SetPoint("TOPLEFT",anchor,"BOTTOMLEFT",0,-2); RenderMenu(); menu:Show()
+  end
+  menu:SetScript("OnMouseWheel",function(_,delta) if #menuEntries>#menuButtons then menuOffset=menuOffset-(delta>0 and 1 or -1); RenderMenu() end end)
+  local function ServerRegion()
+    local zonesByName,zoneNames={},{}
+    for _,destination in ipairs(ui.serverCatalog or {}) do
+      local zone=destination.category or "Instances / Other"; if not zonesByName[zone] then zonesByName[zone]={}; table.insert(zoneNames,zone) end; table.insert(zonesByName[zone],destination)
+    end
+    if #zoneNames==0 then return nil end
+    table.sort(zoneNames); local zones={}; for _,name in ipairs(zoneNames) do table.sort(zonesByName[name],function(a,b) return a.name<b.name end); table.insert(zones,{name=name,destinations=zonesByName[name],source="AzerothCore game_tele"}) end
+    return {key="SERVER",name="Server Teleports",zones=zones,source="AzerothCore game_tele"}
+  end
+  ui.RefreshCatalog=function()
+    ui.regions={}; for _,region in ipairs(builtin) do table.insert(ui.regions,region) end; local server=ServerRegion(); if server then table.insert(ui.regions,server) end
+  end
+  local function ResetSelectors()
+    ui.selectedRegion=nil; ui.selectedZone=nil; ui.selected=nil; regionButton:SetText(ui.view=="MY_LOCATIONS" and "My Locations" or "Select region v"); zoneButton:SetText(ui.view=="MY_LOCATIONS" and "Personal" or "Select zone v"); destinationButton:SetText("Select destination v")
+  end
+  regionButton:SetScript("OnClick",function()
+    if ui.view=="MY_LOCATIONS" then SetStatus("Personal locations are already selected."); return end
+    local entries={}; for _,region in ipairs(ui.regions or {}) do table.insert(entries,{label=region.name,data=region}) end
+    ShowMenu(regionButton,entries,function(e) ui.selectedRegion=e.data; ui.selectedZone=nil; ui.selected=nil; regionButton:SetText(e.label.." v"); zoneButton:SetText("Select zone v"); destinationButton:SetText("Select destination v"); ui.Render() end)
+  end)
+  zoneButton:SetScript("OnClick",function()
+    if ui.view=="MY_LOCATIONS" then SetStatus("Personal locations use the saved zone."); return end
+    if not ui.selectedRegion then SetStatus("Select a region first.",true); return end
+    local entries={}; for _,zone in ipairs(ui.selectedRegion.zones or {}) do table.insert(entries,{label=zone.name,data=zone}) end
+    ShowMenu(zoneButton,entries,function(e) ui.selectedZone=e.data; ui.selected=nil; zoneButton:SetText(e.label.." v"); destinationButton:SetText("Select destination v"); ui.Render() end)
+  end)
+  destinationButton:SetScript("OnClick",function()
+    local entries={}
+    if ui.view=="MY_LOCATIONS" then for _,destination in ipairs(ui.saved or {}) do table.insert(entries,{label=destination.name,data=destination}) end
+    elseif ui.selectedZone then for _,destination in ipairs(ui.selectedZone.destinations or {}) do table.insert(entries,{label=destination.name,data=destination}) end
+    else SetStatus("Select a region and zone first.",true); return end
+    ShowMenu(destinationButton,entries,function(e)
+      local destination=e.data; ui.selected={id=destination.id,name=destination.name,map=tonumber(destination.map),x=tonumber(destination.x),y=tonumber(destination.y),z=tonumber(destination.z),o=tonumber(destination.o) or 0,region=ui.selectedRegion and ui.selectedRegion.name or destination.region or "My Locations",zone=ui.selectedZone and ui.selectedZone.name or destination.zone or "Personal",source=destination.source or (ui.selectedRegion and ui.selectedRegion.source) or "AzerothAdmin"}; destinationButton:SetText(e.label.." v"); ui.Render()
+    end)
+  end)
+  StaticPopupDialogs["AZERCORE_OPS_SAVE_LOCATION"]={text="Save current location\nDetected zone: %s\n\nEnter a personal name:",button1=SAVE,button2=CANCEL,hasEditBox=1,maxLetters=60,timeout=0,whileDead=1,hideOnEscape=1,OnShow=function(self) self.editBox:SetText((GetSubZoneText and GetSubZoneText()~="" and GetSubZoneText()) or (GetZoneText and GetZoneText()) or "Saved Location"); self.editBox:HighlightText() end,OnAccept=function(self) local c=ui.current; local name=self.editBox:GetText(); if c and name and name~="" then local saved={name=name,category="My Locations",region="My Locations",map=tonumber(c.map),x=tonumber(c.x),y=tonumber(c.y),z=tonumber(c.z),o=tonumber(c.o),zone=(GetZoneText and GetZoneText()) or tostring(c.zone or "Personal"),area=c.area,source="Personal location"}; table.insert(ui.saved,saved); ui.view="MY_LOCATIONS"; ui.selected=saved; regionButton:SetText("My Locations"); zoneButton:SetText(saved.zone or "Personal"); destinationButton:SetText(name.." v"); ui.Render(); SetStatus("Saved personal location "..name) end end}
+  ui.Report=function() local d=ui.selected; return d and string.format("AZERCORE OPS — MOVEMENT\n%s\n%s → %s\nMap %s\nCoordinates %.3f, %.3f, %.3f\nOrientation %.3f\nSource: %s",d.name,d.region or "Unknown region",d.zone or "Unknown zone",d.map,d.x,d.y,d.z,d.o,d.source or "Unknown") or "AZERCORE OPS — MOVEMENT\nNo destination selected." end
+  ui.Render=function() wt:SetText(ui.view=="MY_LOCATIONS" and "MY LOCATIONS" or ui.view=="SHARING" and "LOCATION SHARING — DISABLED" or "DESTINATIONS"); local d=ui.selected; iname:SetText(d and d.name or "No destination selected"); imeta:SetText(d and string.format("%s → %s • Map %s • %.2f, %.2f, %.2f",d.region or "Unknown",d.zone or "Unknown",d.map,d.x,d.y,d.z) or "Choose a region, zone and destination."); if ui.view=="SHARING" then text:SetText("Location sharing is disabled in this release.\n\nThe addon and module will not send, receive, publish or group-teleport shared coordinates.") elseif d then text:SetText(ui.Report()) else local count=AzerCoreOpsTeleportCatalog and AzerCoreOpsTeleportCatalog.metadata and AzerCoreOpsTeleportCatalog.metadata.count or 0; text:SetText(string.format("Select a region, then a zone, then a destination.\n\n%d validated built-in destinations are ready.%s\n\nPersonal locations are stored per character. The module records an emergency return point before every custom teleport.",count,ui.loading and " Server teleports are still loading." or "")) end end
+  local views={{"Destinations","DESTINATIONS"},{"My Locations","MY_LOCATIONS"},{"Player","PLAYER"},{"Current","CURRENT"},{"History","HISTORY"},{"Sharing","SHARING"}}; for i,d in ipairs(views) do local label,key=d[1],d[2]; local b=Button(action,label,88,22,function() ui.view=key; ResetSelectors(); ui.Render() end); b:SetPoint("TOPLEFT",8,-29-(i-1)*27) end
+  Button(action,"Copy",88,22,function() ShowSelectableReport("Copy Movement report",ui.Report()) end):SetPoint("BOTTOMLEFT",8,61); Button(action,"Share",88,22,function() SetStatus("Location sharing is disabled in this release.",true) end):SetPoint("BOTTOMLEFT",8,34); Button(action,"Export",88,22,function() ShowSelectableReport("Export Movement report",ui.Report()) end):SetPoint("BOTTOMLEFT",8,7)
+  ui.OnCurrent=function(f) ui.current=f; if ui.savePending then ui.savePending=false; StaticPopup_Show("AZERCORE_OPS_SAVE_LOCATION",tostring(f.zone or "Unknown")) else ui.view="CURRENT"; ui.selected={name="Current Location",region="Current",zone="Zone "..tostring(f.zone or "Unknown"),source="AzerothCore",map=tonumber(f.map),x=tonumber(f.x),y=tonumber(f.y),z=tonumber(f.z),o=tonumber(f.o)}; ui.Render() end end
+  ui.RefreshCatalog(); ui.loading=true; SendCommand(CMD.movementCatalog); ui.Render()
 end
 
 local function BuildItem()
-  local p=NewPage("Item"); local titleBox=AddField(p,"Item name",18,-18,300,false); titleBox.azerCoreOpsExpected="item"; titleBox.azerCoreOpsPlain=true
-  Button(p,"Lookup",110,24,function() local s=NonEmpty(titleBox,"an item name"); if s then BeginLookup("item",string.format(CMD.itemLookup,s)) end end,"Search the server item database"):SetPoint("TOPLEFT",334,-35)
-  itemIdBox=AddField(p,"Item ID",18,-78,110,true); itemIdBox.azerCoreOpsExpected="item"; local count=AddField(p,"Quantity",145,-78,80,true); count:SetText("1")
-  local addItem=Button(p,"Add Item",105,24,function() local id=PositiveId(itemIdBox,"item"); local n=PositiveId(count,"quantity"); if id and n then SendCommand(string.format(CMD.itemAdd,id,n)) end end); addItem:SetPoint("TOPLEFT",245,-95); Platform:RegisterRoleButton(addItem,"GM_REQUIRED")
-  local removeItem=Button(p,"Remove",105,24,function() local id=PositiveId(itemIdBox,"item"); local n=PositiveId(count,"quantity"); if id and n then Confirm(string.format(CMD.itemRemove,id,n)) end end); removeItem:SetPoint("TOPLEFT",365,-95); Platform:RegisterRoleButton(removeItem,"GM_REQUIRED")
-  AddResultsPanel(p,"item")
+  local itemUI=Platform.ItemUI
+  local p=NewPage("Item")
+  local header=CreateFrame("Frame",nil,p); header:SetPoint("TOPLEFT",10,-10); header:SetPoint("TOPRIGHT",-10,-10); header:SetHeight(52); Backdrop(header,C.bg)
+  local h=Label(header,"Item Inspector","GameFontNormalLarge"); h:SetPoint("TOPLEFT",12,-8)
+  local sub=header:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); sub:SetPoint("TOPLEFT",12,-31); sub:SetText("Item search, wearable preview, properties and controlled inventory operations")
+
+  local operations=CreateFrame("Frame",nil,p); operations:SetPoint("TOPLEFT",10,-70); operations:SetPoint("BOTTOMLEFT",10,36); operations:SetWidth(148); Backdrop(operations,C.panel)
+  local opTitle=Section(operations,"OPERATIONS",C.gold); opTitle:SetPoint("TOPLEFT",10,-10)
+  local nameLabel=Section(operations,"ITEM NAME",C.gold); nameLabel:SetPoint("TOPLEFT",10,-34)
+  local titleBox=Edit(operations,128,false); titleBox:SetPoint("TOPLEFT",10,-51); titleBox.azerCoreOpsExpected="item"; titleBox.azerCoreOpsPlain=true
+  local lookupButton=Button(operations,"Lookup",128,24,function() local s=NonEmpty(titleBox,"an item name"); if s then itemUI.selected=nil; itemUI.view="OVERVIEW"; itemUI.Render(); BeginLookup("item",string.format(CMD.itemLookup,s)) end end,"Search the server item database"); lookupButton:SetPoint("TOPLEFT",10,-80)
+  local idLabel=Section(operations,"ITEM ID",C.gold); idLabel:SetPoint("TOPLEFT",10,-116)
+  itemIdBox=Edit(operations,76,true); itemIdBox:SetPoint("TOPLEFT",10,-133); itemIdBox.azerCoreOpsExpected="item"
+  local quantityLabel=Section(operations,"QTY",C.gold); quantityLabel:SetPoint("TOPLEFT",94,-116)
+  local count=Edit(operations,44,true); count:SetPoint("TOPLEFT",94,-133); count:SetText("1")
+  local previewButton=Button(operations,"Inspect Item",128,24,function() local id=PositiveId(itemIdBox,"item"); if id then itemUI.Select(id) end end,"Load the entered item into the Item Inspector"); previewButton:SetPoint("TOPLEFT",10,-164)
+  local addItem=Button(operations,"Add Item",128,24,function() local id=PositiveId(itemIdBox,"item"); local n=PositiveId(count,"quantity"); if id and n then SendCommand(string.format(CMD.itemAdd,id,n)) end end,"Add the selected quantity to your inventory"); addItem:SetPoint("TOPLEFT",10,-195); Platform:RegisterRoleButton(addItem,"GM_REQUIRED")
+  local removeItem=Button(operations,"Remove Item",128,24,function() local id=PositiveId(itemIdBox,"item"); local n=PositiveId(count,"quantity"); if id and n then Confirm(string.format(CMD.itemRemove,id,n)) end end,"Remove the selected quantity from your inventory"); removeItem:SetPoint("TOPLEFT",10,-226); Platform:RegisterRoleButton(removeItem,"GM_REQUIRED")
+
+  local body=CreateFrame("Frame",nil,p); body:SetPoint("TOPLEFT",166,-70); body:SetPoint("BOTTOMRIGHT",-10,36); Backdrop(body,C.panel)
+  local identity=CreateFrame("Frame",nil,body); identity:SetPoint("TOPLEFT",8,-8); identity:SetPoint("TOPRIGHT",-8,-8); identity:SetHeight(82); Backdrop(identity,C.bg)
+  local identityTitle=Section(identity,"SELECTED ITEM",C.inspect); identityTitle:SetPoint("TOPLEFT",10,-8)
+  local iconFrame=CreateFrame("Frame",nil,identity); iconFrame:SetPoint("TOPLEFT",10,-27); iconFrame:SetWidth(44); iconFrame:SetHeight(44); Backdrop(iconFrame,C.panel)
+  local icon=iconFrame:CreateTexture(nil,"ARTWORK"); icon:SetPoint("TOPLEFT",3,-3); icon:SetPoint("BOTTOMRIGHT",-3,3); icon:SetTexture("Interface\\Icons\\INV_Misc_QuestionMark"); itemUI.icon=icon
+  local selectedName=identity:CreateFontString(nil,"OVERLAY","GameFontNormalLarge"); selectedName:SetPoint("TOPLEFT",65,-31); selectedName:SetTextColor(unpack(C.white)); selectedName:SetText("No item selected"); itemUI.nameText=selectedName
+  local selectedMeta=identity:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); selectedMeta:SetPoint("TOPLEFT",65,-54); selectedMeta:SetPoint("RIGHT",-8,0); selectedMeta:SetJustifyH("LEFT"); selectedMeta:SetText("Search for an item or enter an item ID."); itemUI.metaText=selectedMeta
+
+  local action=CreateFrame("Frame",nil,body); action:SetPoint("TOPLEFT",8,-98); action:SetPoint("BOTTOMLEFT",8,8); action:SetWidth(104); Backdrop(action,C.bg)
+  local actionTitle=Section(action,"ACTION BAR",C.gold); actionTitle:SetPoint("TOPLEFT",8,-9)
+  local workspace=CreateFrame("Frame",nil,body); workspace:SetPoint("TOPLEFT",120,-98); workspace:SetPoint("BOTTOMRIGHT",-8,8); Backdrop(workspace,C.bg)
+  local workspaceTitle=Section(workspace,"ITEM LOOKUP",C.inspect); workspaceTitle:SetPoint("TOPLEFT",10,-10); itemUI.workspaceTitle=workspaceTitle
+
+  local reportScroll=CreateFrame("ScrollFrame","AZERCORE_OPS_ItemScroll",workspace,"UIPanelScrollFrameTemplate"); reportScroll:SetPoint("TOPLEFT",8,-31); reportScroll:SetPoint("BOTTOMRIGHT",-29,8)
+  local reportChild=CreateFrame("Frame",nil,reportScroll); reportChild:SetWidth(380); reportChild:SetHeight(380); reportScroll:SetScrollChild(reportChild)
+  local reportText=reportChild:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); reportText:SetPoint("TOPLEFT",4,-4); reportText:SetWidth(360); reportText:SetJustifyH("LEFT"); reportText:SetJustifyV("TOP"); reportText:SetTextColor(unpack(C.white)); itemUI.reportText=reportText
+
+  local resultsTitle=Section(reportChild,"LOOKUP RESULTS — CLICK AN ITEM TO INSPECT IT",C.gold); resultsTitle:SetPoint("TOPLEFT",4,-4); itemUI.resultsTitle=resultsTitle
+  for i=1,5 do
+    local row=Button(reportChild,"",355,24,function(self) if self.id then itemIdBox:SetText(self.id); itemUI.Select(self.id,self.result) end end,"Select this item and open its preview")
+    local rowLabel=row:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); rowLabel:SetPoint("LEFT",7,0); rowLabel:SetPoint("RIGHT",-7,0); rowLabel:SetJustifyH("LEFT"); row:SetFontString(rowLabel); row.label=rowLabel
+    row:SetPoint("TOPLEFT",4,-25-(i-1)*28); row:Hide(); resultRows.item[i]=row
+  end
+
+  local previewFrame=CreateFrame("Frame",nil,workspace); previewFrame:SetPoint("TOPLEFT",8,-31); previewFrame:SetPoint("BOTTOMRIGHT",-8,8); previewFrame:Hide(); itemUI.previewFrame=previewFrame
+  local model=CreateFrame("DressUpModel",nil,previewFrame); model:SetPoint("TOPLEFT",4,-4); model:SetPoint("BOTTOMRIGHT",-4,4); itemUI.model=model; model.azerFacing=0
+  local fallback=CreateFrame("Frame",nil,previewFrame); fallback:SetPoint("CENTER"); fallback:SetWidth(180); fallback:SetHeight(210); fallback:Hide(); itemUI.fallback=fallback
+  local fallbackIcon=fallback:CreateTexture(nil,"ARTWORK"); fallbackIcon:SetPoint("TOP",0,-12); fallbackIcon:SetWidth(128); fallbackIcon:SetHeight(128); fallbackIcon:SetTexture("Interface\\Icons\\INV_Misc_QuestionMark"); itemUI.fallbackIcon=fallbackIcon
+  local fallbackText=fallback:CreateFontString(nil,"OVERLAY","GameFontHighlight"); fallbackText:SetPoint("TOP",fallbackIcon,"BOTTOM",0,-12); fallbackText:SetWidth(180); fallbackText:SetJustifyH("CENTER"); fallbackText:SetText("No wearable 3D preview"); itemUI.fallbackText=fallbackText
+  Button(previewFrame,"<",26,21,function() model.azerFacing=model.azerFacing-.25; if model.SetFacing then model:SetFacing(model.azerFacing) end end,"Rotate preview left"):SetPoint("TOPLEFT",8,-8)
+  Button(previewFrame,">",26,21,function() model.azerFacing=model.azerFacing+.25; if model.SetFacing then model:SetFacing(model.azerFacing) end end,"Rotate preview right"):SetPoint("TOPRIGHT",-8,-8)
+  Button(previewFrame,"Reset",50,21,function() if itemUI.RefreshPreview then itemUI.RefreshPreview() end end,"Reset the wearable item preview"):SetPoint("BOTTOM",0,7)
+
+  local function ItemLink(item)
+    if not item then return nil end
+    if item.link and item.link:find("|Hitem:") then return item.link end
+    local quality=tonumber(item.quality) or 1; local color=(ITEM_QUALITY_COLORS and ITEM_QUALITY_COLORS[quality] and ITEM_QUALITY_COLORS[quality].hex) or "ffffffff"; color=tostring(color):gsub("^|c","")
+    return string.format("|c%s|Hitem:%d:0:0:0:0:0:0:0|h[%s]|h|r",color,tonumber(item.id) or 0,item.name or ("Item "..tostring(item.id)))
+  end
+  local function QuestLink(id,name)
+    if GetQuestLink then local link=GetQuestLink(tonumber(id)); if link then return link end end
+    return string.format("|cffffff00|Hquest:%d:0|h[%s]|h|r",tonumber(id) or 0,name or ("Quest "..tostring(id)))
+  end
+  local function EnsureItemLinkRows(count)
+    for i=#itemUI.linkRows+1,count do
+      local row=Button(reportChild,"",355,24,function(self) if IsShiftKeyDown() and self.link then if HandleModifiedItemClick then HandleModifiedItemClick(self.link) elseif ChatEdit_InsertLink then ChatEdit_InsertLink(self.link) end end end,"Shift-click linked entries to insert them into chat")
+      local rowLabel=row:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); rowLabel:SetPoint("LEFT",7,0); rowLabel:SetPoint("RIGHT",-7,0); rowLabel:SetJustifyH("LEFT"); rowLabel:SetWordWrap(false); row:SetFontString(rowLabel)
+      row:SetPoint("TOPLEFT",4,-4-(i-1)*27); row:SetScript("OnEnter",function(self) self:SetBackdropColor(unpack(C.hover)); if self.link then GameTooltip:SetOwner(self,"ANCHOR_RIGHT"); GameTooltip:SetHyperlink(self.link); GameTooltip:Show() end end); row:SetScript("OnLeave",function(self) self:SetBackdropColor(unpack(C.button)); GameTooltip:Hide() end); row:Hide(); itemUI.linkRows[i]=row
+    end
+  end
+  iconFrame:EnableMouse(true)
+  iconFrame:SetScript("OnEnter",function() local link=ItemLink(itemUI.selected); if link then GameTooltip:SetOwner(iconFrame,"ANCHOR_RIGHT"); GameTooltip:SetHyperlink(link); GameTooltip:Show() end end)
+  iconFrame:SetScript("OnLeave",function() GameTooltip:Hide() end)
+  iconFrame:SetScript("OnMouseUp",function(_,button) local link=ItemLink(itemUI.selected); if button=="LeftButton" and IsShiftKeyDown() and link then if HandleModifiedItemClick then HandleModifiedItemClick(link) elseif ChatEdit_InsertLink then ChatEdit_InsertLink(link) end end end)
+
+  local equipNames={INVTYPE_HEAD="Head",INVTYPE_NECK="Neck",INVTYPE_SHOULDER="Shoulders",INVTYPE_BODY="Shirt",INVTYPE_CHEST="Chest",INVTYPE_ROBE="Robe",INVTYPE_WAIST="Waist",INVTYPE_LEGS="Legs",INVTYPE_FEET="Feet",INVTYPE_WRIST="Wrist",INVTYPE_HAND="Hands",INVTYPE_FINGER="Finger",INVTYPE_TRINKET="Trinket",INVTYPE_CLOAK="Back",INVTYPE_WEAPON="One-hand weapon",INVTYPE_SHIELD="Shield",INVTYPE_2HWEAPON="Two-hand weapon",INVTYPE_WEAPONMAINHAND="Main-hand weapon",INVTYPE_WEAPONOFFHAND="Off-hand weapon",INVTYPE_HOLDABLE="Held in off-hand",INVTYPE_RANGED="Ranged",INVTYPE_THROWN="Thrown",INVTYPE_RANGEDRIGHT="Ranged",INVTYPE_TABARD="Tabard",INVTYPE_BAG="Bag"}
+  local function Money(copper)
+    copper=tonumber(copper) or 0; return string.format("%dg %ds %dc",math.floor(copper/10000),math.floor((copper%10000)/100),copper%100)
+  end
+  local function ItemReport()
+    local item=itemUI.selected
+    if not item then return "AZERCORE OPS — ITEM REPORT\nNo item selected." end
+    local lines={"AZERCORE OPS — ITEM REPORT",string.format("%s  |  Item ID %s",item.name or "Unknown item",item.id or "?"),"View: "..itemUI.view,""}
+    if itemUI.view=="STATS" then
+      table.insert(lines,"ITEM STATS")
+      local found=false
+      if GetItemStats and item.link then local stats=GetItemStats(item.link); if stats then for stat,value in pairs(stats) do table.insert(lines,string.format("%s: %s",stat,value)); found=true end end end
+      if not found then table.insert(lines,"No numeric item stats are available from the client cache.") end
+    elseif itemUI.view=="CRAFTING" then
+      local server=itemUI.server or {}; table.insert(lines,"CRAFTING METHODS")
+      if #(server.crafts or {})==0 then table.insert(lines,"No crafting method was reported for this item.") end
+      for _,craft in ipairs(server.crafts or {}) do
+        table.insert(lines,string.format("%s — Spell %s\nProfession: %s (%s), required skill %s\nProduces: %s\nResult: %s; probability: %s",craft.spellname or "Craft item",craft.spell or "?",craft.profession or "Unknown",craft.skill or "?",craft.rank or "?",craft.produced or "1",craft.resulttype or "DIRECT",craft.chance or "UNKNOWN"))
+        for _,reagent in ipairs(server.reagents or {}) do if reagent.spell==craft.spell then table.insert(lines,string.format("  Reagent: %sx %s [Item %s]",reagent.count or "?",reagent.name or "Unknown",reagent.id or "?")) end end
+        for _,recipe in ipairs(server.recipes or {}) do if recipe.spell==craft.spell then table.insert(lines,string.format("  Recipe: %s [Item %s]",recipe.name or "Unknown",recipe.id or "?")) end end
+      end
+      if #(server.uses or {})>0 then table.insert(lines,""); table.insert(lines,"USED AS A REAGENT") end
+      for _,use in ipairs(server.uses or {}) do table.insert(lines,string.format("%s — %s skill %s — creates %sx %s [Item %s]",use.spellname or ("Spell "..tostring(use.spell)),use.profession or "Unknown",use.rank or "?",use.count or "1",use.resultname or "Unknown",use.resultid or "?")) end
+    elseif itemUI.view=="SOURCES" then
+      local sources=itemUI.server and itemUI.server.sources or {}; table.insert(lines,"KNOWN SOURCES")
+      if #sources==0 then table.insert(lines,"No vendor, creature-drop or quest-reward source was reported.") end
+      for _,source in ipairs(sources) do table.insert(lines,string.format("%s — %s [%s]%s",source.type or "SOURCE",source.name or "Unknown",source.id or "?",source.detail and source.detail~="" and (" — "..source.detail) or "")) end
+    elseif itemUI.view=="REQUIREMENTS" then
+      table.insert(lines,string.format("Minimum level: %s\nItem level: %s\nEquipment slot: %s\nType: %s\nSubtype: %s",item.minLevel or "0",item.itemLevel or "?",equipNames[item.equipLoc] or item.equipLoc or "Not equippable",item.itemType or "?",item.subType or "?"))
+    elseif itemUI.view=="TECHNICAL" then
+      table.insert(lines,string.format("Item ID: %s\nQuality: %s\nStack size: %s\nEquip location: %s\nTexture: %s\nVendor sell price: %s",item.id or "?",item.quality or "?",item.stack or "?",item.equipLoc~="" and item.equipLoc or "None",item.texture or "?",Money(item.sellPrice)))
+    elseif itemUI.view=="PREVIEW" then table.insert(lines,item.equipLoc and item.equipLoc~="" and "Wearable 3D preview available." or "This item is not wearable; the preview uses its large icon and tooltip.")
+    else table.insert(lines,string.format("Quality: %s\nItem level: %s\nRequired level: %s\nCategory: %s — %s\nStack size: %s\nSell price: %s\n\nShift-click the selected-item icon to insert its item link into chat.",item.quality or "?",item.itemLevel or "?",item.minLevel or "0",item.itemType or "?",item.subType or "?",item.stack or "?",Money(item.sellPrice))) end
+    return table.concat(lines,"\n")
+  end
+  itemUI.Report=ItemReport
+  itemUI.RefreshPreview=function()
+    local item=itemUI.selected; if not item then model:Hide(); fallback:Show(); return end
+    local wearable=item.equipLoc and item.equipLoc~="" and item.equipLoc~="INVTYPE_NON_EQUIP"
+    if wearable and model.TryOn then
+      fallback:Hide(); model:Show(); if model.SetUnit then model:SetUnit("player") end; if model.Undress then model:Undress() end; model:TryOn(ItemLink(item)); if model.SetFacing then model:SetFacing(model.azerFacing or 0) end
+    else model:Hide(); fallback:Show(); fallbackIcon:SetTexture(item.texture or "Interface\\Icons\\INV_Misc_QuestionMark"); fallbackText:SetText("No wearable 3D preview\n|cffaaaaaa"..tostring(item.itemType or "Item").."|r") end
+  end
+  itemUI.Render=function()
+    local titles={OVERVIEW="ITEM OVERVIEW",PREVIEW="ITEM PREVIEW",CRAFTING="CRAFTING",SOURCES="SOURCES",STATS="ITEM STATS",REQUIREMENTS="REQUIREMENTS",TECHNICAL="TECHNICAL"}; workspaceTitle:SetText(titles[itemUI.view] or "ITEM")
+    for key,b in pairs(itemUI.viewButtons) do if key==itemUI.view then b:SetBackdropColor(unpack(C.selected)); b:SetBackdropBorderColor(unpack(C.gold)) else b:SetBackdropColor(unpack(C.button)); b:SetBackdropBorderColor(unpack(C.border)) end end
+    for _,row in ipairs(itemUI.linkRows) do row:Hide() end
+    if itemUI.view=="PREVIEW" then reportScroll:Hide(); previewFrame:Show(); itemUI.RefreshPreview()
+    else previewFrame:Hide(); reportScroll:Show(); local showResults=itemUI.view=="OVERVIEW" and not itemUI.selected
+      if showResults then resultsTitle:Show(); RenderResults() else resultsTitle:Hide(); for _,row in ipairs(resultRows.item) do row:Hide() end end
+      if itemUI.view=="CRAFTING" or itemUI.view=="SOURCES" then
+        reportText:SetText(""); local entries={}; local server=itemUI.server or {}
+        if itemUI.view=="CRAFTING" then
+          for _,craft in ipairs(server.crafts or {}) do
+            table.insert(entries,{text=string.format("%s — %s • skill %s • creates %s • %s%s",craft.spellname or ("Spell "..tostring(craft.spell)),craft.profession or "Unknown profession",craft.rank or "?",craft.produced or "1",craft.resulttype or "DIRECT",craft.chance and craft.chance~="UNKNOWN" and (" • "..craft.chance) or "")})
+            for _,reagent in ipairs(server.reagents or {}) do if reagent.spell==craft.spell then table.insert(entries,{text=string.format("    %sx %s",reagent.count or "?",reagent.name or ("Item "..tostring(reagent.id))),link=ItemLink(reagent)}) end end
+            for _,recipe in ipairs(server.recipes or {}) do if recipe.spell==craft.spell then table.insert(entries,{text="    Recipe: "..tostring(recipe.name or recipe.id),link=ItemLink(recipe)}) end end
+          end
+          if #(server.uses or {})>0 then table.insert(entries,{text="USED AS A REAGENT"}) end
+          for _,use in ipairs(server.uses or {}) do table.insert(entries,{text=string.format("    %s creates %sx %s",use.profession or use.spellname or "Craft",use.count or "1",use.resultname or use.resultid or "Unknown"),link=ItemLink({id=use.resultid,name=use.resultname,quality=1})}) end
+          if #entries==0 then table.insert(entries,{text=itemUI.loading and "Loading crafting information..." or "No crafting method was reported for this item."}) end
+        else
+          for _,source in ipairs(server.sources or {}) do local link=source.type=="QUEST_REWARD" and QuestLink(source.id,source.name) or nil; table.insert(entries,{text=string.format("%s — %s%s",source.type or "SOURCE",source.name or source.id or "Unknown",source.detail and source.detail~="" and (" — "..source.detail) or ""),link=link}) end
+          if #entries==0 then table.insert(entries,{text=itemUI.loading and "Loading item sources..." or "No vendor, creature-drop or quest-reward source was reported."}) end
+        end
+        EnsureItemLinkRows(#entries); for i,entry in ipairs(entries) do local row=itemUI.linkRows[i]; row.link=entry.link; row:SetText(entry.text); row:Show() end; reportChild:SetHeight(math.max(370,#entries*27+10))
+      else
+        if showResults then reportText:SetText("\n\n\n\n\n\nSearch results will appear above. Select a result to inspect and preview it.") else reportText:SetText(ItemReport()) end
+        reportChild:SetHeight(math.max(370,reportText:GetStringHeight()+170))
+      end
+    end
+  end
+  itemUI.Select=function(id,result,retry)
+    id=tonumber(id); if not id then return end
+    local name,link,quality,itemLevel,minLevel,itemType,subType,stack,equipLoc,texture,sellPrice=GetItemInfo(id)
+    local fallbackName=result and result.title or ("Item "..id); link=link or (result and result.link); name=name or fallbackName
+    itemUI.selected={id=id,name=name,link=link,quality=quality,itemLevel=itemLevel,minLevel=minLevel,itemType=itemType,subType=subType,stack=stack,equipLoc=equipLoc or "",texture=texture,sellPrice=sellPrice}
+    if not retry or retry==0 then itemUI.server={crafts={},reagents={},recipes={},sources={},uses={}}; itemUI.captureId=id; itemUI.loading=true; SendCommand(string.format(CMD.itemInspect,id)) end
+    itemIdBox:SetText(id); selectedName:SetText(name); selectedMeta:SetText(string.format("Item ID %d  •  %s%s",id,itemType or "Loading item data",itemLevel and ("  •  Item level "..itemLevel) or "")); icon:SetTexture(texture or "Interface\\Icons\\INV_Misc_QuestionMark")
+    if quality then local r,g,b=GetItemQualityColor(quality); iconFrame:SetBackdropBorderColor(r,g,b) end
+    itemUI.view="PREVIEW"; itemUI.Render(); SetStatus("Selected item "..name.." ["..id.."]")
+    if not link and (retry or 0)<4 then After(.25,function() if itemUI.selected and itemUI.selected.id==id then itemUI.Select(id,result,(retry or 0)+1) end end) end
+  end
+  local views={{"Overview","OVERVIEW"},{"Preview","PREVIEW"},{"Crafting","CRAFTING"},{"Sources","SOURCES"},{"Stats","STATS"},{"Requirements","REQUIREMENTS"},{"Technical","TECHNICAL"}}
+  for i,d in ipairs(views) do local label,key=d[1],d[2]; local b=Button(action,label,88,22,function() itemUI.view=key; itemUI.Render() end,"Open the Item "..label.." workspace"); b:SetPoint("TOPLEFT",8,-29-(i-1)*27); itemUI.viewButtons[key]=b; b:SetScript("OnLeave",function() itemUI.Render(); GameTooltip:Hide() end) end
+  Button(action,"Copy",88,22,function() ShowSelectableReport("Copy Item report",ItemReport()) end,"Copy the active Item report"):SetPoint("BOTTOMLEFT",8,61)
+  Button(action,"Share",88,22,function() local f=EnsureShareFrame(); f:SetCapturedMessage(ItemReport(),"ITEM",function() return ItemReport(),"ITEM" end); f:Show(); f:Raise() end,"Share the active Item report"):SetPoint("BOTTOMLEFT",8,34)
+  Button(action,"Export",88,22,function() ShowSelectableReport("Export Item report",ItemReport()) end,"Export the active Item report"):SetPoint("BOTTOMLEFT",8,7)
+  itemUI.Render(); RenderResults()
 end
 
 local function ParseAuditFields(message)
@@ -2917,6 +3446,7 @@ end
 local function ApplySettings()
   local s=Settings()
   if main then main:SetScale(s.scale or 1) end
+  if characterUI.UpdateEquipmentCamera then characterUI.UpdateEquipmentCamera() end
   if minimapButton then
     minimapButton:SetParent(s.mbfCompatibility and UIParent or Minimap)
     PositionMinimap()
@@ -3270,7 +3800,7 @@ local function BuildInformation()
 
   local credits=CreateFrame("Frame",nil,p); credits:SetPoint("TOPLEFT",18,-431); credits:SetPoint("BOTTOMRIGHT",-389,18); Backdrop(credits,C.panel)
   local ch=Label(credits,"Project & credits"); ch:SetPoint("TOPLEFT",12,-12)
-  local ct=credits:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); ct:SetPoint("TOPLEFT",12,-38); ct:SetPoint("BOTTOMRIGHT",-12,12); ct:SetJustifyH("LEFT"); ct:SetJustifyV("TOP"); ct:SetWordWrap(true); ct:SetTextColor(unpack(C.white)); ct:SetText("AzerCore Ops is an open-source operations platform for AzerothCore administrators and Game Masters.\n\nCreated and maintained by |cffffd100Fernando Santos|r.\n\nBuilt with AzerothCore, mod-playerbots, and AI-assisted development from OpenAI ChatGPT.\n\nLicense: GPL-3.0")
+  local ct=credits:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); ct:SetPoint("TOPLEFT",12,-38); ct:SetPoint("BOTTOMRIGHT",-12,12); ct:SetJustifyH("LEFT"); ct:SetJustifyV("TOP"); ct:SetWordWrap(true); ct:SetTextColor(unpack(C.white)); ct:SetText("AzerCore Ops is an open-source operations platform for AzerothCore administrators and Game Masters.\n\nCreated and maintained by |cffffd100Fernando Santos|r.\n\nBuilt with AzerothCore, mod-playerbots, and AI-assisted development from OpenAI ChatGPT.\n\nMovement destination data adapted from AzerothAdmin (GPLv3), derived from TrinityAdmin/MangAdmin. Our thanks to their contributors and the wider open-source community.\n\nLicense: GPL-3.0")
 
   local resources=CreateFrame("Frame",nil,p); resources:SetPoint("TOPLEFT",389,-431); resources:SetPoint("BOTTOMRIGHT",-18,18); Backdrop(resources,C.panel)
   local rh=Label(resources,"Project resources"); rh:SetPoint("TOPLEFT",12,-12)
@@ -3303,7 +3833,7 @@ local function BuildUI()
       local x,y=GetCursorPosition(); x=x/uiScale; y=y/uiScale
       local delta=((x-grip.startX)/main:GetWidth()+(grip.startY-y)/main:GetHeight())/2
       local value=math.max(.75,math.min(1.35,grip.startScale+delta)); value=math.floor(value*100+.5)/100
-      Settings().scale=value; main:SetScale(value); SetStatus("Window scale: "..math.floor(value*100+.5).."%")
+      Settings().scale=value; main:SetScale(value); if characterUI.UpdateEquipmentCamera then characterUI.UpdateEquipmentCamera() end; SetStatus("Window scale: "..math.floor(value*100+.5).."%")
     end)
   end)
   resizeGrip:SetScript("OnDragStop",function(self)
@@ -3352,12 +3882,19 @@ events:SetScript("OnEvent",function(_,event,arg1)
   elseif event=="PLAYER_ENTERING_WORLD" and not compatibilityRequested then compatibilityRequested=true; SendChatMessage(CMD.version,"SAY")
   elseif event=="UPDATE_INSTANCE_INFO" and activeTab=="Instances" and instanceUI.bindPage and instanceUI.bindPage:IsShown() then RefreshMyInstances()
   elseif event=="INSPECT_TALENT_READY" then
-    if characterUI.CaptureClientInspection and (not arg1 or arg1==characterUI.inspectionGuid) then characterUI.CaptureClientInspection() end
+    if characterUI.inspectionRequestSent and characterUI.OnInspectionReady and (not arg1 or arg1==characterUI.inspectionGuid) then characterUI.OnInspectionReady() end
   elseif event=="PLAYER_TARGET_CHANGED" then
-    characterUI.server={professions={},raid={}}; characterUI.capturePlayer=nil; characterUI.ignoreStream=false; characterUI.inspectionState="UNLOADED"; characterUI.inspectionGuid=nil; characterUI.equipment={}; characterUI.talents={}
+    characterUI.server={professions={},raid={}}; characterUI.capturePlayer=nil; characterUI.ignoreStream=false
+    characterUI.inspectionGeneration=(characterUI.inspectionGeneration or 0)+1; characterUI.inspectionRequestSent=false; characterUI.inspectionState="UNLOADED"; characterUI.inspectionGuid=nil
     if characterUI.Update then characterUI.Update() end
     if activeTab=="Character" and characterUI.autoInspect and characterUI.Inspect then
-      After(.05,function() characterUI.Inspect(true) end)
+      if characterUI.equipmentSummary then characterUI.equipmentSummary:SetText("Target changed — preparing inspection...") end
+      After(.35,function() if activeTab=="Character" and characterUI.autoInspect then characterUI.Inspect(true) end end)
+    end
+    Platform.NPCUI.server={quests={},loot={},story={}}; Platform.NPCUI.captureEntry=nil; Platform.NPCUI.ignoreStream=false
+    if Platform.NPCUI.Update then Platform.NPCUI.Update() end
+    if activeTab=="NPC" and Platform.NPCUI.autoInspect and Platform.NPCUI.Inspect then
+      After(.35,function() if activeTab=="NPC" and Platform.NPCUI.autoInspect then Platform.NPCUI.Inspect(true) end end)
     end
     UpdateInstanceTargetIdentity()
     After(.08,UpdateInstanceTargetIdentity)
@@ -3429,7 +3966,7 @@ events:SetScript("OnEvent",function(_,event,arg1)
       local settings=Settings(); local selected=CharacterContextName()
       if selected==f.player and f.raidkey==settings.characterRaid and f.difficultykey==settings.characterRaidDifficulty then
         characterUI.server.raidSelection=f; if characterUI.Update then characterUI.Update() end
-        characterUI.statusText:SetText("Raid Experience loaded for "..tostring(f.player).."; selection remains locked.")
+        characterUI.statusText:SetText("Raid Experience loaded for "..tostring(f.player)..".")
       end
     elseif kind=="CHARACTER_END" then
       if not characterUI.ignoreStream and f.player==characterUI.capturePlayer then characterUI.Update(); characterUI.Log("Inspect","Authoritative Character data loaded for "..tostring(f.player)); characterUI.statusText:SetText("Module Character data loaded for "..tostring(f.player)) end
@@ -3438,6 +3975,64 @@ events:SetScript("OnEvent",function(_,event,arg1)
       local success=tostring(f.result):upper()=="SUCCESS"; characterUI.Log("Save Target",tostring(f.result).." — "..tostring(f.player)..": "..tostring(f.reason)); SetStatus((success and "Target saved: " or "Target save failed: ")..tostring(f.player).." — "..tostring(f.reason),not success)
     elseif kind=="CHARACTER_ERROR" then
       characterUI.Log("Character","ERROR — "..tostring(f.reason)); SetStatus(f.reason or "Character inspection failed",true)
+    elseif kind=="NPC_BEGIN" then
+      local selected=TargetCreatureEntry()
+      Platform.NPCUI.ignoreStream=not selected or tonumber(selected)~=tonumber(f.entry)
+      if not Platform.NPCUI.ignoreStream then Platform.NPCUI.captureEntry=tonumber(f.entry); Platform.NPCUI.server={begin=f,quests={},loot={},story={}}; SetStatus("Receiving NPC data for "..tostring(f.name).."...") end
+    elseif kind=="NPC_OVERVIEW" then
+      if not Platform.NPCUI.ignoreStream then Platform.NPCUI.server.overview=f end
+    elseif kind=="NPC_STATE" then
+      if not Platform.NPCUI.ignoreStream then Platform.NPCUI.server.state=f end
+    elseif kind=="NPC_LOCATION" then
+      if not Platform.NPCUI.ignoreStream then Platform.NPCUI.server.location=f end
+    elseif kind=="NPC_TECHNICAL" then
+      if not Platform.NPCUI.ignoreStream then Platform.NPCUI.server.technical=f end
+    elseif kind=="NPC_QUEST" then
+      if not Platform.NPCUI.ignoreStream then table.insert(Platform.NPCUI.server.quests,f) end
+    elseif kind=="NPC_LOOT" then
+      if not Platform.NPCUI.ignoreStream then table.insert(Platform.NPCUI.server.loot,f) end
+    elseif kind=="NPC_STORY" then
+      if not Platform.NPCUI.ignoreStream then table.insert(Platform.NPCUI.server.story,f) end
+    elseif kind=="NPC_STORY_END" then
+      if not Platform.NPCUI.ignoreStream then Platform.NPCUI.server.storyCount=tonumber(f.count) or 0 end
+    elseif kind=="NPC_END" then
+      local selected=TargetCreatureEntry()
+      if not Platform.NPCUI.ignoreStream and tonumber(f.entry)==tonumber(Platform.NPCUI.captureEntry) and tonumber(selected)==tonumber(f.entry) then
+        Platform.NPCUI.Update(); SetStatus(string.format("NPC inspection loaded for %s — %s quest relation(s)",f.name or "creature",f.quests or 0))
+      end
+      Platform.NPCUI.ignoreStream=false
+    elseif kind=="NPC_ERROR" then
+      SetStatus(f.reason or "NPC inspection failed",true)
+    elseif kind=="ITEM_BEGIN" then
+      if tonumber(f.id)==tonumber(Platform.ItemUI.captureId) then
+        Platform.ItemUI.server={begin=f,crafts={},reagents={},recipes={},sources={},uses={}}; Platform.ItemUI.loading=true
+      end
+    elseif kind=="ITEM_CRAFT" then
+      if Platform.ItemUI.loading then table.insert(Platform.ItemUI.server.crafts,f) end
+    elseif kind=="ITEM_REAGENT" then
+      if Platform.ItemUI.loading then table.insert(Platform.ItemUI.server.reagents,f) end
+    elseif kind=="ITEM_RECIPE" then
+      if Platform.ItemUI.loading then table.insert(Platform.ItemUI.server.recipes,f) end
+    elseif kind=="ITEM_SOURCE" then
+      if Platform.ItemUI.loading then table.insert(Platform.ItemUI.server.sources,f) end
+    elseif kind=="ITEM_USE" then
+      if Platform.ItemUI.loading then table.insert(Platform.ItemUI.server.uses,f) end
+    elseif kind=="ITEM_END" then
+      if tonumber(f.id)==tonumber(Platform.ItemUI.captureId) then Platform.ItemUI.loading=false; if Platform.ItemUI.Render then Platform.ItemUI.Render() end; SetStatus(string.format("Item inspection loaded — %s crafting method(s)",f.crafts or 0)) end
+    elseif kind=="ITEM_ERROR" then
+      Platform.ItemUI.loading=false; SetStatus(f.reason or "Item inspection failed",true); if Platform.ItemUI.Render then Platform.ItemUI.Render() end
+    elseif kind=="MOVEMENT_CATALOG_BEGIN" then
+      Platform.MovementUI.serverCatalog={}; Platform.MovementUI.loading=true
+    elseif kind=="MOVEMENT_DESTINATION" then
+      local d={id=tonumber(f.id),name=f.name,category=f.category,map=tonumber(f.map),x=tonumber(f.x),y=tonumber(f.y),z=tonumber(f.z),o=tonumber(f.o),source="AzerothCore game_tele"}; table.insert(Platform.MovementUI.serverCatalog,d)
+    elseif kind=="MOVEMENT_CATALOG_END" then
+      Platform.MovementUI.loading=false; if Platform.MovementUI.RefreshCatalog then Platform.MovementUI.RefreshCatalog() end; if Platform.MovementUI.Render then Platform.MovementUI.Render() end; SetStatus("Loaded "..tostring(f.count or #Platform.MovementUI.serverCatalog).." server destinations plus the validated built-in catalogue")
+    elseif kind=="MOVEMENT_CURRENT" then
+      if Platform.MovementUI.OnCurrent then Platform.MovementUI.OnCurrent(f) end
+    elseif kind=="MOVEMENT_RESULT" then
+      SetStatus((f.result or "Movement").." — "..tostring(f.reason or ""),f.result~="SUCCESS")
+    elseif kind=="MOVEMENT_ERROR" then
+      SetStatus(f.reason or "Movement operation failed",true)
     elseif kind=="ERROR" then
       SetStatus(f.reason or "AzerCore Ops server-module error",true)
     elseif kind=="QUEST_SEARCH" then

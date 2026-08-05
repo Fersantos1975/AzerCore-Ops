@@ -1,6 +1,6 @@
 local ADDON = ...
 
--- AzerCore Ops Platform 0.5.6-alpha1-movement-control
+-- AzerCore Ops Platform 0.5.6-alpha2-movement-catalog
 -- Target: WoW 3.3.5a / AzerothCore. All server commands live here so that
 -- branch-specific command names can be changed without touching the UI.
 local CMD = {
@@ -86,7 +86,7 @@ Platform.NPCUI={activity={},buttons={},viewButtons={},server={quests={},loot={},
   identityName=nil,identityMeta=nil,portrait=nil,workspaceTitle=nil,text=nil,textChild=nil,model=nil,modelViewport=nil,
   questRows={},lootRows={}}
 Platform.ItemUI={view="OVERVIEW",selected=nil,buttons={},viewButtons={},Select=nil,Render=nil,Report=nil,server={crafts={},reagents={},recipes={},sources={},uses={}},linkRows={}}
-Platform.MovementUI={view="DESTINATIONS",catalog={},categories={},selectedCategory=nil,selected=nil,current=nil,loading=false,Render=nil,Report=nil}
+Platform.MovementUI={view="DESTINATIONS",serverCatalog={},regions={},selectedRegion=nil,selectedZone=nil,selected=nil,current=nil,loading=false,Render=nil,Report=nil,RefreshCatalog=nil}
 local instanceUI={my={},target={},captureUntil=0,myRows={},targetRows={},myOffset=0,targetOffset=0,targetLabel=nil,
   selectedBind=nil,filter="ALL",filterButtons={},detailText=nil,summaryText=nil,myEmpty=nil,targetEmpty=nil,inspectionText=nil,
   inspectedPlayer=nil,inspectedAt=nil,statusText=nil,myScroll=nil,targetScroll=nil,detailScroll=nil,horizontals={},activity={},
@@ -110,7 +110,7 @@ local defaults={
   rememberAuditFilter=true,autoReaudit=false,confirmResetSelected=true,
   warnNoTarget=true,compactAuditRows=false,auditFontSize=10,shiftClickInsert=true,
 }
-local ADDON_VERSION="0.5.6-alpha1-movement-control"
+local ADDON_VERSION="0.5.6-alpha2-movement-catalog"
 local PROTOCOL_VERSION="1"
 local TESTED_CORE="190184a04539"
 local TESTED_PLAYERBOTS="ba46fcdecde3"
@@ -2405,7 +2405,8 @@ local function BuildQuest()
 end
 
 local function BuildTeleport()
-  local ui=Platform.MovementUI; AzerCoreOpsDB.movementLocations=AzerCoreOpsDB.movementLocations or {}; ui.saved=AzerCoreOpsDB.movementLocations
+  local ui=Platform.MovementUI; AzerCoreOpsDB.movementLocations=AzerCoreOpsDB.movementLocations or {}; ui.saved=AzerCoreOpsDB.movementLocations; ui.serverCatalog=ui.serverCatalog or {}
+  local builtin=(AzerCoreOpsTeleportCatalog and AzerCoreOpsTeleportCatalog.regions) or {}
   local p=NewPage("Teleport"); local header=CreateFrame("Frame",nil,p); header:SetPoint("TOPLEFT",10,-10); header:SetPoint("TOPRIGHT",-10,-10); header:SetHeight(52); Backdrop(header,C.bg)
   local h=Label(header,"Movement Control","GameFontNormalLarge"); h:SetPoint("TOPLEFT",12,-8); local sub=header:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); sub:SetPoint("TOPLEFT",12,-31); sub:SetText("Named destinations, personal locations and controlled GM movement")
   local ops=CreateFrame("Frame",nil,p); ops:SetPoint("TOPLEFT",10,-70); ops:SetPoint("BOTTOMLEFT",10,36); ops:SetWidth(148); Backdrop(ops,C.panel); local ot=Section(ops,"OPERATIONS",C.gold); ot:SetPoint("TOPLEFT",10,-10)
@@ -2421,21 +2422,67 @@ local function BuildTeleport()
   local iname=identity:CreateFontString(nil,"OVERLAY","GameFontNormalLarge"); iname:SetPoint("TOPLEFT",10,-30); iname:SetText("No destination selected"); local imeta=identity:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); imeta:SetPoint("TOPLEFT",10,-53); imeta:SetPoint("RIGHT",-8,0); ui.nameText=iname; ui.metaText=imeta
   local action=CreateFrame("Frame",nil,body); action:SetPoint("TOPLEFT",8,-88); action:SetPoint("BOTTOMLEFT",8,8); action:SetWidth(104); Backdrop(action,C.bg); local at=Section(action,"ACTION BAR",C.gold); at:SetPoint("TOPLEFT",8,-9)
   local work=CreateFrame("Frame",nil,body); work:SetPoint("TOPLEFT",120,-88); work:SetPoint("BOTTOMRIGHT",-8,8); Backdrop(work,C.bg); local wt=Section(work,"DESTINATIONS",C.inspect); wt:SetPoint("TOPLEFT",10,-10)
-  local categoryButton=Button(work,"Select category v",150,24,nil,"Filter the AzerothCore teleport catalog by continent or map type"); categoryButton:SetPoint("TOPLEFT",10,-32)
-  local destinationButton=Button(work,"Select destination v",190,24,nil,"Choose a named destination"); destinationButton:SetPoint("LEFT",categoryButton,"RIGHT",8,0)
-  local menu=CreateFrame("Frame",nil,work); menu:SetWidth(210); menu:SetHeight(280); menu:SetPoint("TOPLEFT",categoryButton,"BOTTOMLEFT",0,-2); menu:SetFrameStrata("FULLSCREEN_DIALOG"); menu:SetFrameLevel(260); Backdrop(menu,C.panel); menu:Hide(); ui.menu=menu
+  local regionButton=Button(work,"Select region v",120,24,nil,"Choose a continent, instance group, battleground group, or server catalogue"); regionButton:SetPoint("TOPLEFT",10,-32)
+  local zoneButton=Button(work,"Select zone v",138,24,nil,"Choose a zone or instance"); zoneButton:SetPoint("LEFT",regionButton,"RIGHT",6,0)
+  local destinationButton=Button(work,"Select destination v",158,24,nil,"Choose a named destination"); destinationButton:SetPoint("LEFT",zoneButton,"RIGHT",6,0)
+  local menu=CreateFrame("Frame",nil,work); menu:SetWidth(210); menu:SetHeight(280); menu:SetPoint("TOPLEFT",regionButton,"BOTTOMLEFT",0,-2); menu:SetFrameStrata("FULLSCREEN_DIALOG"); menu:SetFrameLevel(260); Backdrop(menu,C.panel); menu:Hide(); ui.menu=menu
   local text=work:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); text:SetPoint("TOPLEFT",10,-72); text:SetPoint("BOTTOMRIGHT",-10,10); text:SetJustifyH("LEFT"); text:SetJustifyV("TOP"); text:SetTextColor(unpack(C.white)); ui.text=text
-  local menuButtons={}; for i=1,11 do local b=Button(menu,"",200,22,nil); b:SetPoint("TOPLEFT",5,-5-(i-1)*24); b:Hide(); menuButtons[i]=b end
-  local function ShowMenu(entries,onSelect) for _,b in ipairs(menuButtons) do b:Hide() end; for i,e in ipairs(entries) do if i<=#menuButtons then local b=menuButtons[i]; b:SetText(e.label); b:SetScript("OnClick",function() menu:Hide(); onSelect(e) end); b:Show() end end; menu:Show() end
-  categoryButton:SetScript("OnClick",function() local entries={}; for _,name in ipairs(ui.categories or {}) do table.insert(entries,{label=name,value=name}) end; ShowMenu(entries,function(e) ui.selectedCategory=e.value; categoryButton:SetText(e.label.." v"); destinationButton:SetText("Select destination v"); ui.selected=nil; ui.Render() end) end)
-  destinationButton:SetScript("OnClick",function() local entries={}; for _,d in ipairs(ui.view=="MY_LOCATIONS" and ui.saved or ui.catalog) do if ui.view=="MY_LOCATIONS" or not ui.selectedCategory or d.category==ui.selectedCategory then table.insert(entries,{label=d.name,data=d}) end end; ShowMenu(entries,function(e) ui.selected=e.data; destinationButton:SetText(e.label.." v"); ui.Render() end) end)
-  StaticPopupDialogs["AZERCORE_OPS_SAVE_LOCATION"]={text="Save current location\nDetected zone: %s\n\nEnter a personal name:",button1=SAVE,button2=CANCEL,hasEditBox=1,maxLetters=60,timeout=0,whileDead=1,hideOnEscape=1,OnShow=function(self) self.editBox:SetText((GetSubZoneText and GetSubZoneText()~="" and GetSubZoneText()) or (GetZoneText and GetZoneText()) or "Saved Location"); self.editBox:HighlightText() end,OnAccept=function(self) local c=ui.current; local name=self.editBox:GetText(); if c and name and name~="" then table.insert(ui.saved,{name=name,category="My Locations",map=tonumber(c.map),x=tonumber(c.x),y=tonumber(c.y),z=tonumber(c.z),o=tonumber(c.o),zone=c.zone,area=c.area}); ui.view="MY_LOCATIONS"; ui.selected=ui.saved[#ui.saved]; destinationButton:SetText(name.." v"); ui.Render(); SetStatus("Saved personal location "..name) end end}
-  ui.Report=function() local d=ui.selected; return d and string.format("AZERCORE OPS — MOVEMENT\n%s\nMap %s\nCoordinates %.3f, %.3f, %.3f\nOrientation %.3f",d.name,d.map,d.x,d.y,d.z,d.o) or "AZERCORE OPS — MOVEMENT\nNo destination selected." end
-  ui.Render=function() wt:SetText(ui.view=="MY_LOCATIONS" and "MY LOCATIONS" or ui.view=="SHARING" and "LOCATION SHARING — DISABLED" or "DESTINATIONS"); local d=ui.selected; iname:SetText(d and d.name or "No destination selected"); imeta:SetText(d and string.format("Map %s • %.2f, %.2f, %.2f",d.map,d.x,d.y,d.z) or "Choose a category and destination."); if ui.view=="SHARING" then text:SetText("Location sharing is disabled in this release.\n\nThe addon and module will not send, receive, publish or group-teleport shared coordinates.") elseif d then text:SetText(ui.Report()) else text:SetText(ui.loading and "Loading the server destination catalog..." or "Select a category, then choose a destination.\n\nPersonal locations are stored per character. The module records an emergency return point before every custom teleport.") end end
-  local views={{"Destinations","DESTINATIONS"},{"My Locations","MY_LOCATIONS"},{"Player","PLAYER"},{"Current","CURRENT"},{"History","HISTORY"},{"Sharing","SHARING"}}; for i,d in ipairs(views) do local label,key=d[1],d[2]; local b=Button(action,label,88,22,function() ui.view=key; ui.selected=nil; categoryButton:SetText(key=="MY_LOCATIONS" and "My Locations" or "Select category v"); destinationButton:SetText("Select destination v"); ui.Render() end); b:SetPoint("TOPLEFT",8,-29-(i-1)*27) end
+  menu:ClearAllPoints(); menu:SetPoint("TOPLEFT",regionButton,"BOTTOMLEFT",0,-2); menu:EnableMouseWheel(true)
+  local menuButtons={}; for i=1,10 do local b=Button(menu,"",200,22,nil); b:SetPoint("TOPLEFT",5,-5-(i-1)*24); b:Hide(); menuButtons[i]=b end
+  local menuPage=menu:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); menuPage:SetPoint("BOTTOM",0,7); menuPage:SetTextColor(unpack(C.muted))
+  local menuEntries,menuSelect,menuOffset={},{},0
+  local function RenderMenu()
+    local maxOffset=math.max(0,#menuEntries-#menuButtons); menuOffset=math.max(0,math.min(menuOffset,maxOffset))
+    for i,b in ipairs(menuButtons) do local entry=menuEntries[menuOffset+i]; if entry then b:SetText(entry.label); b:SetScript("OnClick",function() menu:Hide(); menuSelect(entry) end); b:Show() else b:Hide() end end
+    menuPage:SetText(#menuEntries>#menuButtons and string.format("%d-%d of %d  •  mouse wheel",menuOffset+1,math.min(menuOffset+#menuButtons,#menuEntries),#menuEntries) or tostring(#menuEntries).." entries")
+  end
+  local function ShowMenu(anchor,entries,onSelect)
+    if #entries==0 then SetStatus("No entries are available for this selection.",true); return end
+    menuEntries=entries; menuSelect=onSelect; menuOffset=0; menu:ClearAllPoints(); menu:SetPoint("TOPLEFT",anchor,"BOTTOMLEFT",0,-2); RenderMenu(); menu:Show()
+  end
+  menu:SetScript("OnMouseWheel",function(_,delta) if #menuEntries>#menuButtons then menuOffset=menuOffset-(delta>0 and 1 or -1); RenderMenu() end end)
+  local function ServerRegion()
+    local zonesByName,zoneNames={},{}
+    for _,destination in ipairs(ui.serverCatalog or {}) do
+      local zone=destination.category or "Instances / Other"; if not zonesByName[zone] then zonesByName[zone]={}; table.insert(zoneNames,zone) end; table.insert(zonesByName[zone],destination)
+    end
+    if #zoneNames==0 then return nil end
+    table.sort(zoneNames); local zones={}; for _,name in ipairs(zoneNames) do table.sort(zonesByName[name],function(a,b) return a.name<b.name end); table.insert(zones,{name=name,destinations=zonesByName[name],source="AzerothCore game_tele"}) end
+    return {key="SERVER",name="Server Teleports",zones=zones,source="AzerothCore game_tele"}
+  end
+  ui.RefreshCatalog=function()
+    ui.regions={}; for _,region in ipairs(builtin) do table.insert(ui.regions,region) end; local server=ServerRegion(); if server then table.insert(ui.regions,server) end
+  end
+  local function ResetSelectors()
+    ui.selectedRegion=nil; ui.selectedZone=nil; ui.selected=nil; regionButton:SetText(ui.view=="MY_LOCATIONS" and "My Locations" or "Select region v"); zoneButton:SetText(ui.view=="MY_LOCATIONS" and "Personal" or "Select zone v"); destinationButton:SetText("Select destination v")
+  end
+  regionButton:SetScript("OnClick",function()
+    if ui.view=="MY_LOCATIONS" then SetStatus("Personal locations are already selected."); return end
+    local entries={}; for _,region in ipairs(ui.regions or {}) do table.insert(entries,{label=region.name,data=region}) end
+    ShowMenu(regionButton,entries,function(e) ui.selectedRegion=e.data; ui.selectedZone=nil; ui.selected=nil; regionButton:SetText(e.label.." v"); zoneButton:SetText("Select zone v"); destinationButton:SetText("Select destination v"); ui.Render() end)
+  end)
+  zoneButton:SetScript("OnClick",function()
+    if ui.view=="MY_LOCATIONS" then SetStatus("Personal locations use the saved zone."); return end
+    if not ui.selectedRegion then SetStatus("Select a region first.",true); return end
+    local entries={}; for _,zone in ipairs(ui.selectedRegion.zones or {}) do table.insert(entries,{label=zone.name,data=zone}) end
+    ShowMenu(zoneButton,entries,function(e) ui.selectedZone=e.data; ui.selected=nil; zoneButton:SetText(e.label.." v"); destinationButton:SetText("Select destination v"); ui.Render() end)
+  end)
+  destinationButton:SetScript("OnClick",function()
+    local entries={}
+    if ui.view=="MY_LOCATIONS" then for _,destination in ipairs(ui.saved or {}) do table.insert(entries,{label=destination.name,data=destination}) end
+    elseif ui.selectedZone then for _,destination in ipairs(ui.selectedZone.destinations or {}) do table.insert(entries,{label=destination.name,data=destination}) end
+    else SetStatus("Select a region and zone first.",true); return end
+    ShowMenu(destinationButton,entries,function(e)
+      local destination=e.data; ui.selected={id=destination.id,name=destination.name,map=tonumber(destination.map),x=tonumber(destination.x),y=tonumber(destination.y),z=tonumber(destination.z),o=tonumber(destination.o) or 0,region=ui.selectedRegion and ui.selectedRegion.name or destination.region or "My Locations",zone=ui.selectedZone and ui.selectedZone.name or destination.zone or "Personal",source=destination.source or (ui.selectedRegion and ui.selectedRegion.source) or "AzerothAdmin"}; destinationButton:SetText(e.label.." v"); ui.Render()
+    end)
+  end)
+  StaticPopupDialogs["AZERCORE_OPS_SAVE_LOCATION"]={text="Save current location\nDetected zone: %s\n\nEnter a personal name:",button1=SAVE,button2=CANCEL,hasEditBox=1,maxLetters=60,timeout=0,whileDead=1,hideOnEscape=1,OnShow=function(self) self.editBox:SetText((GetSubZoneText and GetSubZoneText()~="" and GetSubZoneText()) or (GetZoneText and GetZoneText()) or "Saved Location"); self.editBox:HighlightText() end,OnAccept=function(self) local c=ui.current; local name=self.editBox:GetText(); if c and name and name~="" then local saved={name=name,category="My Locations",region="My Locations",map=tonumber(c.map),x=tonumber(c.x),y=tonumber(c.y),z=tonumber(c.z),o=tonumber(c.o),zone=(GetZoneText and GetZoneText()) or tostring(c.zone or "Personal"),area=c.area,source="Personal location"}; table.insert(ui.saved,saved); ui.view="MY_LOCATIONS"; ui.selected=saved; regionButton:SetText("My Locations"); zoneButton:SetText(saved.zone or "Personal"); destinationButton:SetText(name.." v"); ui.Render(); SetStatus("Saved personal location "..name) end end}
+  ui.Report=function() local d=ui.selected; return d and string.format("AZERCORE OPS — MOVEMENT\n%s\n%s → %s\nMap %s\nCoordinates %.3f, %.3f, %.3f\nOrientation %.3f\nSource: %s",d.name,d.region or "Unknown region",d.zone or "Unknown zone",d.map,d.x,d.y,d.z,d.o,d.source or "Unknown") or "AZERCORE OPS — MOVEMENT\nNo destination selected." end
+  ui.Render=function() wt:SetText(ui.view=="MY_LOCATIONS" and "MY LOCATIONS" or ui.view=="SHARING" and "LOCATION SHARING — DISABLED" or "DESTINATIONS"); local d=ui.selected; iname:SetText(d and d.name or "No destination selected"); imeta:SetText(d and string.format("%s → %s • Map %s • %.2f, %.2f, %.2f",d.region or "Unknown",d.zone or "Unknown",d.map,d.x,d.y,d.z) or "Choose a region, zone and destination."); if ui.view=="SHARING" then text:SetText("Location sharing is disabled in this release.\n\nThe addon and module will not send, receive, publish or group-teleport shared coordinates.") elseif d then text:SetText(ui.Report()) else local count=AzerCoreOpsTeleportCatalog and AzerCoreOpsTeleportCatalog.metadata and AzerCoreOpsTeleportCatalog.metadata.count or 0; text:SetText(string.format("Select a region, then a zone, then a destination.\n\n%d validated built-in destinations are ready.%s\n\nPersonal locations are stored per character. The module records an emergency return point before every custom teleport.",count,ui.loading and " Server teleports are still loading." or "")) end end
+  local views={{"Destinations","DESTINATIONS"},{"My Locations","MY_LOCATIONS"},{"Player","PLAYER"},{"Current","CURRENT"},{"History","HISTORY"},{"Sharing","SHARING"}}; for i,d in ipairs(views) do local label,key=d[1],d[2]; local b=Button(action,label,88,22,function() ui.view=key; ResetSelectors(); ui.Render() end); b:SetPoint("TOPLEFT",8,-29-(i-1)*27) end
   Button(action,"Copy",88,22,function() ShowSelectableReport("Copy Movement report",ui.Report()) end):SetPoint("BOTTOMLEFT",8,61); Button(action,"Share",88,22,function() SetStatus("Location sharing is disabled in this release.",true) end):SetPoint("BOTTOMLEFT",8,34); Button(action,"Export",88,22,function() ShowSelectableReport("Export Movement report",ui.Report()) end):SetPoint("BOTTOMLEFT",8,7)
-  ui.OnCurrent=function(f) ui.current=f; if ui.savePending then ui.savePending=false; StaticPopup_Show("AZERCORE_OPS_SAVE_LOCATION",tostring(f.zone or "Unknown")) else ui.view="CURRENT"; ui.selected={name="Current Location",map=tonumber(f.map),x=tonumber(f.x),y=tonumber(f.y),z=tonumber(f.z),o=tonumber(f.o)}; ui.Render() end end
-  ui.loading=true; SendCommand(CMD.movementCatalog); ui.Render()
+  ui.OnCurrent=function(f) ui.current=f; if ui.savePending then ui.savePending=false; StaticPopup_Show("AZERCORE_OPS_SAVE_LOCATION",tostring(f.zone or "Unknown")) else ui.view="CURRENT"; ui.selected={name="Current Location",region="Current",zone="Zone "..tostring(f.zone or "Unknown"),source="AzerothCore",map=tonumber(f.map),x=tonumber(f.x),y=tonumber(f.y),z=tonumber(f.z),o=tonumber(f.o)}; ui.Render() end end
+  ui.RefreshCatalog(); ui.loading=true; SendCommand(CMD.movementCatalog); ui.Render()
 end
 
 local function BuildItem()
@@ -3753,7 +3800,7 @@ local function BuildInformation()
 
   local credits=CreateFrame("Frame",nil,p); credits:SetPoint("TOPLEFT",18,-431); credits:SetPoint("BOTTOMRIGHT",-389,18); Backdrop(credits,C.panel)
   local ch=Label(credits,"Project & credits"); ch:SetPoint("TOPLEFT",12,-12)
-  local ct=credits:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); ct:SetPoint("TOPLEFT",12,-38); ct:SetPoint("BOTTOMRIGHT",-12,12); ct:SetJustifyH("LEFT"); ct:SetJustifyV("TOP"); ct:SetWordWrap(true); ct:SetTextColor(unpack(C.white)); ct:SetText("AzerCore Ops is an open-source operations platform for AzerothCore administrators and Game Masters.\n\nCreated and maintained by |cffffd100Fernando Santos|r.\n\nBuilt with AzerothCore, mod-playerbots, and AI-assisted development from OpenAI ChatGPT.\n\nLicense: GPL-3.0")
+  local ct=credits:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); ct:SetPoint("TOPLEFT",12,-38); ct:SetPoint("BOTTOMRIGHT",-12,12); ct:SetJustifyH("LEFT"); ct:SetJustifyV("TOP"); ct:SetWordWrap(true); ct:SetTextColor(unpack(C.white)); ct:SetText("AzerCore Ops is an open-source operations platform for AzerothCore administrators and Game Masters.\n\nCreated and maintained by |cffffd100Fernando Santos|r.\n\nBuilt with AzerothCore, mod-playerbots, and AI-assisted development from OpenAI ChatGPT.\n\nMovement destination data adapted from AzerothAdmin (GPLv3), derived from TrinityAdmin/MangAdmin. Our thanks to their contributors and the wider open-source community.\n\nLicense: GPL-3.0")
 
   local resources=CreateFrame("Frame",nil,p); resources:SetPoint("TOPLEFT",389,-431); resources:SetPoint("BOTTOMRIGHT",-18,18); Backdrop(resources,C.panel)
   local rh=Label(resources,"Project resources"); rh:SetPoint("TOPLEFT",12,-12)
@@ -3975,11 +4022,11 @@ events:SetScript("OnEvent",function(_,event,arg1)
     elseif kind=="ITEM_ERROR" then
       Platform.ItemUI.loading=false; SetStatus(f.reason or "Item inspection failed",true); if Platform.ItemUI.Render then Platform.ItemUI.Render() end
     elseif kind=="MOVEMENT_CATALOG_BEGIN" then
-      Platform.MovementUI.catalog={}; Platform.MovementUI.categories={}; Platform.MovementUI.loading=true
+      Platform.MovementUI.serverCatalog={}; Platform.MovementUI.loading=true
     elseif kind=="MOVEMENT_DESTINATION" then
-      local d={id=tonumber(f.id),name=f.name,category=f.category,map=tonumber(f.map),x=tonumber(f.x),y=tonumber(f.y),z=tonumber(f.z),o=tonumber(f.o)}; table.insert(Platform.MovementUI.catalog,d); local found=false; for _,c in ipairs(Platform.MovementUI.categories) do if c==d.category then found=true end end; if not found then table.insert(Platform.MovementUI.categories,d.category) end
+      local d={id=tonumber(f.id),name=f.name,category=f.category,map=tonumber(f.map),x=tonumber(f.x),y=tonumber(f.y),z=tonumber(f.z),o=tonumber(f.o),source="AzerothCore game_tele"}; table.insert(Platform.MovementUI.serverCatalog,d)
     elseif kind=="MOVEMENT_CATALOG_END" then
-      table.sort(Platform.MovementUI.categories); Platform.MovementUI.loading=false; if Platform.MovementUI.Render then Platform.MovementUI.Render() end; SetStatus("Loaded "..tostring(f.count or #Platform.MovementUI.catalog).." movement destinations")
+      Platform.MovementUI.loading=false; if Platform.MovementUI.RefreshCatalog then Platform.MovementUI.RefreshCatalog() end; if Platform.MovementUI.Render then Platform.MovementUI.Render() end; SetStatus("Loaded "..tostring(f.count or #Platform.MovementUI.serverCatalog).." server destinations plus the validated built-in catalogue")
     elseif kind=="MOVEMENT_CURRENT" then
       if Platform.MovementUI.OnCurrent then Platform.MovementUI.OnCurrent(f) end
     elseif kind=="MOVEMENT_RESULT" then

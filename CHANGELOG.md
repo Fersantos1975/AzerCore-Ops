@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.5.6-alpha2 — Validated Movement Catalogue
+
+### Added
+
+- An attributed GPLv3 Movement catalogue adapted from AzerothAdmin with three-level Region → Zone → Destination navigation.
+- A deterministic catalogue importer and validation report covering every source teleport entry.
+- Mouse-wheel scrolling for long region, zone, and destination menus.
+- Separate built-in, AzerothCore `game_tele`, and personal-location sources.
+- Project-wide `CREDITS.md` acknowledgements.
+
+### Fixed
+
+- Restored the Movement inspector, command registration, and protocol messages to the canonical `src/` tree compiled by CMake.
+- Removed the indefinite catalogue-loading state caused by Movement sources existing only in legacy root-level copies.
+
+### Safety
+
+- Rejected seven malformed coordinate records and one unverified all-zero landing point from the imported catalogue.
+- Preserved server-side coordinate validation, confirmation, Emergency Return, GM permissions, and disabled location sharing.
+
 ## 0.5.3 — Character Intelligence
 
 ### Added

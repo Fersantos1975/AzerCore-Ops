@@ -5,7 +5,7 @@
 
 AzerCore Ops Platform combines an AzerothCore C++ module with a World of Warcraft: Wrath of the Lich King 3.3.5a addon. Its flagship workspace, **Quest Intelligence**, provides quest inspection, contextual analysis, group auditing, history, diagnostics, and report export for administrators and Game Masters.
 
-> **Development status:** `0.5.3` Character Intelligence preview. The source requires compilation and in-game validation against a supported AzerothCore checkout before production use.
+> **Development status:** `0.5.6-alpha2-movement-catalog`. The source requires compilation and in-game validation against a supported AzerothCore checkout before production use.
 
 ## Features
 
@@ -24,6 +24,8 @@ AzerCore Ops Platform combines an AzerothCore C++ module with a World of Warcraf
 - Privacy-safe Character reports plus guarded GM target operations
 - Module, core, and playerbots build information
 - Shared addon design, search, reporting, and platform frameworks
+- Validated Movement catalogue with Region, Zone/Instance, and Destination selection
+- Personal saved locations, server-specific `game_tele` destinations, and Emergency Return
 
 ## Repository layout
 
