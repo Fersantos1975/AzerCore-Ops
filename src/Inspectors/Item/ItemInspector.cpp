@@ -4,6 +4,7 @@
 #include "DatabaseEnv.h"
 #include "DBCStores.h"
 #include "ObjectMgr.h"
+#include "Player.h"
 #include "Protocol/ChatProtocol.h"
 #include "SpellInfo.h"
 #include "SpellMgr.h"
@@ -17,6 +18,95 @@ namespace AzerCoreOps
 {
 namespace
 {
+constexpr uint32 PlayableRaceMask = 0x000006FF; // WotLK races 1-8, 10 and 11.
+constexpr uint32 AllianceRaceMask = 0x0000044D; // Human, Dwarf, Night Elf, Gnome, Draenei.
+constexpr uint32 HordeRaceMask = 0x000002B2;    // Orc, Undead, Tauren, Troll, Blood Elf.
+constexpr uint32 PlayableClassMask = 0x000005FF; // WotLK classes 1-9 and 11.
+
+struct NamedMask { uint32 mask; char const* name; };
+
+std::string MaskNames(uint32 value, std::vector<NamedMask> const& names, uint32 playableMask, char const* allText)
+{
+    uint32 allowed = value & playableMask;
+    if (!value || value == uint32(-1) || allowed == playableMask) return allText;
+    std::string result;
+    for (NamedMask const& entry : names)
+    {
+        if (!(allowed & entry.mask)) continue;
+        if (!result.empty()) result += ", ";
+        result += entry.name;
+    }
+    return result.empty() ? "None" : result;
+}
+
+std::string ItemFaction(uint32 raceMask)
+{
+    uint32 allowed = raceMask & PlayableRaceMask;
+    if (!raceMask || raceMask == uint32(-1) || allowed == PlayableRaceMask) return "Both";
+    bool alliance = (allowed & AllianceRaceMask) != 0;
+    bool horde = (allowed & HordeRaceMask) != 0;
+    if (alliance && !horde) return "Alliance";
+    if (horde && !alliance) return "Horde";
+    return "Both";
+}
+
+struct ItemPreviewInfo
+{
+    std::string type = "NONE";
+    uint32 spell = 0;
+    uint32 creature = 0;
+    uint32 display = 0;
+};
+
+void ResolvePreviewSpell(uint32 spellId, ItemPreviewInfo& preview, uint8 depth = 0)
+{
+    if (!spellId || depth > 3 || preview.display || preview.creature) return;
+    SpellInfo const* spell = sSpellMgr->GetSpellInfo(spellId);
+    if (!spell) return;
+    if (!preview.spell) preview.spell = spellId;
+    for (SpellEffectInfo const& effect : spell->Effects)
+    {
+        // 36 learns the actual mount/pet spell; follow it before inspecting its effects.
+        if (effect.Effect == 36 && effect.TriggerSpell > 0)
+            ResolvePreviewSpell(uint32(effect.TriggerSpell), preview, depth + 1);
+        // Aura 78 is Mounted; MiscValue is the CreatureDisplayInfo ID used by the client model.
+        if (effect.ApplyAuraName == 78 && effect.MiscValue > 0)
+        {
+            preview.type = "MOUNT";
+            preview.display = uint32(effect.MiscValue);
+            preview.spell = spellId;
+        }
+        // Effects 28 and 56 summon a creature/pet; MiscValue is the creature template entry.
+        if ((effect.Effect == 28 || effect.Effect == 56) && effect.MiscValue > 0 && !preview.display)
+        {
+            preview.type = "COMPANION";
+            preview.creature = uint32(effect.MiscValue);
+            preview.spell = spellId;
+        }
+    }
+}
+
+void EmitAccessAndPreview(ChatHandler* handler, ItemTemplate const* item)
+{
+    static std::vector<NamedMask> const races = {{1u << 0, "Human"}, {1u << 1, "Orc"}, {1u << 2, "Dwarf"}, {1u << 3, "Night Elf"}, {1u << 4, "Undead"}, {1u << 5, "Tauren"}, {1u << 6, "Gnome"}, {1u << 7, "Troll"}, {1u << 9, "Blood Elf"}, {1u << 10, "Draenei"}};
+    static std::vector<NamedMask> const classes = {{1u << 0, "Warrior"}, {1u << 1, "Paladin"}, {1u << 2, "Hunter"}, {1u << 3, "Rogue"}, {1u << 4, "Priest"}, {1u << 5, "Death Knight"}, {1u << 6, "Shaman"}, {1u << 7, "Mage"}, {1u << 8, "Warlock"}, {1u << 10, "Druid"}};
+    Player* player = handler->GetSession()->GetPlayer();
+    uint32 raceMask = item->AllowableRace;
+    uint32 classMask = item->AllowableClass;
+    uint32 playerRaceMask = player ? (1u << (player->getRace() - 1)) : 0;
+    uint32 playerClassMask = player ? (1u << (player->getClass() - 1)) : 0;
+    bool raceAllowed = !raceMask || raceMask == uint32(-1) || (raceMask & playerRaceMask);
+    bool classAllowed = !classMask || classMask == uint32(-1) || (classMask & playerClassMask);
+    bool usable = raceAllowed && classAllowed;
+    std::string reason = usable ? "Allowed for this character" : (!raceAllowed ? "This character's race is not allowed" : "This character's class is not allowed");
+    Protocol::SendItemAccess(handler, raceMask, classMask, ItemFaction(raceMask), MaskNames(raceMask, races, PlayableRaceMask, "All playable races"), MaskNames(classMask, classes, PlayableClassMask, "All playable classes"), usable, reason);
+
+    ItemPreviewInfo preview;
+    for (_Spell const& itemSpell : item->Spells)
+        if (itemSpell.SpellId > 0) ResolvePreviewSpell(uint32(itemSpell.SpellId), preview);
+    Protocol::SendItemPreview(handler, preview.type, preview.spell, preview.creature, preview.display);
+}
+
 std::string ProfessionName(uint32 skill)
 {
     switch (skill)
@@ -144,6 +234,7 @@ bool ItemInspector::Inspect(ChatHandler* handler, uint32 itemId)
     }
 
     Protocol::SendItemBegin(handler, itemId, selected->Name1, selected->Quality, selected->ItemLevel, selected->RequiredLevel);
+    EmitAccessAndPreview(handler, selected);
     uint32 craftCount = 0;
     std::unordered_set<uint32> emittedSpells;
     for (uint32 spellId = 0; spellId < sSpellStore.GetNumRows(); ++spellId)
