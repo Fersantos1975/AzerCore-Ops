@@ -4,11 +4,15 @@
 #include "DatabaseEnv.h"
 #include "DBCStores.h"
 #include "ObjectMgr.h"
+#include "Player.h"
 #include "Protocol/ChatProtocol.h"
+#include "QuestDef.h"
 #include "SpellInfo.h"
 #include "SpellMgr.h"
 
 #include <algorithm>
+#include <cstdlib>
+#include <sstream>
 #include <string>
 #include <unordered_set>
 #include <vector>
@@ -17,6 +21,166 @@ namespace AzerCoreOps
 {
 namespace
 {
+constexpr uint32 PlayableRaceMask = 0x000006FF; // WotLK races 1-8, 10 and 11.
+constexpr uint32 AllianceRaceMask = 0x0000044D; // Human, Dwarf, Night Elf, Gnome, Draenei.
+constexpr uint32 HordeRaceMask = 0x000002B2;    // Orc, Undead, Tauren, Troll, Blood Elf.
+constexpr uint32 PlayableClassMask = 0x000005FF; // WotLK classes 1-9 and 11.
+
+struct NamedMask { uint32 mask; char const* name; };
+
+std::string MaskNames(uint32 value, std::vector<NamedMask> const& names, uint32 playableMask, char const* allText)
+{
+    uint32 allowed = value & playableMask;
+    if (!value || value == uint32(-1) || allowed == playableMask) return allText;
+    std::string result;
+    for (NamedMask const& entry : names)
+    {
+        if (!(allowed & entry.mask)) continue;
+        if (!result.empty()) result += ", ";
+        result += entry.name;
+    }
+    return result.empty() ? "None" : result;
+}
+
+std::string ItemFaction(ItemTemplate const* item, uint32 raceMask)
+{
+    bool allianceFlag = item->HasFlag2(ITEM_FLAG2_FACTION_ALLIANCE);
+    bool hordeFlag = item->HasFlag2(ITEM_FLAG2_FACTION_HORDE);
+    if (allianceFlag != hordeFlag) return allianceFlag ? "Alliance" : "Horde";
+    uint32 allowed = raceMask & PlayableRaceMask;
+    if (!raceMask || raceMask == uint32(-1) || allowed == PlayableRaceMask) return "Both";
+    bool alliance = (allowed & AllianceRaceMask) != 0;
+    bool horde = (allowed & HordeRaceMask) != 0;
+    if (alliance && !horde) return "Alliance";
+    if (horde && !alliance) return "Horde";
+    return "Both";
+}
+
+uint32 EffectiveRaceMask(ItemTemplate const* item)
+{
+    uint32 allowed = item->AllowableRace & PlayableRaceMask;
+    if (!item->AllowableRace || item->AllowableRace == uint32(-1)) allowed = PlayableRaceMask;
+    bool allianceFlag = item->HasFlag2(ITEM_FLAG2_FACTION_ALLIANCE);
+    bool hordeFlag = item->HasFlag2(ITEM_FLAG2_FACTION_HORDE);
+    if (allianceFlag && !hordeFlag) allowed &= AllianceRaceMask;
+    if (hordeFlag && !allianceFlag) allowed &= HordeRaceMask;
+    return allowed;
+}
+
+char const* ReputationRankName(uint32 rank)
+{
+    static char const* const names[] = {"Hated", "Hostile", "Unfriendly", "Neutral", "Friendly", "Honored", "Revered", "Exalted"};
+    return rank < 8 ? names[rank] : "Unknown";
+}
+
+std::string FactionName(uint32 factionId)
+{
+    if (FactionEntry const* faction = sFactionStore.LookupEntry(factionId))
+        if (faction->name[0] && *faction->name[0]) return faction->name[0];
+    return "Faction " + std::to_string(factionId);
+}
+
+std::string SpellName(uint32 spellId)
+{
+    if (SpellInfo const* spell = sSpellMgr->GetSpellInfo(spellId))
+        if (spell->SpellName[0] && *spell->SpellName[0]) return spell->SpellName[0];
+    return "Spell " + std::to_string(spellId);
+}
+
+std::string ProfessionName(uint32 skill);
+
+std::string SkillName(uint32 skillId)
+{
+    if (SkillLineEntry const* skill = sSkillLineStore.LookupEntry(skillId))
+        if (skill->name[0] && *skill->name[0]) return skill->name[0];
+    return ProfessionName(skillId);
+}
+
+struct ItemPreviewInfo
+{
+    std::string type = "NONE";
+    uint32 spell = 0;
+    uint32 creature = 0;
+    uint32 display = 0;
+};
+
+void ResolvePreviewSpell(uint32 spellId, ItemPreviewInfo& preview, uint8 depth = 0)
+{
+    if (!spellId || depth > 3 || preview.display || preview.creature) return;
+    SpellInfo const* spell = sSpellMgr->GetSpellInfo(spellId);
+    if (!spell) return;
+    if (!preview.spell) preview.spell = spellId;
+    for (SpellEffectInfo const& effect : spell->Effects)
+    {
+        // 36 learns the actual mount/pet spell; follow it before inspecting its effects.
+        if (effect.Effect == 36 && effect.TriggerSpell > 0)
+            ResolvePreviewSpell(uint32(effect.TriggerSpell), preview, depth + 1);
+        // Aura 78 is Mounted; MiscValue is the CreatureDisplayInfo ID used by the client model.
+        if (effect.ApplyAuraName == 78 && effect.MiscValue > 0)
+        {
+            preview.type = "MOUNT";
+            preview.display = uint32(effect.MiscValue);
+            preview.spell = spellId;
+        }
+        // Effects 28 and 56 summon a creature/pet; MiscValue is the creature template entry.
+        if ((effect.Effect == 28 || effect.Effect == 56) && effect.MiscValue > 0 && !preview.display)
+        {
+            preview.type = "COMPANION";
+            preview.creature = uint32(effect.MiscValue);
+            preview.spell = spellId;
+        }
+    }
+}
+
+void EmitAccessAndPreview(ChatHandler* handler, ItemTemplate const* item)
+{
+    static std::vector<NamedMask> const races = {{1u << 0, "Human"}, {1u << 1, "Orc"}, {1u << 2, "Dwarf"}, {1u << 3, "Night Elf"}, {1u << 4, "Undead"}, {1u << 5, "Tauren"}, {1u << 6, "Gnome"}, {1u << 7, "Troll"}, {1u << 9, "Blood Elf"}, {1u << 10, "Draenei"}};
+    static std::vector<NamedMask> const classes = {{1u << 0, "Warrior"}, {1u << 1, "Paladin"}, {1u << 2, "Hunter"}, {1u << 3, "Rogue"}, {1u << 4, "Priest"}, {1u << 5, "Death Knight"}, {1u << 6, "Shaman"}, {1u << 7, "Mage"}, {1u << 8, "Warlock"}, {1u << 10, "Druid"}};
+    Player* player = handler->GetSession()->GetPlayer();
+    uint32 raceMask = EffectiveRaceMask(item);
+    uint32 classMask = item->AllowableClass;
+    uint32 playerRaceMask = player ? (1u << (player->getRace() - 1)) : 0;
+    uint32 playerClassMask = player ? (1u << (player->getClass() - 1)) : 0;
+    bool raceAllowed = (raceMask & playerRaceMask) != 0;
+    bool classAllowed = !classMask || classMask == uint32(-1) || (classMask & playerClassMask);
+    bool levelAllowed = !player || player->GetLevel() >= item->RequiredLevel;
+    bool skillAllowed = !item->RequiredSkill || (player && player->GetSkillValue(item->RequiredSkill) >= item->RequiredSkillRank);
+    bool spellAllowed = !item->RequiredSpell || (player && player->HasSpell(item->RequiredSpell));
+    uint32 currentReputation = item->RequiredReputationFaction && player ? uint32(player->GetReputationRank(item->RequiredReputationFaction)) : 0;
+    bool reputationAllowed = !item->RequiredReputationFaction || currentReputation >= item->RequiredReputationRank;
+    bool uniqueAllowed = item->MaxCount <= 0 || !player || !player->HasItemCount(item->ItemId, uint32(item->MaxCount), true);
+    bool usable = raceAllowed && classAllowed && levelAllowed && skillAllowed && spellAllowed && reputationAllowed && uniqueAllowed;
+    std::vector<std::string> failures;
+    if (!raceAllowed) failures.emplace_back("Faction or race restriction");
+    if (!classAllowed) failures.emplace_back("Class restriction");
+    if (!levelAllowed) failures.emplace_back("Level requirement");
+    if (!skillAllowed) failures.emplace_back("Skill requirement");
+    if (!spellAllowed) failures.emplace_back("Required spell missing");
+    if (!reputationAllowed) failures.emplace_back("Reputation requirement");
+    if (!uniqueAllowed) failures.emplace_back("Unique item limit reached");
+    std::ostringstream reason;
+    for (std::string const& failure : failures) { if (reason.tellp() > 0) reason << "; "; reason << failure; }
+    Protocol::SendItemAccess(handler, raceMask, classMask, ItemFaction(item, raceMask), MaskNames(raceMask, races, PlayableRaceMask, "All playable races"), MaskNames(classMask, classes, PlayableClassMask, "All playable classes"), usable, usable ? "All evaluated requirements passed" : reason.str());
+
+    Protocol::SendItemRequirement(handler, "FACTION_RACE", 0, ItemFaction(item, raceMask), MaskNames(raceMask, races, PlayableRaceMask, "All playable races"), player ? MaskNames(playerRaceMask, races, PlayableRaceMask, "Unknown") : "No character", raceAllowed, raceAllowed ? "Faction and race allowed" : "Character faction or race is not permitted");
+    Protocol::SendItemRequirement(handler, "CLASS", 0, "Classes", MaskNames(classMask, classes, PlayableClassMask, "All playable classes"), player ? MaskNames(playerClassMask, classes, PlayableClassMask, "Unknown") : "No character", classAllowed, classAllowed ? "Class allowed" : "Character class is not permitted");
+    if (item->RequiredLevel)
+        Protocol::SendItemRequirement(handler, "LEVEL", 0, "Character level", std::to_string(item->RequiredLevel), player ? std::to_string(player->GetLevel()) : "Unknown", levelAllowed, levelAllowed ? "Level requirement met" : "Character level is too low");
+    if (item->RequiredSkill)
+        Protocol::SendItemRequirement(handler, "SKILL", item->RequiredSkill, SkillName(item->RequiredSkill), std::to_string(item->RequiredSkillRank), player ? std::to_string(player->GetSkillValue(item->RequiredSkill)) : "Unknown", skillAllowed, skillAllowed ? "Skill requirement met" : "Required skill or rank is missing");
+    if (item->RequiredSpell)
+        Protocol::SendItemRequirement(handler, "SPELL", item->RequiredSpell, SpellName(item->RequiredSpell), "Known", player && player->HasSpell(item->RequiredSpell) ? "Known" : "Not known", spellAllowed, spellAllowed ? "Required spell known" : "Required spell is missing");
+    if (item->RequiredReputationFaction)
+        Protocol::SendItemRequirement(handler, "REPUTATION", item->RequiredReputationFaction, FactionName(item->RequiredReputationFaction), ReputationRankName(item->RequiredReputationRank), ReputationRankName(currentReputation), reputationAllowed, reputationAllowed ? "Reputation requirement met" : "Reputation rank is too low");
+    if (item->MaxCount > 0)
+        Protocol::SendItemRequirement(handler, "UNIQUE", item->ItemId, "Unique item limit", std::to_string(item->MaxCount), player ? std::to_string(player->GetItemCount(item->ItemId, true)) : "Unknown", uniqueAllowed, uniqueAllowed ? "Below unique item limit" : "Unique item limit reached");
+
+    ItemPreviewInfo preview;
+    for (_Spell const& itemSpell : item->Spells)
+        if (itemSpell.SpellId > 0) ResolvePreviewSpell(uint32(itemSpell.SpellId), preview);
+    Protocol::SendItemPreview(handler, preview.type, preview.spell, preview.creature, preview.display);
+}
+
 std::string ProfessionName(uint32 skill)
 {
     switch (skill)
@@ -127,7 +291,28 @@ void EmitSources(ChatHandler* handler, uint32 itemId)
         do
         {
             Field* fields = quests->Fetch();
-            Protocol::SendItemSource(handler, "QUEST_REWARD", fields[0].Get<uint32>(), fields[1].Get<std::string>(), "Quest reward");
+            uint32 questId = fields[0].Get<uint32>();
+            std::string questName = fields[1].Get<std::string>();
+            Protocol::SendItemSource(handler, "QUEST_REWARD", questId, questName, "Quest reward");
+            if (Quest const* quest = sObjectMgr->GetQuestTemplate(questId))
+            {
+                Player* player = handler->GetSession()->GetPlayer();
+                for (uint8 index = 0; index < QUEST_ITEM_OBJECTIVES_COUNT; ++index)
+                {
+                    uint32 requiredItem = quest->RequiredItemId[index];
+                    uint32 requiredCount = quest->RequiredItemCount[index];
+                    if (!requiredItem || !requiredCount) continue;
+                    ItemTemplate const* required = sObjectMgr->GetItemTemplate(requiredItem);
+                    uint32 currentCount = player ? player->GetItemCount(requiredItem, true) : 0;
+                    Protocol::SendItemRequirement(handler, "ACQUISITION_ITEM", requiredItem, required ? required->Name1 : "Required item", std::to_string(requiredCount), player ? std::to_string(currentCount) : "Unknown", currentCount >= requiredCount, "Required by quest " + questName + " [" + std::to_string(questId) + "]");
+                }
+                if (uint32 previousQuest = uint32(std::abs(quest->GetPrevQuestId())))
+                {
+                    Quest const* previous = sObjectMgr->GetQuestTemplate(previousQuest);
+                    bool complete = player && player->GetQuestRewardStatus(previousQuest);
+                    Protocol::SendItemRequirement(handler, "ACQUISITION_QUEST", previousQuest, previous ? previous->GetTitle() : "Previous quest", "Completed", complete ? "Completed" : "Not completed", complete, "Prerequisite for quest " + questName + " [" + std::to_string(questId) + "]");
+                }
+            }
         } while (quests->NextRow());
     }
 }
@@ -144,6 +329,7 @@ bool ItemInspector::Inspect(ChatHandler* handler, uint32 itemId)
     }
 
     Protocol::SendItemBegin(handler, itemId, selected->Name1, selected->Quality, selected->ItemLevel, selected->RequiredLevel);
+    EmitAccessAndPreview(handler, selected);
     uint32 craftCount = 0;
     std::unordered_set<uint32> emittedSpells;
     for (uint32 spellId = 0; spellId < sSpellStore.GetNumRows(); ++spellId)
