@@ -20,6 +20,7 @@ local CMD = {
   instanceBindsSelf = ".azercoreops instance binds self",
   instanceBindsTarget = ".azercoreops instance binds target",
   instanceUnbind = ".azercoreops instance unbind %s",
+  instanceDiagnose = ".azercoreops instance diagnose",
   auditSearch = ".azercoreops instance search %s",
   auditGroup = ".azercoreops instance audit %d %d",
   questSearch = ".azercoreops quest search %s",
@@ -93,6 +94,7 @@ local instanceUI={my={},target={},captureUntil=0,myRows={},targetRows={},myOffse
   view="OVERVIEW",viewButtons={},myHeading=nil,targetHeader=nil,autoInspect=false,bindPage=nil,bindScope=nil,unbindOperation=nil,
   myLoadState="UNLOADED",targetLoadState="UNLOADED",ignoreBindStream=false,targetPortrait=nil,targetPortraitFrame=nil,targetIdentity=nil,
   targetIdentityName=nil,targetIdentityMeta=nil}
+instanceUI.diagnostics={findings={},loading=false,header=nil,summary=nil,error=nil,generatedAt=nil}
 local auditUI={search={},members={},searchRows={},memberRows={},filterButtons={},filtered={},mapBox=nil,diffBox=nil,summary=nil,scroll=nil,scrollChild=nil,horizontal=nil,filter="ALL",lastMap=nil,lastDifficulty=nil,reportEdit=nil,
   searchOffset=0,selectedMap=nil,selectedName=nil,selectedType=nil,selectedMaxPlayers=nil,difficulty=0,difficultyLabel="Normal",lockedText=nil,difficultyButton=nil,difficultyMenu=nil,historyIndex=0,searchBox=nil,
   referenceId=0,expectedMembers=0,display={},groupVerdict="NOT AUDITED",groupReason="Run Group Audit",generatedAt=nil,stale=false}
@@ -3392,14 +3394,19 @@ local function BuildInstances()
 
   local auditPage=CreateFrame("Frame",nil,p); auditPage:SetPoint("TOPLEFT",0,-94); auditPage:SetPoint("BOTTOMRIGHT")
   local bindPage=CreateFrame("Frame",nil,p); bindPage:SetPoint("TOPLEFT",0,-94); bindPage:SetPoint("BOTTOMRIGHT"); bindPage:Hide(); instanceUI.bindPage=bindPage
-  local auditTab,bindTab
+  local diagnosticPage=CreateFrame("Frame",nil,p); diagnosticPage:SetPoint("TOPLEFT",0,-94); diagnosticPage:SetPoint("BOTTOMRIGHT"); diagnosticPage:Hide()
+  local auditTab,bindTab,diagnosticTab
   local function ShowInstanceMode(mode)
-    local access=mode=="ACCESS"; if access then auditPage:Show(); bindPage:Hide() else auditPage:Hide(); bindPage:Show() end
-    instanceUI.autoInspect=not access
+    local access=mode=="ACCESS"; local binds=mode=="BINDS"; local diagnostics=mode=="DIAGNOSTICS"
+    if access then auditPage:Show() else auditPage:Hide() end
+    if binds then bindPage:Show() else bindPage:Hide() end
+    if diagnostics then diagnosticPage:Show() else diagnosticPage:Hide() end
+    instanceUI.autoInspect=binds
     auditTab:SetBackdropColor(unpack(access and C.selected or C.button)); auditTab:SetBackdropBorderColor(unpack(access and C.gold or C.border))
-    bindTab:SetBackdropColor(unpack(not access and C.selected or C.button)); bindTab:SetBackdropBorderColor(unpack(not access and C.gold or C.border))
-    context:SetText(access and "Group Audit" or "Binds / Reset")
-    if not access then
+    bindTab:SetBackdropColor(unpack(binds and C.selected or C.button)); bindTab:SetBackdropBorderColor(unpack(binds and C.gold or C.border))
+    diagnosticTab:SetBackdropColor(unpack(diagnostics and C.selected or C.button)); diagnosticTab:SetBackdropBorderColor(unpack(diagnostics and C.gold or C.border))
+    context:SetText(access and "Group Audit" or (binds and "Binds / Reset" or "Read-only Diagnostics"))
+    if binds then
       UpdateInstanceTargetIdentity()
       RenderInstances()
       if instanceUI.myLoadState=="UNLOADED" then RefreshMyInstances() end
@@ -3408,8 +3415,10 @@ local function BuildInstances()
   end
   auditTab=Button(p,"Instance Access",140,24,function() ShowInstanceMode("ACCESS") end,"Check group and raid access to an instance"); auditTab:SetPoint("TOPLEFT",12,-65)
   bindTab=Button(p,"Binds / Reset",120,24,function() ShowInstanceMode("BINDS") end,"Inspect and safely remove instance binds"); bindTab:SetPoint("LEFT",auditTab,"RIGHT",8,0)
+  diagnosticTab=Button(p,"Diagnostics",110,24,function() ShowInstanceMode("DIAGNOSTICS") end,"Inspect live encounter, boss, door and progression state without changing it"); diagnosticTab:SetPoint("LEFT",bindTab,"RIGHT",8,0)
   auditTab:SetScript("OnLeave",function(self) self:SetBackdropColor(unpack(auditPage:IsShown() and C.selected or C.button)); self:SetBackdropBorderColor(unpack(auditPage:IsShown() and C.gold or C.border)); GameTooltip:Hide() end)
   bindTab:SetScript("OnLeave",function(self) self:SetBackdropColor(unpack(bindPage:IsShown() and C.selected or C.button)); self:SetBackdropBorderColor(unpack(bindPage:IsShown() and C.gold or C.border)); GameTooltip:Hide() end)
+  diagnosticTab:SetScript("OnLeave",function(self) self:SetBackdropColor(unpack(diagnosticPage:IsShown() and C.selected or C.button)); self:SetBackdropBorderColor(unpack(diagnosticPage:IsShown() and C.gold or C.border)); GameTooltip:Hide() end)
 
   StaticPopupDialogs["AZERCORE_OPS_INSTANCE_SEARCH_HELP"]={
     text="Instance Search Help\n\nSearch using an exact Map ID, for example: 668\n\nOr enter a partial or complete instance title, for example: Halls or Halls of Reflection.\n\nSearch is not case-sensitive. Press Enter or click Search.",
@@ -3609,6 +3618,47 @@ local function BuildInstances()
   Button(bindFooter,"Copy",48,20,CopyBindReport,"Open the complete bind report as selectable text"):SetPoint("RIGHT",-128,0)
   Button(bindFooter,"Share",54,20,ShareBindReport,"Open the Courier share window with the bind report"):SetPoint("RIGHT",-70,0)
   Button(bindFooter,"Export",62,20,ExportBindReport,"Export the complete visible bind report"):SetPoint("RIGHT",-4,0)
+
+  local diagnosticControls=CreateFrame("Frame",nil,diagnosticPage); diagnosticControls:SetPoint("TOPLEFT",12,-5); diagnosticControls:SetPoint("BOTTOMLEFT",12,10); diagnosticControls:SetWidth(180); Backdrop(diagnosticControls,C.panel)
+  local diagnosticHeading=Section(diagnosticControls,"ENCOUNTER SCAN",C.gold); diagnosticHeading:SetPoint("TOPLEFT",10,-10)
+  local diagnosticHelp=diagnosticControls:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); diagnosticHelp:SetPoint("TOPLEFT",10,-39); diagnosticHelp:SetPoint("TOPRIGHT",-10,-39); diagnosticHelp:SetJustifyH("LEFT"); diagnosticHelp:SetJustifyV("TOP"); diagnosticHelp:SetWordWrap(true); diagnosticHelp:SetTextColor(unpack(C.white)); diagnosticHelp:SetText("Enter the affected dungeon or raid. Target the boss or event NPC for extra evidence, then run the scan.\n\nThis workspace never changes encounter state, doors, creatures or lockouts.")
+  local diagnosticScan=Button(diagnosticControls,"Scan Current Instance",156,28,function()
+    instanceUI.diagnostics={findings={},loading=true,header=nil,summary=nil,error=nil,generatedAt=nil}
+    if instanceUI.RenderDiagnostics then instanceUI.RenderDiagnostics() end
+    SendCommand(CMD.instanceDiagnose); SetStatus("Collecting live encounter evidence...")
+  end,"Run a read-only server scan of the current instance"); diagnosticScan:SetPoint("TOPLEFT",12,-145)
+  Button(diagnosticControls,"Clear",72,22,function() instanceUI.diagnostics={findings={},loading=false,header=nil,summary=nil,error=nil,generatedAt=nil}; instanceUI.RenderDiagnostics(); SetStatus("Encounter diagnostics cleared.") end,"Clear the displayed findings"):SetPoint("TOPLEFT",12,-181)
+
+  local diagnosticPanel=CreateFrame("Frame",nil,diagnosticPage); diagnosticPanel:SetPoint("TOPLEFT",200,-5); diagnosticPanel:SetPoint("BOTTOMRIGHT",-12,10); Backdrop(diagnosticPanel,C.panel)
+  local diagnosticTitle=Section(diagnosticPanel,"LIVE ENCOUNTER EVIDENCE",C.gold); diagnosticTitle:SetPoint("TOPLEFT",10,-10)
+  local diagnosticScroll=CreateFrame("ScrollFrame","AZERCORE_OPS_EncounterDiagnosticScroll",diagnosticPanel,"UIPanelScrollFrameTemplate"); diagnosticScroll:SetPoint("TOPLEFT",10,-32); diagnosticScroll:SetPoint("BOTTOMRIGHT",-28,36)
+  local diagnosticChild=CreateFrame("Frame",nil,diagnosticScroll); diagnosticChild:SetWidth(650); diagnosticChild:SetHeight(500); diagnosticScroll:SetScrollChild(diagnosticChild)
+  local diagnosticText=diagnosticChild:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); diagnosticText:SetPoint("TOPLEFT",2,-2); diagnosticText:SetWidth(640); diagnosticText:SetJustifyH("LEFT"); diagnosticText:SetJustifyV("TOP"); diagnosticText:SetWordWrap(true)
+
+  local function DiagnosticReport(plain)
+    local d=instanceUI.diagnostics or {}; local lines={}
+    local function add(value) table.insert(lines,value) end
+    if d.header then add(string.format("%s — Map %s, Instance %s, Difficulty %s",d.header.name or "Current instance",d.header.map or "?",d.header.instance or "?",d.header.difficulty or "?")); add("Script: "..tostring(d.header.script or "Unknown")); add("") end
+    if d.loading then add(plain and "Collecting live encounter evidence..." or "|cffffff00Collecting live encounter evidence...|r") end
+    if d.error then add((plain and "ERROR: " or "|cffff4040ERROR: |r")..tostring(d.error)) end
+    if not d.loading and not d.error and #(d.findings or {})==0 then add("No scan loaded. Enter an instance and click Scan Current Instance.") end
+    local colors={PASS="|cff40ff40",WARN="|cffffb020",FAIL="|cffff4040"}
+    for _,finding in ipairs(d.findings or {}) do
+      local prefix=plain and ("["..tostring(finding.severity).."]") or ((colors[finding.severity] or "|cffffffff").."["..tostring(finding.severity).."]|r")
+      add(string.format("%s  %s — %s",prefix,tostring(finding.category or "CHECK"),tostring(finding.subject or "Unknown")))
+      add("  Expected: "..tostring(finding.expected or "—")); add("  Actual: "..tostring(finding.actual or "—")); add("  Why: "..tostring(finding.detail or "—")); add("  Recommendation: "..tostring(finding.recommendation or "—")); add("")
+    end
+    if d.summary then add(string.format("SUMMARY — %s passed, %s warnings, %s failures",d.summary.passed or 0,d.summary.warnings or 0,d.summary.failures or 0)); if d.generatedAt then add("Generated: "..d.generatedAt) end end
+    return table.concat(lines,"\n")
+  end
+  instanceUI.RenderDiagnostics=function()
+    local report=DiagnosticReport(false); diagnosticText:SetText(report); diagnosticChild:SetHeight(math.max(500,diagnosticText:GetStringHeight()+20))
+  end
+  local diagnosticFooter=CreateFrame("Frame",nil,diagnosticPage); diagnosticFooter:SetPoint("BOTTOMLEFT",200,12); diagnosticFooter:SetPoint("BOTTOMRIGHT",-12,12); diagnosticFooter:SetHeight(28)
+  Button(diagnosticFooter,"Copy",54,22,function() ShowSelectableReport("Encounter diagnostic report",DiagnosticReport(true)) end,"Copy the complete diagnostic report"):SetPoint("RIGHT",-126,0)
+  Button(diagnosticFooter,"Share",58,22,function() local f=EnsureShareFrame(); f:SetCapturedMessage(DiagnosticReport(true),"INSTANCE",function() return DiagnosticReport(true) end,"INSTANCE"); f:Show(); f:Raise() end,"Share the diagnostic report through Courier"):SetPoint("RIGHT",-64,0)
+  Button(diagnosticFooter,"Export",60,22,function() ShowSelectableReport("Export encounter diagnostic report",DiagnosticReport(true)) end,"Export the complete diagnostic report"):SetPoint("RIGHT",0,0)
+  instanceUI.RenderDiagnostics()
   auditUI.filter=(Settings().rememberAuditFilter and AzerCoreOpsDB.auditFilter) or "ALL"; if not ({ALL=true,CAN_JOIN=true,CANNOT_JOIN=true,OFFLINE=true,SAME_ID=true,DIFFERENT_ID=true,NO_BIND=true})[auditUI.filter] then auditUI.filter="ALL" end
   ShowInstanceMode("ACCESS")
   RenderAudit()
@@ -4332,6 +4382,14 @@ events:SetScript("OnEvent",function(_,event,arg1)
     elseif kind=="QUEST_ERROR" then
       if questUI.targetLogLoading then questUI.targetLogLoading=false; questUI.targetLogError=f.reason or "Quest-log inspection failed"; RenderQuest() end
       SetStatus(f.reason or "Quest module error",true)
+    elseif kind=="ENCOUNTER_DIAG_BEGIN" then
+      instanceUI.diagnostics={findings={},loading=true,header=f,summary=nil,error=nil,generatedAt=nil}; if instanceUI.RenderDiagnostics then instanceUI.RenderDiagnostics() end; SetStatus("Diagnosing "..tostring(f.name or "current instance").."...")
+    elseif kind=="ENCOUNTER_DIAG_FINDING" then
+      table.insert(instanceUI.diagnostics.findings,f); if instanceUI.RenderDiagnostics then instanceUI.RenderDiagnostics() end
+    elseif kind=="ENCOUNTER_DIAG_END" then
+      instanceUI.diagnostics.loading=false; instanceUI.diagnostics.summary={passed=tonumber(f.passed) or 0,warnings=tonumber(f.warnings) or 0,failures=tonumber(f.failures) or 0}; instanceUI.diagnostics.generatedAt=date("%Y-%m-%d %H:%M:%S"); if instanceUI.RenderDiagnostics then instanceUI.RenderDiagnostics() end; SetStatus(string.format("Encounter scan complete: %d passed, %d warnings, %d failures",instanceUI.diagnostics.summary.passed,instanceUI.diagnostics.summary.warnings,instanceUI.diagnostics.summary.failures),instanceUI.diagnostics.summary.failures>0)
+    elseif kind=="ENCOUNTER_DIAG_ERROR" then
+      instanceUI.diagnostics.loading=false; instanceUI.diagnostics.error=f.reason or "Encounter diagnostic failed"; if instanceUI.RenderDiagnostics then instanceUI.RenderDiagnostics() end; SetStatus(instanceUI.diagnostics.error,true)
     elseif kind=="BIND_BEGIN" then
       instanceUI.bindScope=f.scope or instanceUI.bindScope or "TARGET"
       instanceUI.ignoreBindStream=false

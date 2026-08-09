@@ -14,6 +14,7 @@ public:
     static bool Search(ChatHandler* handler, Acore::ChatCommands::Tail search);
     static bool Audit(ChatHandler* handler, uint32 mapId, Optional<uint8> difficultyArg);
     static bool Binds(ChatHandler* handler, Acore::ChatCommands::Tail scope);
+    static bool Diagnose(ChatHandler* handler);
     static bool Unbind(ChatHandler* handler, Acore::ChatCommands::Tail selections);
 };
 }

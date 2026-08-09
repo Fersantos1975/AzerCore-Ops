@@ -3,11 +3,14 @@
 #include "Chat.h"
 #include "DBCStores.h"
 #include "DisableMgr.h"
+#include "Creature.h"
+#include "GameObject.h"
 #include "Group.h"
 #include "GameTime.h"
 #include "InstanceSaveMgr.h"
 #include "InstanceScript.h"
 #include "MapMgr.h"
+#include "Map.h"
 #include "ObjectAccessor.h"
 #include "ObjectMgr.h"
 #include "Player.h"
@@ -30,6 +33,42 @@ namespace AzerCoreOps
 {
 namespace
 {
+constexpr uint32 MapIcecrownCitadel = 631;
+constexpr uint32 DataDeathbringerSaurfang = 3;
+constexpr uint32 DataBloodPrinceCouncil = 7;
+constexpr uint32 DataSaurfangEventNpc = 13;
+constexpr uint32 DataBloodPrinceTrash = 14;
+constexpr uint32 GoSaurfangDoor = 201825;
+constexpr uint32 GoSaurfangTransporter = 202244;
+constexpr uint32 GoCrimsonHallDoor = 201376;
+
+char const* GameObjectStateName(GOState state)
+{
+    switch (state)
+    {
+        case GO_STATE_ACTIVE: return "OPEN/ACTIVE";
+        case GO_STATE_READY: return "CLOSED/READY";
+        case GO_STATE_ACTIVE_ALTERNATIVE: return "ACTIVE_ALTERNATIVE";
+    }
+    return "UNKNOWN";
+}
+
+struct DiagnosticEmitter
+{
+    ChatHandler* handler;
+    uint32 passed{0};
+    uint32 warnings{0};
+    uint32 failures{0};
+
+    void Finding(std::string const& severity, std::string const& category, std::string const& subject, std::string const& expected, std::string const& actual, std::string const& detail, std::string const& recommendation)
+    {
+        if (severity == "PASS") ++passed;
+        else if (severity == "FAIL") ++failures;
+        else ++warnings;
+        Protocol::SendEncounterDiagnosticFinding(handler, severity, category, subject, expected, actual, detail, recommendation);
+    }
+};
+
 std::string QuestName(uint32 id)
 {
     if (Quest const* quest = sObjectMgr->GetQuestTemplate(id))
@@ -329,6 +368,92 @@ bool InstanceInspector::Binds(ChatHandler* handler, Tail scopeArg)
             ++emitted;
         }
     Protocol::SendBindEnd(handler, player->GetName(), emitted);
+    return true;
+}
+
+bool InstanceInspector::Diagnose(ChatHandler* handler)
+{
+    Player* player = handler && handler->GetSession() ? handler->GetSession()->GetPlayer() : nullptr;
+    if (!player || !player->GetMap() || !player->GetMap()->IsDungeon())
+    {
+        Protocol::SendEncounterDiagnosticError(handler, "Enter the dungeon or raid instance that you want to diagnose");
+        return true;
+    }
+
+    InstanceMap* map = player->GetMap()->ToInstanceMap();
+    InstanceScript* script = map ? map->GetInstanceScript() : nullptr;
+    MapEntry const* mapEntry = sMapStore.LookupEntry(player->GetMapId());
+    std::string mapName = mapEntry ? LocalizedMapName(mapEntry, handler) : ("Map " + std::to_string(player->GetMapId()));
+    std::string scriptName = map ? map->GetScriptName() : "";
+    Protocol::SendEncounterDiagnosticBegin(handler, player->GetMapId(), player->GetInstanceId(), uint32(map->GetDifficulty()), mapName, scriptName.empty() ? "None" : scriptName);
+    DiagnosticEmitter diagnostics{handler};
+
+    diagnostics.Finding(script ? "PASS" : "FAIL", "INSTANCE", "Instance script", "Loaded", script ? (scriptName.empty() ? "Loaded; name unavailable" : scriptName) : "Missing", script ? "The instance has an authoritative runtime controller" : "Boss progression, doors and event state cannot be evaluated without an InstanceScript", script ? "No action required" : "Verify the map ScriptName and rebuild/restart the server before attempting encounter repairs");
+    diagnostics.Finding(script && script->IsEncounterInProgress() ? "WARN" : "PASS", "INSTANCE", "Encounter activity", "No stuck encounter", script && script->IsEncounterInProgress() ? "An encounter is in progress" : "No encounter currently in progress", script && script->IsEncounterInProgress() ? "A boss state remains IN_PROGRESS somewhere in this instance" : "The instance is not globally locked by an active encounter", script && script->IsEncounterInProgress() ? "Finish or reset the active encounter normally; avoid killing scripted bosses with GM commands" : "No action required");
+
+    if (Creature* selected = handler->getSelectedCreature())
+    {
+        CreatureTemplate const* creatureTemplate = selected->GetCreatureTemplate();
+        bool selectable = !selected->HasUnitFlag(UNIT_FLAG_NOT_SELECTABLE);
+        bool attackable = !selected->HasUnitFlag(UNIT_FLAG_NON_ATTACKABLE);
+        diagnostics.Finding("PASS", "TARGET", selected->GetName(), "Runtime creature available", "Entry " + std::to_string(selected->GetEntry()) + (selected->IsAlive() ? "; alive" : "; dead") + (selected->IsInCombat() ? "; in combat" : "; out of combat"), "Selected creature runtime state was captured", "Use the findings below to compare creature state with encounter state");
+        diagnostics.Finding(selectable ? "PASS" : "WARN", "TARGET", "Selectable flag", "Selectable when the encounter permits interaction", selectable ? "Selectable" : "UNIT_FLAG_NOT_SELECTABLE", selectable ? "The client can select this creature" : "The instance script or event may intentionally be preventing selection", selectable ? "No action required" : "Check prerequisites and event NPCs before changing unit flags manually");
+        diagnostics.Finding(attackable ? "PASS" : "WARN", "TARGET", "Attackable flag", "Attackable only when the encounter is ready", attackable ? "Attackable" : "UNIT_FLAG_NON_ATTACKABLE", creatureTemplate ? ("AI " + (creatureTemplate->AIName.empty() ? std::string("default") : creatureTemplate->AIName) + "; Script ID " + std::to_string(creatureTemplate->ScriptID)) : "Creature template unavailable", attackable ? "No action required" : "Allow the scripted introduction to complete; do not force combat until prerequisites pass");
+    }
+    else
+        diagnostics.Finding("WARN", "TARGET", "Selected creature", "Optional boss or event NPC target", "No creature selected", "Generic instance checks will continue, but target-specific flags and AI cannot be inspected", "Target the affected boss or event NPC and run the scan again for additional evidence");
+
+    if (script && player->GetMapId() == MapIcecrownCitadel)
+    {
+        EncounterState saurfangState = script->GetBossState(DataDeathbringerSaurfang);
+        EncounterState councilState = script->GetBossState(DataBloodPrinceCouncil);
+        EncounterState bloodTrashState = script->GetBossState(DataBloodPrinceTrash);
+        Creature* saurfang = map->GetCreature(script->GetGuidData(DataDeathbringerSaurfang));
+        Creature* eventNpc = map->GetCreature(script->GetGuidData(DataSaurfangEventNpc));
+        GameObject* saurfangDoor = map->GetGameObject(script->GetGuidData(GoSaurfangDoor));
+        GameObject* transporter = map->GetGameObject(script->GetGuidData(GoSaurfangTransporter));
+        GameObject* crimsonDoor = player->FindNearestGameObject(GoCrimsonHallDoor, 250.0f, false);
+        bool saurfangDone = saurfangState == DONE;
+
+        diagnostics.Finding(saurfangDone ? "PASS" : "WARN", "ENCOUNTER", "Deathbringer Saurfang", "DONE before upper-wing access", InstanceScript::GetBossStateName(saurfangState), saurfang ? (std::string("Creature present; ") + (saurfang->IsAlive() ? "alive" : "dead")) : "Creature is not loaded or has despawned", saurfangDone ? "No action required" : "Complete Saurfang through the normal encounter script; a dead creature with a non-DONE state indicates incomplete progression");
+        if (saurfang && !saurfang->IsAlive() && !saurfangDone)
+            diagnostics.Finding("FAIL", "CONSISTENCY", "Saurfang creature versus encounter", "Dead creature must have encounter state DONE", "Creature dead; state " + InstanceScript::GetBossStateName(saurfangState), "The creature died without the instance recording normal encounter completion", "Allow a normal reset or restore the encounter through supported instance controls; do not use .kill on scripted bosses");
+
+        if (saurfangDoor)
+        {
+            bool open = saurfangDoor->GetGoState() != GO_STATE_READY;
+            std::string severity = saurfangDone == open ? "PASS" : "FAIL";
+            diagnostics.Finding(severity, "DOOR", "Saurfang passage door [201825]", saurfangDone ? "Open after Saurfang is DONE" : "Closed until Saurfang is DONE", GameObjectStateName(saurfangDoor->GetGoState()), "This passage door is directly controlled by the Deathbringer Saurfang encounter", severity == "PASS" ? "No action required" : "The door and saved encounter state disagree; reload the instance and rescan before attempting a manual door change");
+        }
+        else
+            diagnostics.Finding("WARN", "DOOR", "Saurfang passage door [201825]", "Loaded near Deathbringer's Rise", "Not loaded in the current grid", "An unloaded game object cannot be evaluated safely", "Move to Deathbringer's Rise and scan again");
+
+        if (transporter)
+        {
+            bool usable = !transporter->HasGameObjectFlag(GO_FLAG_NOT_SELECTABLE);
+            diagnostics.Finding(!saurfangDone || usable ? "PASS" : "FAIL", "TRANSPORT", "Deathbringer's Rise transporter [202244]", saurfangDone ? "Selectable after Saurfang is DONE" : "May remain locked before completion", usable ? "Selectable" : "Not selectable", "The transporter provides post-Saurfang access to the upper wings", !saurfangDone || usable ? "No action required" : "Reload the instance after confirming Saurfang is DONE; if still locked, inspect the post-fight event state");
+        }
+        else
+            diagnostics.Finding("WARN", "TRANSPORT", "Deathbringer's Rise transporter [202244]", "Loaded near Deathbringer's Rise", "Not loaded in the current grid", "Transporter state is unavailable from the player's current location", "Move to the transporter and scan again");
+
+        diagnostics.Finding(saurfangDone ? "PASS" : "FAIL", "PREREQUISITE", "Upper-wing access", "Deathbringer Saurfang DONE", InstanceScript::GetBossStateName(saurfangState), "Festergut, Rotface, Blood Prince Council, Valithria and later encounters require Lower Spire completion", saurfangDone ? "Upper-wing prerequisite passed" : "Complete Saurfang normally before diagnosing an upper-wing door");
+        diagnostics.Finding(eventNpc || saurfangDone ? "PASS" : "WARN", "EVENT", "Saurfang faction event NPC", saurfangDone ? "May despawn after completion" : "Present when the introduction is ready", eventNpc ? (std::string("Present; ") + (eventNpc->IsAlive() ? "alive" : "dead")) : "Not loaded or missing", "Muradin or High Overlord Saurfang drives the faction-specific introduction and post-fight sequence", eventNpc || saurfangDone ? "No action required" : "Move to the platform and rescan; if still missing, reload the instance rather than spawning a duplicate NPC");
+
+        std::string bloodController = "Trash " + InstanceScript::GetBossStateName(bloodTrashState) + "; Council " + InstanceScript::GetBossStateName(councilState);
+        if (crimsonDoor)
+        {
+            bool open = crimsonDoor->GetGoState() != GO_STATE_READY;
+            bool shouldBeOpen = bloodTrashState == DONE && councilState != IN_PROGRESS;
+            std::string severity = shouldBeOpen && !open ? "FAIL" : (!open && saurfangDone ? "WARN" : "PASS");
+            diagnostics.Finding(severity, "DOOR", "Crimson Hall door [201376]", "Controlled by Blood Prince trash and Council states", std::string(GameObjectStateName(crimsonDoor->GetGoState())) + "; " + bloodController, "Saurfang unlocks upper-wing access, but the Crimson Hall door also follows its own trash and Council event states", severity == "FAIL" ? "Door state disagrees with completed Blood Prince trash; reload the instance and rescan" : (!open ? "Approach and complete the Blood Prince trash event, then rescan before changing the door" : "No action required"));
+        }
+        else
+            diagnostics.Finding("WARN", "DOOR", "Crimson Hall door [201376]", "Loaded while near the Blood Wing", "Not loaded in the current grid; " + bloodController, "The door is outside the player's currently loaded area, so its physical state cannot be read", "Move to the closed Blood Wing door and scan again");
+    }
+    else if (script)
+        diagnostics.Finding("WARN", "PROFILE", "Encounter-specific profile", "Known profile when available", "Generic checks only for map " + std::to_string(player->GetMapId()), "This first release includes the Deathbringer Saurfang and Crimson Hall profile", "Target the affected creature for generic AI and flag checks; additional encounter profiles can be added from verified findings");
+
+    Protocol::SendEncounterDiagnosticEnd(handler, diagnostics.passed, diagnostics.warnings, diagnostics.failures);
     return true;
 }
 
