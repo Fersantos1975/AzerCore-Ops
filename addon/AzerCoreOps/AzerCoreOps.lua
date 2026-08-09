@@ -3839,9 +3839,9 @@ local function BuildOptions()
 end
 
 local PROJECT_LINKS = {
-  {label="AzerCoreOps repository", url="https://github.com/Fersantos1975/mod-azercore-ops"},
+  {label="AzerCoreOps repository", url="https://github.com/Fersantos1975/AzerCore-Ops"},
   {label="AzerothCore", url="https://github.com/azerothcore/azerothcore-wotlk"},
-  {label="mod-playerbots", url="https://github.com/azerothcore/mod-playerbots"},
+  {label="mod-playerbots", url="https://github.com/mod-playerbots/mod-playerbots"},
   {label="AzerothCore documentation", url="https://www.azerothcore.org/wiki/"},
   {label="Wowhead WotLK", url="https://www.wowhead.com/wotlk"},
 }

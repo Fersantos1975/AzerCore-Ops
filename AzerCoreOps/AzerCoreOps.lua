@@ -1,12 +1,12 @@
 local ADDON = ...
 
--- AzerCore Ops Platform 0.5.4-alpha6-npc-story
+-- AzerCore Ops Platform 0.6.0
 -- Target: WoW 3.3.5a / AzerothCore. All server commands live here so that
 -- branch-specific command names can be changed without touching the UI.
 local CMD = {
   revive = ".revive", repair = ".gear repair", summon = ".summon",
   appear = ".appear", combatStop = ".combatstop", save = ".save",
-  npcInfo = ".npc info", npcKill = ".die", npcRespawn = ".respawn",
+  npcKill = ".die", npcRespawn = ".respawn",
   npcMove = ".npc move", npcNear = ".npc near", npcAdd = ".npc add %d",
   npcDelete = ".npc delete",
   questLookup = ".lookup quest %s", questStatus = ".quest status %d",
@@ -14,6 +14,9 @@ local CMD = {
   questReward = ".quest reward %d", questRemove = ".quest remove %d",
   gps = ".gps", tele = ".tele %s", itemLookup = ".lookup item %s",
   itemAdd = ".additem %d %d", itemRemove = ".additem %d -%d",
+  itemInspect = ".azercoreops item inspect %d",
+  movementCatalog = ".azercoreops movement catalog", movementCurrent = ".azercoreops movement current",
+  movementGo = ".azercoreops movement go %d %.3f %.3f %.3f %.3f", movementReturn = ".azercoreops movement return",
   instanceBindsSelf = ".azercoreops instance binds self",
   instanceBindsTarget = ".azercoreops instance binds target",
   instanceUnbind = ".azercoreops instance unbind %s",
@@ -82,6 +85,8 @@ Platform.NPCUI={activity={},buttons={},viewButtons={},server={quests={},loot={},
   view="OVERVIEW",activeOperation="Inspect NPC",autoInspect=false,Update=nil,Render=nil,Inspect=nil,
   identityName=nil,identityMeta=nil,portrait=nil,workspaceTitle=nil,text=nil,textChild=nil,model=nil,modelViewport=nil,
   questRows={},lootRows={}}
+Platform.ItemUI={view="OVERVIEW",selected=nil,buttons={},viewButtons={},Select=nil,Render=nil,Report=nil,server={crafts={},reagents={},recipes={},sources={},uses={}},linkRows={}}
+Platform.MovementUI={view="DESTINATIONS",serverCatalog={},regions={},selectedRegion=nil,selectedZone=nil,selected=nil,current=nil,loading=false,Render=nil,Report=nil,RefreshCatalog=nil}
 local instanceUI={my={},target={},captureUntil=0,myRows={},targetRows={},myOffset=0,targetOffset=0,targetLabel=nil,
   selectedBind=nil,filter="ALL",filterButtons={},detailText=nil,summaryText=nil,myEmpty=nil,targetEmpty=nil,inspectionText=nil,
   inspectedPlayer=nil,inspectedAt=nil,statusText=nil,myScroll=nil,targetScroll=nil,detailScroll=nil,horizontals={},activity={},
@@ -105,7 +110,7 @@ local defaults={
   rememberAuditFilter=true,autoReaudit=false,confirmResetSelected=true,
   warnNoTarget=true,compactAuditRows=false,auditFontSize=10,shiftClickInsert=true,
 }
-local ADDON_VERSION="0.5.4-alpha6-npc-story"
+local ADDON_VERSION="0.6.0"
 local PROTOCOL_VERSION="1"
 local TESTED_CORE="190184a04539"
 local TESTED_PLAYERBOTS="ba46fcdecde3"
@@ -998,7 +1003,7 @@ local function BuildNPC()
   local opTitle=Section(operations,"OPERATIONS",C.gold); opTitle:SetPoint("TOPLEFT",10,-10)
   local opDefs={
     {"Inspect NPC",function() Platform.NPCUI.autoInspect=true; Platform.NPCUI.activeOperation="Inspect NPC"; Platform.NPCUI.Inspect(false) end,"Inspect the selected creature and resume automatic target inspection"},
-    {"NPC Info",function() Platform.NPCUI.autoInspect=false; Platform.NPCUI.activeOperation="NPC Info"; SendCommand(CMD.npcInfo) end,"Show the core NPC information command","GM_REQUIRED"},
+    {"NPC Info",function() Platform.NPCUI.autoInspect=false; Platform.NPCUI.activeOperation="NPC Info"; Platform.NPCUI.view="TECHNICAL"; Platform.NPCUI.Inspect(false); Platform.NPCUI.Render() end,"Load technical NPC information inside AzerCore Ops","GM_REQUIRED"},
     {"Kill",function() Platform.NPCUI.autoInspect=false; Platform.NPCUI.activeOperation="Kill"; Confirm(CMD.npcKill) end,"Kill the selected creature","GM_REQUIRED"},
     {"Respawn",function() Platform.NPCUI.autoInspect=false; Platform.NPCUI.activeOperation="Respawn"; SendCommand(CMD.npcRespawn) end,"Respawn the selected creature","GM_REQUIRED"},
     {"Move Here",function() Platform.NPCUI.autoInspect=false; Platform.NPCUI.activeOperation="Move Here"; Confirm(CMD.npcMove) end,"Move the selected spawn to your position","GM_REQUIRED"},
@@ -1153,15 +1158,16 @@ end
 
 local resultRows={quest={},item={}}
 local function RenderResults()
+  if lookup.kind=="item" and Platform.ItemUI.RenderLookupResults then Platform.ItemUI.RenderLookupResults(); return end
   local rows=resultRows[lookup.kind] or {}
   for i,row in ipairs(rows) do
     local r=lookup.results[i]
     if r then
-      row.id=r.id; row.kind=lookup.kind
+      row.id=r.id; row.kind=lookup.kind; row.result=r
       row.label:SetText(r.link or r.title or (lookup.kind.." "..r.id))
       row:Show()
     else
-      row.id=nil; row.label:SetText(""); row:Hide()
+      row.id=nil; row.result=nil; row.label:SetText(""); row:Hide()
     end
   end
 end
@@ -1179,6 +1185,7 @@ local function StoreLookupResult(id,title,link,suffix)
   end
   table.insert(lookup.results,{id=id,title=title,link=display})
   RenderResults()
+  After(.25,function() if lookup.kind=="item" then RenderResults() end end)
   SetStatus(#lookup.results.." "..lookup.kind.." result(s) captured")
 end
 local function BeginLookup(kind,cmd)
@@ -1190,6 +1197,7 @@ local function AddResultsPanel(parent,kind)
   for i=1,5 do
     local row=Button(box,"",458,20,function(self)
       if self.kind=="quest" then questIdBox:SetText(self.id) else itemIdBox:SetText(self.id) end
+      if self.kind=="item" and Platform.ItemUI.Select then Platform.ItemUI.Select(self.id,self.result) end
       SetStatus("Selected "..self.kind.." ID "..self.id)
     end)
     -- Use our own FontString: Button:SetText is unreliable for dynamically
@@ -2399,36 +2407,437 @@ local function BuildQuest()
 end
 
 local function BuildTeleport()
-  local p=NewPage("Teleport"); local h=Label(p,"Teleport tools"); h:SetPoint("TOPLEFT",18,-18)
-  local loc=AddField(p,"Teleport location",18,-56,260,false)
-  local teleportButton=Button(p,"Teleport",120,24,function() local s=NonEmpty(loc,"a teleport location"); if s then SendCommand(string.format(CMD.tele,s)) end end,"Use an AzerothCore teleport name"); teleportButton:SetPoint("TOPLEFT",295,-73); Platform:RegisterRoleButton(teleportButton,"GM_REQUIRED")
-  local playerName=AddField(p,"Player name",18,-125,210,false); playerName.azerCoreOpsExpected="player"; playerName.azerCoreOpsPlain=true
-  Button(p,"Use Target",100,24,function()
-    if UnitExists("target") and UnitIsPlayer("target") then playerName:SetText(UnitName("target") or ""); SetStatus("Selected player "..(UnitName("target") or ""))
-    else SetStatus("Select a player first.",true) end
-  end,"Copy the selected player's name"):SetPoint("TOPLEFT",245,-142)
-  local appearButton=Button(p,"Appear",100,24,function()
-    local name=NonEmpty(playerName,"a player name"); if name then Confirm(CMD.appear.." "..name) end
-  end,"Teleport to the named player"); appearButton:SetPoint("TOPLEFT",355,-142); Platform:RegisterRoleButton(appearButton,"GM_REQUIRED")
-  local summonButton=Button(p,"Summon",100,24,function()
-    local name=NonEmpty(playerName,"a player name"); if name then Confirm(CMD.summon.." "..name) end
-  end,"Summon the named player to you"); summonButton:SetPoint("TOPLEFT",465,-142); Platform:RegisterRoleButton(summonButton,"GM_REQUIRED")
-  AddCommandGrid(p,{
-    {"GPS",function() SendCommand(CMD.gps) end,"Show map and coordinates","GM_REQUIRED"},
-    {"Appear Target",function() if UnitExists("target") and UnitIsPlayer("target") then Confirm(CMD.appear) else SetStatus("Select a player first.",true) end end,"Teleport to selected player","GM_REQUIRED"},
-    {"Summon Target",function() if UnitExists("target") and UnitIsPlayer("target") then Confirm(CMD.summon) else SetStatus("Select a player first.",true) end end,"Summon selected player","GM_REQUIRED"},
-  },-205)
-  local note=Label(p,"Named-player commands are validated by AzerothCore. Confirm cross-map and instance movement before continuing.","GameFontHighlightSmall")
-  note:SetTextColor(unpack(C.white)); note:SetPoint("TOPLEFT",18,-300); note:SetWidth(550); note:SetJustifyH("LEFT")
+  local ui=Platform.MovementUI; AzerCoreOpsDB.movementLocations=AzerCoreOpsDB.movementLocations or {}; ui.saved=AzerCoreOpsDB.movementLocations; ui.serverCatalog=ui.serverCatalog or {}
+  local builtin=(AzerCoreOpsTeleportCatalog and AzerCoreOpsTeleportCatalog.regions) or {}
+  local p=NewPage("Teleport"); local header=CreateFrame("Frame",nil,p); header:SetPoint("TOPLEFT",10,-10); header:SetPoint("TOPRIGHT",-10,-10); header:SetHeight(52); Backdrop(header,C.bg)
+  local h=Label(header,"Movement Control","GameFontNormalLarge"); h:SetPoint("TOPLEFT",12,-8); local sub=header:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); sub:SetPoint("TOPLEFT",12,-31); sub:SetText("Named destinations, personal locations and controlled GM movement")
+  local ops=CreateFrame("Frame",nil,p); ops:SetPoint("TOPLEFT",10,-70); ops:SetPoint("BOTTOMLEFT",10,36); ops:SetWidth(148); Backdrop(ops,C.panel); local ot=Section(ops,"OPERATIONS",C.gold); ot:SetPoint("TOPLEFT",10,-10)
+  local function Op(text,y,fn,tip) local b=Button(ops,text,128,25,fn,tip); b:SetPoint("TOPLEFT",10,y); Platform:RegisterRoleButton(b,"GM_REQUIRED"); return b end
+  Op("Teleport",-31,function() local d=ui.selected; if not d then SetStatus("Select a destination first.",true); return end; Confirm(string.format(CMD.movementGo,d.map,d.x,d.y,d.z,d.o)) end,"Teleport to the selected validated destination")
+  Op("Save My Location",-64,function() ui.savePending=true; SendCommand(CMD.movementCurrent) end,"Capture the current position and give it a personal name")
+  Op("Emergency Return",-97,function() Confirm(CMD.movementReturn) end,"Return to the position recorded before the last custom teleport")
+  Op("GPS",-130,function() SendCommand(CMD.movementCurrent) end,"Load the current structured position")
+  Op("Appear Target",-163,function() if UnitExists("target") and UnitIsPlayer("target") then Confirm(CMD.appear) else SetStatus("Select a player first.",true) end end,"Teleport to the selected player")
+  Op("Summon Target",-196,function() if UnitExists("target") and UnitIsPlayer("target") then Confirm(CMD.summon) else SetStatus("Select a player first.",true) end end,"Summon the selected player")
+  local body=CreateFrame("Frame",nil,p); body:SetPoint("TOPLEFT",166,-70); body:SetPoint("BOTTOMRIGHT",-10,36); Backdrop(body,C.panel)
+  local identity=CreateFrame("Frame",nil,body); identity:SetPoint("TOPLEFT",8,-8); identity:SetPoint("TOPRIGHT",-8,-8); identity:SetHeight(72); Backdrop(identity,C.bg); local it=Section(identity,"SELECTED DESTINATION",C.inspect); it:SetPoint("TOPLEFT",10,-8)
+  local iname=identity:CreateFontString(nil,"OVERLAY","GameFontNormalLarge"); iname:SetPoint("TOPLEFT",10,-30); iname:SetText("No destination selected"); local imeta=identity:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); imeta:SetPoint("TOPLEFT",10,-53); imeta:SetPoint("RIGHT",-8,0); ui.nameText=iname; ui.metaText=imeta
+  local action=CreateFrame("Frame",nil,body); action:SetPoint("TOPLEFT",8,-88); action:SetPoint("BOTTOMLEFT",8,8); action:SetWidth(104); Backdrop(action,C.bg); local at=Section(action,"ACTION BAR",C.gold); at:SetPoint("TOPLEFT",8,-9)
+  local work=CreateFrame("Frame",nil,body); work:SetPoint("TOPLEFT",120,-88); work:SetPoint("BOTTOMRIGHT",-8,8); Backdrop(work,C.bg); local wt=Section(work,"DESTINATIONS",C.inspect); wt:SetPoint("TOPLEFT",10,-10)
+  local regionButton=Button(work,"Select region v",120,24,nil,"Choose a continent, instance group, battleground group, or server catalogue"); regionButton:SetPoint("TOPLEFT",10,-32)
+  local zoneButton=Button(work,"Select zone v",138,24,nil,"Choose a zone or instance"); zoneButton:SetPoint("LEFT",regionButton,"RIGHT",6,0)
+  local destinationButton=Button(work,"Select destination v",158,24,nil,"Choose a named destination"); destinationButton:SetPoint("LEFT",zoneButton,"RIGHT",6,0)
+  local menu=CreateFrame("Frame",nil,work); menu:SetWidth(210); menu:SetHeight(280); menu:SetPoint("TOPLEFT",regionButton,"BOTTOMLEFT",0,-2); menu:SetFrameStrata("FULLSCREEN_DIALOG"); menu:SetFrameLevel(260); Backdrop(menu,C.panel); menu:Hide(); ui.menu=menu
+  local text=work:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); text:SetPoint("TOPLEFT",10,-72); text:SetPoint("BOTTOMRIGHT",-10,10); text:SetJustifyH("LEFT"); text:SetJustifyV("TOP"); text:SetTextColor(unpack(C.white)); ui.text=text
+  menu:ClearAllPoints(); menu:SetPoint("TOPLEFT",regionButton,"BOTTOMLEFT",0,-2); menu:EnableMouseWheel(true)
+  local menuButtons={}; for i=1,10 do local b=Button(menu,"",200,22,nil); b:SetPoint("TOPLEFT",5,-5-(i-1)*24); b:Hide(); menuButtons[i]=b end
+  local menuPage=menu:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); menuPage:SetPoint("BOTTOM",0,7); menuPage:SetTextColor(unpack(C.muted))
+  local menuEntries,menuSelect,menuOffset={},{},0
+  local function RenderMenu()
+    local maxOffset=math.max(0,#menuEntries-#menuButtons); menuOffset=math.max(0,math.min(menuOffset,maxOffset))
+    for i,b in ipairs(menuButtons) do local entry=menuEntries[menuOffset+i]; if entry then b:SetText(entry.label); b:SetScript("OnClick",function() menu:Hide(); menuSelect(entry) end); b:Show() else b:Hide() end end
+    menuPage:SetText(#menuEntries>#menuButtons and string.format("%d-%d of %d  •  mouse wheel",menuOffset+1,math.min(menuOffset+#menuButtons,#menuEntries),#menuEntries) or tostring(#menuEntries).." entries")
+  end
+  local function ShowMenu(anchor,entries,onSelect)
+    if #entries==0 then SetStatus("No entries are available for this selection.",true); return end
+    menuEntries=entries; menuSelect=onSelect; menuOffset=0; menu:ClearAllPoints(); menu:SetPoint("TOPLEFT",anchor,"BOTTOMLEFT",0,-2); RenderMenu(); menu:Show()
+  end
+  menu:SetScript("OnMouseWheel",function(_,delta) if #menuEntries>#menuButtons then menuOffset=menuOffset-(delta>0 and 1 or -1); RenderMenu() end end)
+  local function ServerRegion()
+    local zonesByName,zoneNames={},{}
+    for _,destination in ipairs(ui.serverCatalog or {}) do
+      local zone=destination.category or "Instances / Other"; if not zonesByName[zone] then zonesByName[zone]={}; table.insert(zoneNames,zone) end; table.insert(zonesByName[zone],destination)
+    end
+    if #zoneNames==0 then return nil end
+    table.sort(zoneNames); local zones={}; for _,name in ipairs(zoneNames) do table.sort(zonesByName[name],function(a,b) return a.name<b.name end); table.insert(zones,{name=name,destinations=zonesByName[name],source="AzerothCore game_tele"}) end
+    return {key="SERVER",name="Server Teleports",zones=zones,source="AzerothCore game_tele"}
+  end
+  ui.RefreshCatalog=function()
+    ui.regions={}; for _,region in ipairs(builtin) do table.insert(ui.regions,region) end; local server=ServerRegion(); if server then table.insert(ui.regions,server) end
+  end
+  local function ResetSelectors()
+    ui.selectedRegion=nil; ui.selectedZone=nil; ui.selected=nil; regionButton:SetText(ui.view=="MY_LOCATIONS" and "My Locations" or "Select region v"); zoneButton:SetText(ui.view=="MY_LOCATIONS" and "Personal" or "Select zone v"); destinationButton:SetText("Select destination v")
+  end
+  regionButton:SetScript("OnClick",function()
+    if ui.view=="MY_LOCATIONS" then SetStatus("Personal locations are already selected."); return end
+    local entries={}; for _,region in ipairs(ui.regions or {}) do table.insert(entries,{label=region.name,data=region}) end
+    ShowMenu(regionButton,entries,function(e) ui.selectedRegion=e.data; ui.selectedZone=nil; ui.selected=nil; regionButton:SetText(e.label.." v"); zoneButton:SetText("Select zone v"); destinationButton:SetText("Select destination v"); ui.Render() end)
+  end)
+  zoneButton:SetScript("OnClick",function()
+    if ui.view=="MY_LOCATIONS" then SetStatus("Personal locations use the saved zone."); return end
+    if not ui.selectedRegion then SetStatus("Select a region first.",true); return end
+    local entries={}; for _,zone in ipairs(ui.selectedRegion.zones or {}) do table.insert(entries,{label=zone.name,data=zone}) end
+    ShowMenu(zoneButton,entries,function(e) ui.selectedZone=e.data; ui.selected=nil; zoneButton:SetText(e.label.." v"); destinationButton:SetText("Select destination v"); ui.Render() end)
+  end)
+  destinationButton:SetScript("OnClick",function()
+    local entries={}
+    if ui.view=="MY_LOCATIONS" then for _,destination in ipairs(ui.saved or {}) do table.insert(entries,{label=destination.name,data=destination}) end
+    elseif ui.selectedZone then for _,destination in ipairs(ui.selectedZone.destinations or {}) do table.insert(entries,{label=destination.name,data=destination}) end
+    else SetStatus("Select a region and zone first.",true); return end
+    ShowMenu(destinationButton,entries,function(e)
+      local destination=e.data; ui.selected={id=destination.id,name=destination.name,map=tonumber(destination.map),x=tonumber(destination.x),y=tonumber(destination.y),z=tonumber(destination.z),o=tonumber(destination.o) or 0,region=ui.selectedRegion and ui.selectedRegion.name or destination.region or "My Locations",zone=ui.selectedZone and ui.selectedZone.name or destination.zone or "Personal",source=destination.source or (ui.selectedRegion and ui.selectedRegion.source) or "AzerothAdmin"}; destinationButton:SetText(e.label.." v"); ui.Render()
+    end)
+  end)
+  StaticPopupDialogs["AZERCORE_OPS_SAVE_LOCATION"]={text="Save current location\nDetected zone: %s\n\nEnter a personal name:",button1=SAVE,button2=CANCEL,hasEditBox=1,maxLetters=60,timeout=0,whileDead=1,hideOnEscape=1,OnShow=function(self) self.editBox:SetText((GetSubZoneText and GetSubZoneText()~="" and GetSubZoneText()) or (GetZoneText and GetZoneText()) or "Saved Location"); self.editBox:HighlightText() end,OnAccept=function(self) local c=ui.current; local name=self.editBox:GetText(); if c and name and name~="" then local saved={name=name,category="My Locations",region="My Locations",map=tonumber(c.map),x=tonumber(c.x),y=tonumber(c.y),z=tonumber(c.z),o=tonumber(c.o),zone=(GetZoneText and GetZoneText()) or tostring(c.zone or "Personal"),area=c.area,source="Personal location"}; table.insert(ui.saved,saved); ui.view="MY_LOCATIONS"; ui.selected=saved; regionButton:SetText("My Locations"); zoneButton:SetText(saved.zone or "Personal"); destinationButton:SetText(name.." v"); ui.Render(); SetStatus("Saved personal location "..name) end end}
+  ui.Report=function() local d=ui.selected; return d and string.format("AZERCORE OPS — MOVEMENT\n%s\n%s → %s\nMap %s\nCoordinates %.3f, %.3f, %.3f\nOrientation %.3f\nSource: %s",d.name,d.region or "Unknown region",d.zone or "Unknown zone",d.map,d.x,d.y,d.z,d.o,d.source or "Unknown") or "AZERCORE OPS — MOVEMENT\nNo destination selected." end
+  ui.Render=function() wt:SetText(ui.view=="MY_LOCATIONS" and "MY LOCATIONS" or ui.view=="SHARING" and "LOCATION SHARING — DISABLED" or "DESTINATIONS"); local d=ui.selected; iname:SetText(d and d.name or "No destination selected"); imeta:SetText(d and string.format("%s → %s • Map %s • %.2f, %.2f, %.2f",d.region or "Unknown",d.zone or "Unknown",d.map,d.x,d.y,d.z) or "Choose a region, zone and destination."); if ui.view=="SHARING" then text:SetText("Location sharing is disabled in this release.\n\nThe addon and module will not send, receive, publish or group-teleport shared coordinates.") elseif d then text:SetText(ui.Report()) else local count=AzerCoreOpsTeleportCatalog and AzerCoreOpsTeleportCatalog.metadata and AzerCoreOpsTeleportCatalog.metadata.count or 0; text:SetText(string.format("Select a region, then a zone, then a destination.\n\n%d validated built-in destinations are ready.%s\n\nPersonal locations are stored per character. The module records an emergency return point before every custom teleport.",count,ui.loading and " Server teleports are still loading." or "")) end end
+  local views={{"Destinations","DESTINATIONS"},{"My Locations","MY_LOCATIONS"},{"Player","PLAYER"},{"Current","CURRENT"},{"History","HISTORY"},{"Sharing","SHARING"}}; for i,d in ipairs(views) do local label,key=d[1],d[2]; local b=Button(action,label,88,22,function() ui.view=key; ResetSelectors(); ui.Render() end); b:SetPoint("TOPLEFT",8,-29-(i-1)*27) end
+  Button(action,"Copy",88,22,function() ShowSelectableReport("Copy Movement report",ui.Report()) end):SetPoint("BOTTOMLEFT",8,61); Button(action,"Share",88,22,function() SetStatus("Location sharing is disabled in this release.",true) end):SetPoint("BOTTOMLEFT",8,34); Button(action,"Export",88,22,function() ShowSelectableReport("Export Movement report",ui.Report()) end):SetPoint("BOTTOMLEFT",8,7)
+  ui.OnCurrent=function(f) ui.current=f; if ui.savePending then ui.savePending=false; StaticPopup_Show("AZERCORE_OPS_SAVE_LOCATION",tostring(f.zone or "Unknown")) else ui.view="CURRENT"; ui.selected={name="Current Location",region="Current",zone="Zone "..tostring(f.zone or "Unknown"),source="AzerothCore",map=tonumber(f.map),x=tonumber(f.x),y=tonumber(f.y),z=tonumber(f.z),o=tonumber(f.o)}; ui.Render() end end
+  ui.RefreshCatalog(); ui.loading=true; SendCommand(CMD.movementCatalog); ui.Render()
 end
 
 local function BuildItem()
-  local p=NewPage("Item"); local titleBox=AddField(p,"Item name",18,-18,300,false); titleBox.azerCoreOpsExpected="item"; titleBox.azerCoreOpsPlain=true
-  Button(p,"Lookup",110,24,function() local s=NonEmpty(titleBox,"an item name"); if s then BeginLookup("item",string.format(CMD.itemLookup,s)) end end,"Search the server item database"):SetPoint("TOPLEFT",334,-35)
-  itemIdBox=AddField(p,"Item ID",18,-78,110,true); itemIdBox.azerCoreOpsExpected="item"; local count=AddField(p,"Quantity",145,-78,80,true); count:SetText("1")
-  local addItem=Button(p,"Add Item",105,24,function() local id=PositiveId(itemIdBox,"item"); local n=PositiveId(count,"quantity"); if id and n then SendCommand(string.format(CMD.itemAdd,id,n)) end end); addItem:SetPoint("TOPLEFT",245,-95); Platform:RegisterRoleButton(addItem,"GM_REQUIRED")
-  local removeItem=Button(p,"Remove",105,24,function() local id=PositiveId(itemIdBox,"item"); local n=PositiveId(count,"quantity"); if id and n then Confirm(string.format(CMD.itemRemove,id,n)) end end); removeItem:SetPoint("TOPLEFT",365,-95); Platform:RegisterRoleButton(removeItem,"GM_REQUIRED")
-  AddResultsPanel(p,"item")
+  local itemUI=Platform.ItemUI
+  local p=NewPage("Item")
+  local header=CreateFrame("Frame",nil,p); header:SetPoint("TOPLEFT",10,-10); header:SetPoint("TOPRIGHT",-10,-10); header:SetHeight(52); Backdrop(header,C.bg)
+  local h=Label(header,"Item Inspector","GameFontNormalLarge"); h:SetPoint("TOPLEFT",12,-8)
+  local sub=header:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); sub:SetPoint("TOPLEFT",12,-31); sub:SetText("Item search, wearable preview, properties and controlled inventory operations")
+
+  local operations=CreateFrame("Frame",nil,p); operations:SetPoint("TOPLEFT",10,-70); operations:SetPoint("BOTTOMLEFT",10,36); operations:SetWidth(148); Backdrop(operations,C.panel)
+  local opTitle=Section(operations,"OPERATIONS",C.gold); opTitle:SetPoint("TOPLEFT",10,-10)
+  local nameLabel=Section(operations,"ITEM NAME OR ID",C.gold); nameLabel:SetPoint("TOPLEFT",10,-34)
+  local titleBox=Edit(operations,128,false); titleBox:SetPoint("TOPLEFT",10,-51); titleBox.azerCoreOpsExpected="item"; titleBox.azerCoreOpsPlain=true
+  local lookupButton=Button(operations,"Search",82,24,function()
+    local s=NonEmpty(titleBox,"an item name or ID"); if not s then return end
+    local directId=tonumber(s)
+    if directId and directId>0 then itemIdBox:SetText(directId); itemUI.Select(directId); SetStatus("Inspecting item ID "..directId)
+    else itemUI.selected=nil; itemUI.view="OVERVIEW"; itemUI.Render(); BeginLookup("item",string.format(CMD.itemLookup,s)) end
+  end,"Search by item name or inspect an exact item ID"); lookupButton:SetPoint("TOPLEFT",10,-80)
+  local clearButton=Button(operations,"Clear",42,24,function() if itemUI.Clear then itemUI.Clear() end end,"Clear the item search and selected item"); clearButton:SetPoint("LEFT",lookupButton,"RIGHT",4,0)
+  local idLabel=Section(operations,"ITEM ID",C.gold); idLabel:SetPoint("TOPLEFT",10,-116)
+  itemIdBox=Edit(operations,76,true); itemIdBox:SetPoint("TOPLEFT",10,-133); itemIdBox.azerCoreOpsExpected="item"
+  local quantityLabel=Section(operations,"QTY",C.gold); quantityLabel:SetPoint("TOPLEFT",94,-116)
+  local count=Edit(operations,44,true); count:SetPoint("TOPLEFT",94,-133); count:SetText("1")
+  local previewButton=Button(operations,"Inspect Item",128,24,function() local id=PositiveId(itemIdBox,"item"); if id then itemUI.Select(id) end end,"Load the entered item into the Item Inspector"); previewButton:SetPoint("TOPLEFT",10,-164)
+  local addItem=Button(operations,"Add Item",128,24,function() local id=PositiveId(itemIdBox,"item"); local n=PositiveId(count,"quantity"); if id and n then SendCommand(string.format(CMD.itemAdd,id,n)) end end,"Add the selected quantity to your inventory"); addItem:SetPoint("TOPLEFT",10,-195); Platform:RegisterRoleButton(addItem,"GM_REQUIRED")
+  local removeItem=Button(operations,"Remove Item",128,24,function() local id=PositiveId(itemIdBox,"item"); local n=PositiveId(count,"quantity"); if id and n then Confirm(string.format(CMD.itemRemove,id,n)) end end,"Remove the selected quantity from your inventory"); removeItem:SetPoint("TOPLEFT",10,-226); Platform:RegisterRoleButton(removeItem,"GM_REQUIRED")
+
+  local body=CreateFrame("Frame",nil,p); body:SetPoint("TOPLEFT",166,-70); body:SetPoint("BOTTOMRIGHT",-10,36); Backdrop(body,C.panel)
+  local identity=CreateFrame("Frame",nil,body); identity:SetPoint("TOPLEFT",8,-8); identity:SetPoint("TOPRIGHT",-8,-8); identity:SetHeight(82); Backdrop(identity,C.bg)
+  local identityTitle=Section(identity,"SELECTED ITEM",C.inspect); identityTitle:SetPoint("TOPLEFT",10,-8)
+  local iconFrame=CreateFrame("Frame",nil,identity); iconFrame:SetPoint("TOPLEFT",10,-27); iconFrame:SetWidth(44); iconFrame:SetHeight(44); Backdrop(iconFrame,C.panel)
+  local icon=iconFrame:CreateTexture(nil,"ARTWORK"); icon:SetPoint("TOPLEFT",3,-3); icon:SetPoint("BOTTOMRIGHT",-3,3); icon:SetTexture("Interface\\Icons\\INV_Misc_QuestionMark"); itemUI.icon=icon
+  local selectedName=identity:CreateFontString(nil,"OVERLAY","GameFontNormalLarge"); selectedName:SetPoint("TOPLEFT",65,-31); selectedName:SetTextColor(unpack(C.white)); selectedName:SetText("No item selected"); itemUI.nameText=selectedName
+  local selectedMeta=identity:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); selectedMeta:SetPoint("TOPLEFT",65,-54); selectedMeta:SetPoint("RIGHT",-8,0); selectedMeta:SetJustifyH("LEFT"); selectedMeta:SetText("Search for an item or enter an item ID."); itemUI.metaText=selectedMeta
+
+  local action=CreateFrame("Frame",nil,body); action:SetPoint("TOPLEFT",8,-98); action:SetPoint("BOTTOMLEFT",8,8); action:SetWidth(104); Backdrop(action,C.bg)
+  local actionTitle=Section(action,"ACTION BAR",C.gold); actionTitle:SetPoint("TOPLEFT",8,-9)
+  local workspace=CreateFrame("Frame",nil,body); workspace:SetPoint("TOPLEFT",120,-98); workspace:SetPoint("BOTTOMRIGHT",-8,8); Backdrop(workspace,C.bg)
+  local workspaceTitle=Section(workspace,"ITEM LOOKUP",C.inspect); workspaceTitle:SetPoint("TOPLEFT",10,-10); itemUI.workspaceTitle=workspaceTitle
+
+  local reportScroll=CreateFrame("ScrollFrame","AZERCORE_OPS_ItemScroll",workspace,"UIPanelScrollFrameTemplate"); reportScroll:SetPoint("TOPLEFT",8,-31); reportScroll:SetPoint("BOTTOMRIGHT",-29,8)
+  local reportChild=CreateFrame("Frame",nil,reportScroll); reportChild:SetWidth(380); reportChild:SetHeight(380); reportScroll:SetScrollChild(reportChild)
+  local reportText=reportChild:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); reportText:SetPoint("TOPLEFT",4,-4); reportText:SetWidth(360); reportText:SetJustifyH("LEFT"); reportText:SetJustifyV("TOP"); reportText:SetTextColor(unpack(C.white)); itemUI.reportText=reportText
+
+  local resultsTitle=Section(reportChild,"LOOKUP RESULTS — CLICK AN ITEM TO INSPECT IT",C.gold); resultsTitle:SetPoint("TOPLEFT",4,-4); itemUI.resultsTitle=resultsTitle
+  for i=1,5 do
+    local row=Button(reportChild,"",355,42,function(self) if self.id then itemIdBox:SetText(self.id); itemUI.Select(self.id,self.result) end end,"Select this item and open its preview")
+    local rowIcon=row:CreateTexture(nil,"ARTWORK"); rowIcon:SetPoint("LEFT",5,0); rowIcon:SetWidth(32); rowIcon:SetHeight(32); rowIcon:SetTexture("Interface\\Icons\\INV_Misc_QuestionMark"); row.icon=rowIcon
+    local rowLabel=row:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); rowLabel:SetPoint("TOPLEFT",44,-6); rowLabel:SetPoint("RIGHT",-7,0); rowLabel:SetJustifyH("LEFT"); rowLabel:SetWordWrap(false); row.label=rowLabel
+    local rowMeta=row:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); rowMeta:SetPoint("BOTTOMLEFT",44,6); rowMeta:SetPoint("RIGHT",-7,0); rowMeta:SetJustifyH("LEFT"); rowMeta:SetWordWrap(false); row.meta=rowMeta
+    row:SetPoint("TOPLEFT",4,-25-(i-1)*46); row:Hide(); resultRows.item[i]=row
+  end
+
+  local previewFrame=CreateFrame("Frame",nil,workspace); previewFrame:SetPoint("TOPLEFT",8,-31); previewFrame:SetPoint("BOTTOMRIGHT",-8,8); previewFrame:Hide(); itemUI.previewFrame=previewFrame
+  local model=CreateFrame("DressUpModel",nil,previewFrame); model:SetPoint("TOPLEFT",4,-4); model:SetPoint("BOTTOMRIGHT",-4,4); itemUI.model=model; model.azerFacing=0
+  local fallback=CreateFrame("Frame",nil,previewFrame); fallback:SetPoint("CENTER"); fallback:SetWidth(180); fallback:SetHeight(210); fallback:Hide(); itemUI.fallback=fallback
+  local fallbackIcon=fallback:CreateTexture(nil,"ARTWORK"); fallbackIcon:SetPoint("TOP",0,-12); fallbackIcon:SetWidth(128); fallbackIcon:SetHeight(128); fallbackIcon:SetTexture("Interface\\Icons\\INV_Misc_QuestionMark"); itemUI.fallbackIcon=fallbackIcon
+  local fallbackText=fallback:CreateFontString(nil,"OVERLAY","GameFontHighlight"); fallbackText:SetPoint("TOP",fallbackIcon,"BOTTOM",0,-12); fallbackText:SetWidth(180); fallbackText:SetJustifyH("CENTER"); fallbackText:SetText("No wearable 3D preview"); itemUI.fallbackText=fallbackText
+  Button(previewFrame,"<",26,21,function() model.azerFacing=model.azerFacing-.25; if model.SetFacing then model:SetFacing(model.azerFacing) end end,"Rotate preview left"):SetPoint("TOPLEFT",8,-8)
+  Button(previewFrame,">",26,21,function() model.azerFacing=model.azerFacing+.25; if model.SetFacing then model:SetFacing(model.azerFacing) end end,"Rotate preview right"):SetPoint("TOPRIGHT",-8,-8)
+  Button(previewFrame,"Reset",50,21,function() if itemUI.RefreshPreview then itemUI.RefreshPreview() end end,"Reset the wearable item preview"):SetPoint("BOTTOM",0,7)
+  itemUI.UpdatePreviewCamera=function()
+    -- DressUpModel keeps a camera distance in physical pixels while its parent
+    -- inherits the addon scale. Compensate so the model remains framed at every
+    -- supported window scale instead of clipping at larger values.
+    local windowScale=math.max(.75,math.min(1.35,Settings().scale or 1))
+    if model.SetCamDistanceScale then model:SetCamDistanceScale(windowScale) end
+    if model.SetFacing then model:SetFacing(model.azerFacing or 0) end
+  end
+  previewFrame:SetScript("OnSizeChanged",function() After(0,function() if itemUI.UpdatePreviewCamera then itemUI.UpdatePreviewCamera() end end) end)
+
+  local function ItemLink(item)
+    if not item then return nil end
+    if item.link and item.link:find("|Hitem:") then return item.link end
+    local quality=tonumber(item.quality) or 1; local color=(ITEM_QUALITY_COLORS and ITEM_QUALITY_COLORS[quality] and ITEM_QUALITY_COLORS[quality].hex) or "ffffffff"; color=tostring(color):gsub("^|c","")
+    return string.format("|c%s|Hitem:%d:0:0:0:0:0:0:0|h[%s]|h|r",color,tonumber(item.id) or 0,item.name or ("Item "..tostring(item.id)))
+  end
+  local function QuestLink(id,name)
+    if GetQuestLink then local link=GetQuestLink(tonumber(id)); if link then return link end end
+    return string.format("|cffffff00|Hquest:%d:0|h[%s]|h|r",tonumber(id) or 0,name or ("Quest "..tostring(id)))
+  end
+  local function EnsureItemLinkRows(count)
+    for i=#itemUI.linkRows+1,count do
+      local row=Button(reportChild,"",355,24,function(self) if IsShiftKeyDown() and self.link then if HandleModifiedItemClick then HandleModifiedItemClick(self.link) elseif ChatEdit_InsertLink then ChatEdit_InsertLink(self.link) end end end,"Shift-click linked entries to insert them into chat")
+      local rowLabel=row:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); rowLabel:SetPoint("LEFT",7,0); rowLabel:SetPoint("RIGHT",-7,0); rowLabel:SetJustifyH("LEFT"); rowLabel:SetWordWrap(false); row:SetFontString(rowLabel)
+      row:SetPoint("TOPLEFT",4,-4-(i-1)*27); row:SetScript("OnEnter",function(self) self:SetBackdropColor(unpack(C.hover)); if self.link then GameTooltip:SetOwner(self,"ANCHOR_RIGHT"); GameTooltip:SetHyperlink(self.link); GameTooltip:Show() end end); row:SetScript("OnLeave",function(self) self:SetBackdropColor(unpack(C.button)); GameTooltip:Hide() end); row:Hide(); itemUI.linkRows[i]=row
+    end
+  end
+  iconFrame:EnableMouse(true)
+  iconFrame:SetScript("OnEnter",function() local link=ItemLink(itemUI.selected); if link then GameTooltip:SetOwner(iconFrame,"ANCHOR_RIGHT"); GameTooltip:SetHyperlink(link); GameTooltip:Show() end end)
+  iconFrame:SetScript("OnLeave",function() GameTooltip:Hide() end)
+  iconFrame:SetScript("OnMouseUp",function(_,button) local link=ItemLink(itemUI.selected); if button=="LeftButton" and IsShiftKeyDown() and link then if HandleModifiedItemClick then HandleModifiedItemClick(link) elseif ChatEdit_InsertLink then ChatEdit_InsertLink(link) end end end)
+
+  local equipNames={INVTYPE_HEAD="Head",INVTYPE_NECK="Neck",INVTYPE_SHOULDER="Shoulders",INVTYPE_BODY="Shirt",INVTYPE_CHEST="Chest",INVTYPE_ROBE="Robe",INVTYPE_WAIST="Waist",INVTYPE_LEGS="Legs",INVTYPE_FEET="Feet",INVTYPE_WRIST="Wrist",INVTYPE_HAND="Hands",INVTYPE_FINGER="Finger",INVTYPE_TRINKET="Trinket",INVTYPE_CLOAK="Back",INVTYPE_WEAPON="One-hand weapon",INVTYPE_SHIELD="Shield",INVTYPE_2HWEAPON="Two-hand weapon",INVTYPE_WEAPONMAINHAND="Main-hand weapon",INVTYPE_WEAPONOFFHAND="Off-hand weapon",INVTYPE_HOLDABLE="Held in off-hand",INVTYPE_RANGED="Ranged",INVTYPE_THROWN="Thrown",INVTYPE_RANGEDRIGHT="Ranged",INVTYPE_TABARD="Tabard",INVTYPE_BAG="Bag"}
+  local visibleEquipLocs={INVTYPE_HEAD=true,INVTYPE_SHOULDER=true,INVTYPE_BODY=true,INVTYPE_CHEST=true,INVTYPE_ROBE=true,INVTYPE_WAIST=true,INVTYPE_LEGS=true,INVTYPE_FEET=true,INVTYPE_WRIST=true,INVTYPE_HAND=true,INVTYPE_CLOAK=true,INVTYPE_WEAPON=true,INVTYPE_SHIELD=true,INVTYPE_2HWEAPON=true,INVTYPE_WEAPONMAINHAND=true,INVTYPE_WEAPONOFFHAND=true,INVTYPE_HOLDABLE=true,INVTYPE_RANGED=true,INVTYPE_THROWN=true,INVTYPE_RANGEDRIGHT=true,INVTYPE_TABARD=true}
+  local invisibleEquipLocs={INVTYPE_NECK=true,INVTYPE_FINGER=true,INVTYPE_TRINKET=true,INVTYPE_RELIC=true,INVTYPE_AMMO=true,INVTYPE_BAG=true,INVTYPE_QUIVER=true}
+  local scanTooltip=CreateFrame("GameTooltip","AZERCORE_OPS_ItemScanTooltip",UIParent,"GameTooltipTemplate"); scanTooltip:SetOwner(UIParent,"ANCHOR_NONE"); scanTooltip:Hide()
+  local function ColorCode(fontString)
+    if not fontString or not fontString.GetTextColor then return "ffffffff" end
+    local r,g,b=fontString:GetTextColor(); return string.format("ff%02x%02x%02x",math.floor((r or 1)*255+.5),math.floor((g or 1)*255+.5),math.floor((b or 1)*255+.5))
+  end
+  local function TooltipLines(item)
+    local link=ItemLink(item); if not link then return nil end
+    scanTooltip:SetOwner(UIParent,"ANCHOR_NONE"); scanTooltip:ClearLines(); scanTooltip:SetHyperlink(link)
+    local lines={}
+    for i=1,scanTooltip:NumLines() do
+      local left=_G["AZERCORE_OPS_ItemScanTooltipTextLeft"..i]; local right=_G["AZERCORE_OPS_ItemScanTooltipTextRight"..i]
+      local leftText=left and left:GetText(); local rightText=right and right:GetText()
+      if (leftText and leftText~="") or (rightText and rightText~="") then table.insert(lines,{left=leftText,right=rightText,leftColor=ColorCode(left),rightColor=ColorCode(right)}) end
+    end
+    scanTooltip:Hide()
+    return #lines>0 and lines or nil
+  end
+  local function ColoredTooltipReport(item)
+    local tooltipLines=TooltipLines(item); if not tooltipLines then return nil end
+    local lines={}
+    for _,entry in ipairs(tooltipLines) do
+      local line=entry.left and ("|c"..entry.leftColor..entry.left.."|r") or ""
+      if entry.right and entry.right~="" then line=line.."    |c"..entry.rightColor..entry.right.."|r" end
+      table.insert(lines,line)
+    end
+    table.insert(lines,""); table.insert(lines,"|cff888888Shift-click the selected-item icon to insert its item link into chat.|r")
+    return table.concat(lines,"\n")
+  end
+  local statNames={ITEM_MOD_STRENGTH_SHORT="Strength",ITEM_MOD_AGILITY_SHORT="Agility",ITEM_MOD_STAMINA_SHORT="Stamina",ITEM_MOD_INTELLECT_SHORT="Intellect",ITEM_MOD_SPIRIT_SHORT="Spirit",ITEM_MOD_HIT_RATING_SHORT="Hit Rating",ITEM_MOD_CRIT_RATING_SHORT="Critical Strike Rating",ITEM_MOD_HASTE_RATING_SHORT="Haste Rating",ITEM_MOD_ATTACK_POWER_SHORT="Attack Power",ITEM_MOD_RANGED_ATTACK_POWER_SHORT="Ranged Attack Power",ITEM_MOD_SPELL_POWER_SHORT="Spell Power",ITEM_MOD_MANA_REGENERATION_SHORT="Mana per 5 sec",ITEM_MOD_EXPERTISE_RATING_SHORT="Expertise Rating",ITEM_MOD_DODGE_RATING_SHORT="Dodge Rating",ITEM_MOD_PARRY_RATING_SHORT="Parry Rating",ITEM_MOD_BLOCK_RATING_SHORT="Block Rating",ITEM_MOD_RESILIENCE_RATING_SHORT="Resilience Rating",EMPTY_SOCKET_RED="Red Socket",EMPTY_SOCKET_YELLOW="Yellow Socket",EMPTY_SOCKET_BLUE="Blue Socket",EMPTY_SOCKET_META="Meta Socket"}
+  local statOrder={"ITEM_MOD_STRENGTH_SHORT","ITEM_MOD_AGILITY_SHORT","ITEM_MOD_STAMINA_SHORT","ITEM_MOD_INTELLECT_SHORT","ITEM_MOD_SPIRIT_SHORT","ITEM_MOD_ATTACK_POWER_SHORT","ITEM_MOD_RANGED_ATTACK_POWER_SHORT","ITEM_MOD_SPELL_POWER_SHORT","ITEM_MOD_HIT_RATING_SHORT","ITEM_MOD_CRIT_RATING_SHORT","ITEM_MOD_HASTE_RATING_SHORT","ITEM_MOD_EXPERTISE_RATING_SHORT","ITEM_MOD_DODGE_RATING_SHORT","ITEM_MOD_PARRY_RATING_SHORT","ITEM_MOD_BLOCK_RATING_SHORT","ITEM_MOD_RESILIENCE_RATING_SHORT","ITEM_MOD_MANA_REGENERATION_SHORT","EMPTY_SOCKET_META","EMPTY_SOCKET_RED","EMPTY_SOCKET_YELLOW","EMPTY_SOCKET_BLUE"}
+  local function ColoredStatsReport(item)
+    local stats=GetItemStats and GetItemStats(ItemLink(item)); if not stats then return "|cffaaaaaaNo numeric item stats are available from the client cache.|r" end
+    local lines={"|cffffd100ITEM STATS|r",""}; local used={}
+    for _,key in ipairs(statOrder) do
+      local value=stats[key]
+      if value then
+        local socket=key:find("EMPTY_SOCKET",1,true); local label=statNames[key] or key
+        table.insert(lines,string.format("%s%s|r  %s%s|r",socket and "|cffffcc00" or "|cff00ccff",label,socket and "|cffffcc00" or "|cff55ff55",socket and ("× "..value) or ("+"..value))); used[key]=true
+      end
+    end
+    local extras={}; for key,value in pairs(stats) do if not used[key] then table.insert(extras,{key=key,value=value}) end end; table.sort(extras,function(a,b) return a.key<b.key end)
+    for _,entry in ipairs(extras) do table.insert(lines,string.format("|cff00ccff%s|r  |cff55ff55+%s|r",statNames[entry.key] or entry.key:gsub("^ITEM_MOD_",""):gsub("_SHORT$",""):gsub("_"," "),entry.value)) end
+    return table.concat(lines,"\n")
+  end
+  local function ColoredRequirementsReport(item)
+    local lines={"|cffffd100ITEM REQUIREMENTS|r",""}
+    local level=tonumber(item.minLevel) or 0; local playerLevel=UnitLevel("player") or 0
+    table.insert(lines,string.format("|cff00ccffMinimum Level:|r  %s%d|r",playerLevel>=level and "|cff55ff55" or "|cffff5555",level))
+    table.insert(lines,"|cff00ccffType:|r  |cffffffff"..tostring(item.itemType or "Unknown").."|r")
+    table.insert(lines,"|cff00ccffSubtype:|r  |cffffffff"..tostring(item.subType or "Unknown").."|r")
+    table.insert(lines,"|cff00ccffEquipment Slot:|r  |cffffffff"..tostring(equipNames[item.equipLoc] or "Not equippable").."|r")
+    local found={}
+    for _,entry in ipairs(TooltipLines(item) or {}) do
+      local text=entry.left
+      if text and (text:find("^Requires ") or text:find("^Classes:") or text:find("^Races:") or text:find("^Unique") or text:find("^You may only") or text:find("Only$") or text:find("^Only usable")) and text~=((ITEM_MIN_LEVEL or "Requires Level %d"):format(level)) then
+        local red=entry.leftColor and tonumber(entry.leftColor:sub(3,4),16)>180 and tonumber(entry.leftColor:sub(5,6),16)<120
+        local color=text:find("^Unique") and "ffffaa00" or (red and "ffff5555" or "ff55ff55")
+        if not found[text] then table.insert(lines,"|c"..color..text.."|r"); found[text]=true end
+      end
+    end
+    local access=itemUI.server and itemUI.server.access
+    if access then
+      table.insert(lines,"")
+      local factionColor=access.faction=="Alliance" and "ff3399ff" or (access.faction=="Horde" and "ffff5555" or "ff55ff55")
+      table.insert(lines,"|cff00ccffFaction:|r  |c"..factionColor..tostring(access.faction or "Both").."|r")
+      table.insert(lines,"|cff00ccffRaces:|r  |cffffffff"..tostring(access.races or "Unknown").."|r")
+      table.insert(lines,"|cff00ccffClasses:|r  |cffffffff"..tostring(access.classes or "Unknown").."|r")
+      local allowed=tonumber(access.usable)==1
+      table.insert(lines,string.format("|cff00ccffUsable by %s:|r  %s%s|r",UnitName("player") or "this character",allowed and "|cff55ff55" or "|cffff5555",allowed and "Yes" or "No"))
+      if access.reason and access.reason~="" then table.insert(lines,"|cffaaaaaa"..access.reason.."|r") end
+      local requirements=itemUI.server and itemUI.server.requirements or {}
+      local extra=false
+      for _,requirement in ipairs(requirements) do
+        if requirement.kind~="FACTION_RACE" and requirement.kind~="CLASS" and not tostring(requirement.kind or ""):find("^ACQUISITION_") then
+          if not extra then table.insert(lines,""); table.insert(lines,"|cffffd100CHARACTER CHECKS|r"); extra=true end
+          local passed=tonumber(requirement.passed)==1
+          table.insert(lines,string.format("%s%s:|r  |cffffffffRequired %s|r  |cffaaaaaa(Current: %s)|r",passed and "|cff55ff55" or "|cffff5555",tostring(requirement.name or requirement.kind or "Requirement"),tostring(requirement.required or "?"),tostring(requirement.current or "?")))
+          if not passed and requirement.detail and requirement.detail~="" then table.insert(lines,"  |cffff5555"..requirement.detail.."|r") end
+        end
+      end
+      local generalAcquisition={}; local paths={}; local pathOrder={}
+      for _,requirement in ipairs(requirements) do
+        if tostring(requirement.kind or ""):find("^ACQUISITION_") then
+          local pathId=tonumber(requirement.pathid) or 0
+          if pathId>0 then
+            if not paths[pathId] then paths[pathId]={name=requirement.pathname or ("Quest "..pathId),requirements={}}; table.insert(pathOrder,pathId) end
+            table.insert(paths[pathId].requirements,requirement)
+          else table.insert(generalAcquisition,requirement) end
+        end
+      end
+      local function AddAcquisitionLine(requirement,prefix)
+        local passed=tonumber(requirement.passed)==1
+        table.insert(lines,string.format("  %s%s%s:|r  |cffffffffRequired %s|r  |cffaaaaaa(Current: %s)|r",passed and "|cff55ff55" or "|cffffaa00",prefix or "",tostring(requirement.name or "Requirement"),tostring(requirement.required or "?"),tostring(requirement.current or "?")))
+        if requirement.detail and requirement.detail~="" then table.insert(lines,"    |cff888888"..requirement.detail.."|r") end
+      end
+      if #generalAcquisition>0 then
+        table.insert(lines,""); table.insert(lines,"|cffffd100GENERAL ACQUISITION LIMITS|r")
+        for _,requirement in ipairs(generalAcquisition) do AddAcquisitionLine(requirement) end
+      end
+      if #pathOrder>0 then
+        table.sort(pathOrder)
+        table.insert(lines,""); table.insert(lines,"|cffffd100ALTERNATIVE ACQUISITION PATHS — COMPLETE ONE|r")
+        for index,pathId in ipairs(pathOrder) do
+          local path=paths[pathId]; table.insert(lines,string.format("|cff00ccffPath %d:|r  |cffffffff%s|r  |cff888888[%d]|r",index,tostring(path.name),pathId))
+          for _,requirement in ipairs(path.requirements) do AddAcquisitionLine(requirement) end
+        end
+      end
+    elseif not next(found) then table.insert(lines,""); table.insert(lines,"|cffaaaaaaWaiting for authoritative server race and class requirements...|r") end
+    return table.concat(lines,"\n")
+  end
+  local function CompanionPreview(item)
+    if not GetNumCompanions or not GetCompanionInfo or not model.SetCreature then return nil end
+    local spellName=GetItemSpell and GetItemSpell(ItemLink(item)) or nil
+    local function CompanionKey(value)
+      value=tostring(value or ""):lower(); value=value:gsub("^reins of the ",""):gsub("^reins of ",""):gsub("^whistle of the ",""):gsub("^whistle of ",""):gsub(" mount$",""):gsub(" companion$",""):gsub(" pet$",""):gsub("[^%w]","")
+      return value
+    end
+    local itemKey=CompanionKey(item.name); local spellKey=CompanionKey(spellName)
+    for _,kind in ipairs({"MOUNT","CRITTER"}) do
+      local count=GetNumCompanions(kind) or 0
+      for i=1,count do
+        local creatureID,creatureName,creatureSpellID=GetCompanionInfo(kind,i)
+        local knownSpellName=creatureSpellID and GetSpellInfo(creatureSpellID)
+        local creatureKey=CompanionKey(creatureName); local knownSpellKey=CompanionKey(knownSpellName)
+        if creatureID and ((spellName and (spellName==knownSpellName or spellName==creatureName)) or (itemKey~="" and (itemKey==creatureKey or itemKey==knownSpellKey)) or (spellKey~="" and (spellKey==creatureKey or spellKey==knownSpellKey))) then return creatureID,kind,creatureName or spellName end
+      end
+    end
+    return nil
+  end
+  local function Money(copper)
+    copper=tonumber(copper) or 0; return string.format("%dg %ds %dc",math.floor(copper/10000),math.floor((copper%10000)/100),copper%100)
+  end
+  local function ItemReport()
+    local item=itemUI.selected
+    if not item then return "AZERCORE OPS — ITEM REPORT\nNo item selected." end
+    local lines={"AZERCORE OPS — ITEM REPORT",string.format("%s  |  Item ID %s",item.name or "Unknown item",item.id or "?"),"View: "..itemUI.view,""}
+    if itemUI.view=="STATS" then
+      table.insert(lines,"ITEM STATS")
+      local found=false
+      if GetItemStats and item.link then local stats=GetItemStats(item.link); if stats then for stat,value in pairs(stats) do table.insert(lines,string.format("%s: %s",stat,value)); found=true end end end
+      if not found then table.insert(lines,"No numeric item stats are available from the client cache.") end
+    elseif itemUI.view=="CRAFTING" then
+      local server=itemUI.server or {}; table.insert(lines,"CRAFTING METHODS")
+      if #(server.crafts or {})==0 then table.insert(lines,"No crafting method was reported for this item.") end
+      for _,craft in ipairs(server.crafts or {}) do
+        table.insert(lines,string.format("%s — Spell %s\nProfession: %s (%s), required skill %s\nProduces: %s\nResult: %s; probability: %s",craft.spellname or "Craft item",craft.spell or "?",craft.profession or "Unknown",craft.skill or "?",craft.rank or "?",craft.produced or "1",craft.resulttype or "DIRECT",craft.chance or "UNKNOWN"))
+        for _,reagent in ipairs(server.reagents or {}) do if reagent.spell==craft.spell then table.insert(lines,string.format("  Reagent: %sx %s [Item %s]",reagent.count or "?",reagent.name or "Unknown",reagent.id or "?")) end end
+        for _,recipe in ipairs(server.recipes or {}) do if recipe.spell==craft.spell then table.insert(lines,string.format("  Recipe: %s [Item %s]",recipe.name or "Unknown",recipe.id or "?")) end end
+      end
+      if #(server.uses or {})>0 then table.insert(lines,""); table.insert(lines,"USED AS A REAGENT") end
+      for _,use in ipairs(server.uses or {}) do table.insert(lines,string.format("%s — %s skill %s — creates %sx %s [Item %s]",use.spellname or ("Spell "..tostring(use.spell)),use.profession or "Unknown",use.rank or "?",use.count or "1",use.resultname or "Unknown",use.resultid or "?")) end
+    elseif itemUI.view=="SOURCES" then
+      local sources=itemUI.server and itemUI.server.sources or {}; table.insert(lines,"KNOWN SOURCES")
+      if #sources==0 then table.insert(lines,"No vendor, creature-drop or quest-reward source was reported.") end
+      for _,source in ipairs(sources) do table.insert(lines,string.format("%s — %s [%s]%s",source.type or "SOURCE",source.name or "Unknown",source.id or "?",source.detail and source.detail~="" and (" — "..source.detail) or "")) end
+    elseif itemUI.view=="REQUIREMENTS" then
+      table.insert(lines,string.format("Minimum level: %s\nItem level: %s\nEquipment slot: %s\nType: %s\nSubtype: %s",item.minLevel or "0",item.itemLevel or "?",equipNames[item.equipLoc] or item.equipLoc or "Not equippable",item.itemType or "?",item.subType or "?"))
+    elseif itemUI.view=="TECHNICAL" then
+      table.insert(lines,string.format("Item ID: %s\nQuality: %s\nStack size: %s\nEquip location: %s\nTexture: %s\nVendor sell price: %s",item.id or "?",item.quality or "?",item.stack or "?",item.equipLoc~="" and item.equipLoc or "None",item.texture or "?",Money(item.sellPrice)))
+    elseif itemUI.view=="PREVIEW" then table.insert(lines,item.equipLoc and item.equipLoc~="" and "Wearable 3D preview available." or "This item is not wearable; the preview uses its large icon and tooltip.")
+    else table.insert(lines,string.format("Quality: %s\nItem level: %s\nRequired level: %s\nCategory: %s — %s\nStack size: %s\nSell price: %s\n\nShift-click the selected-item icon to insert its item link into chat.",item.quality or "?",item.itemLevel or "?",item.minLevel or "0",item.itemType or "?",item.subType or "?",item.stack or "?",Money(item.sellPrice))) end
+    return table.concat(lines,"\n")
+  end
+  itemUI.Report=ItemReport
+  itemUI.RenderLookupResults=function()
+    local enriched={}
+    for _,result in ipairs(lookup.results or {}) do
+      local name,link,quality,itemLevel,_,itemType,subType,_,equipLoc,texture=GetItemInfo(result.id)
+      local category=(itemType=="Armor" or itemType=="Weapon") and "Equipment" or itemType or "Uncached"
+      table.insert(enriched,{result=result,id=result.id,name=name or result.title or ("Item "..result.id),link=link or result.link,quality=quality,itemLevel=itemLevel,itemType=itemType,subType=subType,equipLoc=equipLoc,texture=texture or GetItemIcon(result.id),category=category})
+    end
+    table.sort(enriched,function(a,b) if a.category==b.category then return a.name<b.name end return a.category<b.category end)
+    for i,row in ipairs(resultRows.item) do
+      local data=enriched[i]
+      if data then
+        row.id=data.id; row.kind="item"; row.result=data.result; row.icon:SetTexture(data.texture or "Interface\\Icons\\INV_Misc_QuestionMark")
+        local r,g,b=1,1,1; if data.quality then r,g,b=GetItemQualityColor(data.quality) end; row.label:SetTextColor(r,g,b); row.label:SetText(data.name)
+        local heroic=false
+        for _,entry in ipairs(TooltipLines({id=data.id,name=data.name,link=data.link,quality=data.quality}) or {}) do if entry.left and entry.left:lower()=="heroic" then heroic=true; break end end
+        local difficulty=heroic and "  •  |cff55ff55Heroic|r" or (data.category=="Equipment" and "  •  Normal" or "")
+        row.meta:SetText(string.format("|cff00ccff%s|r  •  |cffaaaaaa%s%s%s|r",data.category,data.subType or data.itemType or "Item",data.itemLevel and ("  •  iLvl "..data.itemLevel) or "",difficulty)); row:Show()
+      else row.id=nil; row.result=nil; row.label:SetText(""); row.meta:SetText(""); row:Hide() end
+    end
+  end
+  itemUI.Clear=function()
+    titleBox:SetText(""); itemIdBox:SetText(""); count:SetText("1"); lookup.kind="item"; lookup.results={}; itemUI.selected=nil; itemUI.server={crafts={},reagents={},recipes={},sources={},uses={},requirements={},access=nil,preview=nil}; itemUI.loading=false; itemUI.view="OVERVIEW"
+    selectedName:SetText("No item selected"); selectedName:SetTextColor(unpack(C.white)); selectedMeta:SetText("Search by item name or exact item ID."); icon:SetTexture("Interface\\Icons\\INV_Misc_QuestionMark"); iconFrame:SetBackdropBorderColor(unpack(C.border)); itemUI.Render(); RenderResults(); SetStatus("Item Inspector cleared")
+  end
+  itemUI.RefreshPreview=function()
+    local item=itemUI.selected; if not item then model:Hide(); fallback:Show(); return end
+    local serverPreview=itemUI.server and itemUI.server.preview
+    local serverDisplay=serverPreview and tonumber(serverPreview.display) or 0
+    local serverCreature=serverPreview and tonumber(serverPreview.creature) or 0
+    local creatureID,companionKind,companionName=CompanionPreview(item)
+    if serverDisplay>0 and model.SetDisplayInfo then
+      fallback:Hide(); model:Show(); model:SetDisplayInfo(serverDisplay); if model.SetFacing then model:SetFacing(model.azerFacing or 0) end
+    elseif serverCreature>0 and model.SetCreature then
+      fallback:Hide(); model:Show(); model:SetCreature(serverCreature); if model.SetFacing then model:SetFacing(model.azerFacing or 0) end
+    elseif creatureID then
+      fallback:Hide(); model:Show(); model:SetCreature(creatureID); if model.SetFacing then model:SetFacing(model.azerFacing or 0) end
+    elseif visibleEquipLocs[item.equipLoc] and model.TryOn then
+      fallback:Hide(); model:Show(); if model.SetUnit then model:SetUnit("player") end; model:TryOn(ItemLink(item)); if model.SetFacing then model:SetFacing(model.azerFacing or 0) end
+    else
+      model:Hide(); fallback:Show(); fallbackIcon:SetTexture(item.texture or "Interface\\Icons\\INV_Misc_QuestionMark")
+      local slot=equipNames[item.equipLoc]
+      if invisibleEquipLocs[item.equipLoc] then fallbackText:SetText(string.format("|cffffffff%s|r\n|cff00ccff%s|r\n|cffaaaaaaThis equipment slot has no visible character model.|r",item.name or ("Item "..tostring(item.id)),slot or "Equipment"))
+      else fallbackText:SetText(string.format("|cffffffff%s|r\n|cffaaaaaa%s has no available 3D preview.|r",item.name or ("Item "..tostring(item.id)),companionKind or item.itemType or "This item")) end
+    end
+    if itemUI.UpdatePreviewCamera then itemUI.UpdatePreviewCamera() end
+  end
+  itemUI.Render=function()
+    local titles={OVERVIEW="ITEM OVERVIEW",PREVIEW="ITEM PREVIEW",CRAFTING="CRAFTING",SOURCES="SOURCES",STATS="ITEM STATS",REQUIREMENTS="REQUIREMENTS",TECHNICAL="TECHNICAL"}; workspaceTitle:SetText(titles[itemUI.view] or "ITEM")
+    for key,b in pairs(itemUI.viewButtons) do if key==itemUI.view then b:SetBackdropColor(unpack(C.selected)); b:SetBackdropBorderColor(unpack(C.gold)) else b:SetBackdropColor(unpack(C.button)); b:SetBackdropBorderColor(unpack(C.border)) end end
+    for _,row in ipairs(itemUI.linkRows) do row:Hide() end
+    if itemUI.view=="PREVIEW" then reportScroll:Hide(); previewFrame:Show(); itemUI.RefreshPreview()
+    else previewFrame:Hide(); reportScroll:Show(); local showResults=itemUI.view=="OVERVIEW" and not itemUI.selected
+      if showResults then resultsTitle:Show(); RenderResults() else resultsTitle:Hide(); for _,row in ipairs(resultRows.item) do row:Hide() end end
+      if itemUI.view=="CRAFTING" or itemUI.view=="SOURCES" then
+        reportText:SetText(""); local entries={}; local server=itemUI.server or {}
+        if itemUI.view=="CRAFTING" then
+          for _,craft in ipairs(server.crafts or {}) do
+            table.insert(entries,{text=string.format("%s — %s • skill %s • creates %s • %s%s",craft.spellname or ("Spell "..tostring(craft.spell)),craft.profession or "Unknown profession",craft.rank or "?",craft.produced or "1",craft.resulttype or "DIRECT",craft.chance and craft.chance~="UNKNOWN" and (" • "..craft.chance) or "")})
+            for _,reagent in ipairs(server.reagents or {}) do if reagent.spell==craft.spell then table.insert(entries,{text=string.format("    %sx %s",reagent.count or "?",reagent.name or ("Item "..tostring(reagent.id))),link=ItemLink(reagent)}) end end
+            for _,recipe in ipairs(server.recipes or {}) do if recipe.spell==craft.spell then table.insert(entries,{text="    Recipe: "..tostring(recipe.name or recipe.id),link=ItemLink(recipe)}) end end
+          end
+          if #(server.uses or {})>0 then table.insert(entries,{text="USED AS A REAGENT"}) end
+          for _,use in ipairs(server.uses or {}) do table.insert(entries,{text=string.format("    %s creates %sx %s",use.profession or use.spellname or "Craft",use.count or "1",use.resultname or use.resultid or "Unknown"),link=ItemLink({id=use.resultid,name=use.resultname,quality=1})}) end
+          if #entries==0 then table.insert(entries,{text=itemUI.loading and "Loading crafting information..." or "No crafting method was reported for this item."}) end
+        else
+          for _,source in ipairs(server.sources or {}) do local link=source.type=="QUEST_REWARD" and QuestLink(source.id,source.name) or nil; table.insert(entries,{text=string.format("%s — %s%s",source.type or "SOURCE",source.name or source.id or "Unknown",source.detail and source.detail~="" and (" — "..source.detail) or ""),link=link}) end
+          if #entries==0 then table.insert(entries,{text=itemUI.loading and "Loading item sources..." or "No vendor, creature-drop or quest-reward source was reported."}) end
+        end
+        EnsureItemLinkRows(#entries); for i,entry in ipairs(entries) do local row=itemUI.linkRows[i]; row.link=entry.link; row:SetText(entry.text); row:Show() end; reportChild:SetHeight(math.max(370,#entries*27+10))
+      else
+        if showResults then reportText:SetText("") elseif itemUI.view=="OVERVIEW" then reportText:SetText(ColoredTooltipReport(itemUI.selected) or ItemReport()) elseif itemUI.view=="STATS" then reportText:SetText(ColoredStatsReport(itemUI.selected)) elseif itemUI.view=="REQUIREMENTS" then reportText:SetText(ColoredRequirementsReport(itemUI.selected)) else reportText:SetText(ItemReport()) end
+        reportChild:SetHeight(math.max(370,reportText:GetStringHeight()+170))
+      end
+    end
+  end
+  itemUI.Select=function(id,result,retry)
+    id=tonumber(id); if not id then return end
+    local name,link,quality,itemLevel,minLevel,itemType,subType,stack,equipLoc,texture,sellPrice=GetItemInfo(id)
+    local fallbackName=result and result.title or ("Item "..id); link=link or (result and result.link); name=name or fallbackName; texture=texture or GetItemIcon(id)
+    itemUI.selected={id=id,name=name,link=link,quality=quality,itemLevel=itemLevel,minLevel=minLevel,itemType=itemType,subType=subType,stack=stack,equipLoc=equipLoc or "",texture=texture,sellPrice=sellPrice}
+    if not retry or retry==0 then itemUI.server={crafts={},reagents={},recipes={},sources={},uses={},requirements={},access=nil,preview=nil}; itemUI.captureId=id; itemUI.loading=true; SendCommand(string.format(CMD.itemInspect,id)) end
+    itemIdBox:SetText(id); selectedName:SetText(name); selectedMeta:SetText(string.format("Item ID %d  •  %s%s",id,itemType or "Loading item data",itemLevel and ("  •  Item level "..itemLevel) or "")); icon:SetTexture(texture or "Interface\\Icons\\INV_Misc_QuestionMark")
+    if quality then local r,g,b=GetItemQualityColor(quality); iconFrame:SetBackdropBorderColor(r,g,b); selectedName:SetTextColor(r,g,b) else selectedName:SetTextColor(unpack(C.white)) end
+    itemUI.view="PREVIEW"; itemUI.Render(); SetStatus("Selected item "..name.." ["..id.."]")
+    if (not itemType or not texture) and (retry or 0)<20 then After(.25,function() if itemUI.selected and itemUI.selected.id==id then itemUI.Select(id,result,(retry or 0)+1) end end) end
+  end
+  local views={{"Overview","OVERVIEW"},{"Preview","PREVIEW"},{"Crafting","CRAFTING"},{"Sources","SOURCES"},{"Stats","STATS"},{"Requirements","REQUIREMENTS"},{"Technical","TECHNICAL"}}
+  for i,d in ipairs(views) do local label,key=d[1],d[2]; local b=Button(action,label,88,22,function() itemUI.view=key; itemUI.Render() end,"Open the Item "..label.." workspace"); b:SetPoint("TOPLEFT",8,-29-(i-1)*27); itemUI.viewButtons[key]=b; b:SetScript("OnLeave",function() itemUI.Render(); GameTooltip:Hide() end) end
+  Button(action,"Copy",88,22,function() ShowSelectableReport("Copy Item report",ItemReport()) end,"Copy the active Item report"):SetPoint("BOTTOMLEFT",8,61)
+  Button(action,"Share",88,22,function() local f=EnsureShareFrame(); f:SetCapturedMessage(ItemReport(),"ITEM",function() return ItemReport(),"ITEM" end); f:Show(); f:Raise() end,"Share the active Item report"):SetPoint("BOTTOMLEFT",8,34)
+  Button(action,"Export",88,22,function() ShowSelectableReport("Export Item report",ItemReport()) end,"Export the active Item report"):SetPoint("BOTTOMLEFT",8,7)
+  itemUI.Render(); RenderResults()
 end
 
 local function ParseAuditFields(message)
@@ -3227,6 +3636,7 @@ local function ApplySettings()
   local s=Settings()
   if main then main:SetScale(s.scale or 1) end
   if characterUI.UpdateEquipmentCamera then characterUI.UpdateEquipmentCamera() end
+  if itemUI.UpdatePreviewCamera then itemUI.UpdatePreviewCamera() end
   if minimapButton then
     minimapButton:SetParent(s.mbfCompatibility and UIParent or Minimap)
     PositionMinimap()
@@ -3261,6 +3671,9 @@ local function RenderCompatibility()
     local initial="AzerCore Ops\nAddon      |cffffffff"..ADDON_VERSION.."|r\nModule     |cffaaaaaaNot checked|r\nProtocol   v"..PROTOCOL_VERSION.."\n\nSelect Check compatibility to query the running worldserver."
     if target then target:SetText(initial) end
     if compatUI.informationText then compatUI.informationText:SetText(initial) end
+    if compatUI.informationOverviewText then compatUI.informationOverviewText:SetText(initial) end
+    if compatUI.informationCapabilitiesText then compatUI.informationCapabilitiesText:SetText("Capabilities and permissions have not been requested from the server.") end
+    if compatUI.informationBuildText then compatUI.informationBuildText:SetText("Build and revision information has not been requested from the server.") end
     return
   end
 
@@ -3285,6 +3698,16 @@ local function RenderCompatibility()
   local permissions=Platform:SortedPermissions()
   local capabilityText=#capabilities>0 and table.concat(capabilities, "\n") or "Not advertised"
   local permissionText=#permissions>0 and table.concat(permissions, "\n") or "Not advertised"
+  local overviewText=string.format(
+    "Compatibility\n%s\n|cffaaaaaa%s|r\n\nSoftware\nAddon      |cffffffff%s|r\nModule     |cffffffff%s|r\nProtocol   v%s\nSchema     v%s\nRelease    %s (%s)",
+    status,compatibilityReason,ADDON_VERSION,f.module or "unknown",f.protocol or "?",f.capschema or "?",release,f.release or "unknown")
+  local capabilitiesViewText=string.format(
+    "Capabilities\n|cffffffff%s|r\n\nPermissions\n|cffffffff%s|r",
+    capabilityText,permissionText)
+  local buildViewText=string.format(
+    "Commits\nAzerCore Ops |cffffffff%s|r\nCore         |cffffffff%s|r\nPlayerbots   |cffffffff%s|r\n\nWorkspace\nAzerCore Ops %s\nCore         %s\nPlayerbots   %s\n\nBuild\n|cffffffff%s|r\nBuilt |cffffffff%s|r",
+    f.modulegit or "unknown",f.core or "unknown",f.playerbots or "unknown",
+    Workspace(f.moduledirty),Workspace(f.coredirty),Workspace(f.playerbotsdirty),f.build or "unknown",f.built or "unknown")
   local text=string.format(
     "Compatibility\n%s\n|cffaaaaaa%s|r\n\nSoftware\nAddon      |cffffffff%s|r\nModule     |cffffffff%s|r\nProtocol   v%s\nSchema     v%s\nRelease    %s (%s)\n\nCapabilities\n|cffffffff%s|r\n\nPermissions\n|cffffffff%s|r\n\nCommits\nAzerCore Ops |cffffffff%s|r\nCore         |cffffffff%s|r\nPlayerbots   |cffffffff%s|r\n\nWorkspace\nAzerCore Ops %s\nCore         %s\nPlayerbots   %s\n\nBuild\n%s\nBuilt %s",
     status,compatibilityReason,ADDON_VERSION,f.module or "unknown",f.protocol or "?",f.capschema or "?",release,f.release or "unknown",
@@ -3292,6 +3715,9 @@ local function RenderCompatibility()
     Workspace(f.moduledirty),Workspace(f.coredirty),Workspace(f.playerbotsdirty),f.build or "unknown",f.built or "unknown")
   if target then target:SetText(text) end
   if compatUI.informationText then compatUI.informationText:SetText(text) end
+  if compatUI.informationOverviewText then compatUI.informationOverviewText:SetText(overviewText) end
+  if compatUI.informationCapabilitiesText then compatUI.informationCapabilitiesText:SetText(capabilitiesViewText) end
+  if compatUI.informationBuildText then compatUI.informationBuildText:SetText(buildViewText) end
 end
 
 local function RequestCompatibility()
@@ -3413,9 +3839,9 @@ local function BuildOptions()
 end
 
 local PROJECT_LINKS = {
-  {label="AzerCoreOps repository", url="https://github.com/Fersantos1975/mod-azercore-ops"},
+  {label="AzerCoreOps repository", url="https://github.com/Fersantos1975/AzerCore-Ops"},
   {label="AzerothCore", url="https://github.com/azerothcore/azerothcore-wotlk"},
-  {label="mod-playerbots", url="https://github.com/azerothcore/mod-playerbots"},
+  {label="mod-playerbots", url="https://github.com/mod-playerbots/mod-playerbots"},
   {label="AzerothCore documentation", url="https://www.azerothcore.org/wiki/"},
   {label="Wowhead WotLK", url="https://www.wowhead.com/wotlk"},
 }
@@ -3456,7 +3882,7 @@ end
 local function BuildDashboard()
   local p=NewPage("Dashboard")
   local title=Label(p,"AzerCore Ops Operations Center","GameFontNormalLarge"); title:SetPoint("TOPLEFT",18,-18)
-  local intro=p:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); intro:SetPoint("TOPLEFT",18,-48); intro:SetPoint("TOPRIGHT",-18,-48); intro:SetJustifyH("LEFT"); intro:SetTextColor(unpack(C.white)); intro:SetText("A unified operations platform for AzerothCore administrators and Game Masters.")
+  local intro=p:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); intro:SetPoint("TOPLEFT",18,-48); intro:SetPoint("TOPRIGHT",-18,-48); intro:SetJustifyH("LEFT"); intro:SetTextColor(unpack(C.white)); intro:SetText("A server-authorized operations and gameplay platform for players, administrators and Game Masters.")
   WorkflowStrip(p,18,-76,726)
   Card(p,"Instance Access","Check a dungeon or raid and identify the first access blocker for every group member.",18,-126,355,105)
   Card(p,"Quest Intelligence","Inspect faction rules, requirements, character status, and linked quest chains.",389,-126,355,105)
@@ -3468,7 +3894,7 @@ local function BuildDashboard()
   Button(quick,"Inspect Quest",150,30,function() SelectTab("Quest") end,"Open quest search and chain analysis"):SetPoint("TOPLEFT",174,-42)
   Button(quick,"Check Compatibility",150,30,function() RequestCompatibility(); OpenOptions() end,"Query the running AzerCoreOps module"):SetPoint("TOPLEFT",336,-42)
   Button(quick,"Information & Credits",170,30,function() SelectTab("Information") end,"View project links, credits, and acknowledgements"):SetPoint("TOPLEFT",498,-42)
-  local note=quick:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); note:SetPoint("TOPLEFT",12,-92); note:SetPoint("BOTTOMRIGHT",-12,12); note:SetJustifyH("LEFT"); note:SetJustifyV("TOP"); note:SetWordWrap(true); note:SetTextColor(unpack(C.white)); note:SetText("Release candidate: v0.4.0-rc1\n\nThis release candidate completes the AzerCore Ops v0.4 platform foundation: unified design tokens, workflow semantics, compatibility reporting, instance access analysis, quest intelligence, instance operations, movement tools, reports, and guarded administrative actions. It is ready for server compilation and the final in-game release validation.")
+  local note=quick:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); note:SetPoint("TOPLEFT",12,-92); note:SetPoint("BOTTOMRIGHT",-12,12); note:SetJustifyH("LEFT"); note:SetJustifyV("TOP"); note:SetWordWrap(true); note:SetTextColor(unpack(C.white)); note:SetText("Release: v0.6.0\n\nAzerCore Ops combines safe Player Mode inspection and reporting with server-authorized administrator and Game Master operations. Courier remains under construction and is not included as an active release feature.")
 end
 
 
@@ -3565,29 +3991,54 @@ Message retention
 Pinned Couriers never expire. Expired Couriers are automatically deleted.]])
 
   ShowView("INBOX","Inbox")
+  local unavailable=CreateFrame("Frame",nil,p); unavailable:SetPoint("TOPLEFT",14,-70); unavailable:SetPoint("BOTTOMRIGHT",-14,14); unavailable:SetFrameLevel(p:GetFrameLevel()+40); unavailable:EnableMouse(true); Backdrop(unavailable,C.bg)
+  local unavailableTitle=unavailable:CreateFontString(nil,"OVERLAY","GameFontNormalLarge"); unavailableTitle:SetPoint("CENTER",0,42); unavailableTitle:SetText("Courier — Under Construction"); unavailableTitle:SetTextColor(unpack(C.gold))
+  local unavailableText=unavailable:CreateFontString(nil,"OVERLAY","GameFontHighlight"); unavailableText:SetPoint("TOP",unavailableTitle,"BOTTOM",0,-18); unavailableText:SetWidth(500); unavailableText:SetJustifyH("CENTER"); unavailableText:SetTextColor(unpack(C.white)); unavailableText:SetText("Courier transport, inbox, delivery and user-management features are not active in this release.\n\nThe preview is intentionally locked until its protocol, permissions, privacy and delivery safeguards are complete.")
+  courierUI.unavailable=unavailable
 end
 
 local function BuildInformation()
   local p=NewPage("Information")
   local title=Label(p,"Platform Information & Credits","GameFontNormalLarge"); title:SetPoint("TOPLEFT",18,-18)
 
-  local platform=CreateFrame("Frame",nil,p); platform:SetPoint("TOPLEFT",18,-55); platform:SetPoint("TOPRIGHT",-18,-55); platform:SetHeight(360); Backdrop(platform,C.panel)
-  local ph=Label(platform,"Platform status"); ph:SetPoint("TOPLEFT",12,-12)
-  compatUI.informationText=platform:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall")
-  compatUI.informationText:SetPoint("TOPLEFT",12,-38); compatUI.informationText:SetPoint("BOTTOMRIGHT",-12,48)
-  compatUI.informationText:SetJustifyH("LEFT"); compatUI.informationText:SetJustifyV("TOP"); compatUI.informationText:SetWordWrap(true); compatUI.informationText:SetTextColor(unpack(C.white))
-  Button(platform,"Check compatibility",155,26,RequestCompatibility,"Query module, registry, permissions, and build information"):SetPoint("BOTTOMLEFT",12,14)
+  local actions=CreateFrame("Frame",nil,p); actions:SetPoint("TOPLEFT",18,-55); actions:SetPoint("BOTTOMLEFT",18,18); actions:SetWidth(150); Backdrop(actions,C.panel)
+  local ah=Label(actions,"INFORMATION","GameFontNormalSmall"); ah:SetPoint("TOPLEFT",12,-12)
+  local content=CreateFrame("Frame",nil,p); content:SetPoint("TOPLEFT",178,-55); content:SetPoint("BOTTOMRIGHT",-18,18); Backdrop(content,C.panel)
+  local views,buttons={},{ }
 
-  local credits=CreateFrame("Frame",nil,p); credits:SetPoint("TOPLEFT",18,-431); credits:SetPoint("BOTTOMRIGHT",-389,18); Backdrop(credits,C.panel)
-  local ch=Label(credits,"Project & credits"); ch:SetPoint("TOPLEFT",12,-12)
-  local ct=credits:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); ct:SetPoint("TOPLEFT",12,-38); ct:SetPoint("BOTTOMRIGHT",-12,12); ct:SetJustifyH("LEFT"); ct:SetJustifyV("TOP"); ct:SetWordWrap(true); ct:SetTextColor(unpack(C.white)); ct:SetText("AzerCore Ops is an open-source operations platform for AzerothCore administrators and Game Masters.\n\nCreated and maintained by |cffffd100Fernando Santos|r.\n\nBuilt with AzerothCore, mod-playerbots, and AI-assisted development from OpenAI ChatGPT.\n\nLicense: GPL-3.0")
-
-  local resources=CreateFrame("Frame",nil,p); resources:SetPoint("TOPLEFT",389,-431); resources:SetPoint("BOTTOMRIGHT",-18,18); Backdrop(resources,C.panel)
-  local rh=Label(resources,"Project resources"); rh:SetPoint("TOPLEFT",12,-12)
-  for i,item in ipairs(PROJECT_LINKS) do
-    local entry=item
-    Button(resources,entry.label,315,26,function() ShowCopyLink(entry.label,entry.url) end,"Open a selectable copy box for this address"):SetPoint("TOPLEFT",20,-38-(i-1)*32)
+  local function ScrollView(key,heading,height)
+    local view=CreateFrame("Frame",nil,content); view:SetAllPoints(); view:Hide(); views[key]=view
+    local vh=Label(view,heading); vh:SetPoint("TOPLEFT",14,-14)
+    local scroll=CreateFrame("ScrollFrame",nil,view,"UIPanelScrollFrameTemplate"); scroll:SetPoint("TOPLEFT",12,-42); scroll:SetPoint("BOTTOMRIGHT",-30,12)
+    local child=CreateFrame("Frame",nil,scroll); child:SetWidth(520); child:SetHeight(height or 520); scroll:SetScrollChild(child)
+    scroll:EnableMouseWheel(true); scroll:SetScript("OnMouseWheel",function(self,delta) local maximum=math.max(0,child:GetHeight()-self:GetHeight()); self:SetVerticalScroll(math.max(0,math.min(maximum,self:GetVerticalScroll()-delta*32))) end)
+    return child
   end
+
+  local overview=ScrollView("OVERVIEW","Platform overview",440)
+  compatUI.informationOverviewText=overview:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); compatUI.informationOverviewText:SetPoint("TOPLEFT",4,-4); compatUI.informationOverviewText:SetPoint("TOPRIGHT",-4,-4); compatUI.informationOverviewText:SetJustifyH("LEFT"); compatUI.informationOverviewText:SetJustifyV("TOP"); compatUI.informationOverviewText:SetWordWrap(true); compatUI.informationOverviewText:SetTextColor(unpack(C.white))
+
+  local capabilities=ScrollView("CAPABILITIES","Capabilities & permissions",760)
+  compatUI.informationCapabilitiesText=capabilities:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); compatUI.informationCapabilitiesText:SetPoint("TOPLEFT",4,-4); compatUI.informationCapabilitiesText:SetPoint("TOPRIGHT",-4,-4); compatUI.informationCapabilitiesText:SetJustifyH("LEFT"); compatUI.informationCapabilitiesText:SetJustifyV("TOP"); compatUI.informationCapabilitiesText:SetWordWrap(true); compatUI.informationCapabilitiesText:SetTextColor(unpack(C.white))
+
+  local build=ScrollView("BUILD","Build information",520)
+  compatUI.informationBuildText=build:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); compatUI.informationBuildText:SetPoint("TOPLEFT",4,-4); compatUI.informationBuildText:SetPoint("TOPRIGHT",-4,-4); compatUI.informationBuildText:SetJustifyH("LEFT"); compatUI.informationBuildText:SetJustifyV("TOP"); compatUI.informationBuildText:SetWordWrap(true); compatUI.informationBuildText:SetTextColor(unpack(C.white))
+
+  local credits=ScrollView("CREDITS","Project & credits",620)
+  local ct=credits:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); ct:SetPoint("TOPLEFT",4,-4); ct:SetPoint("TOPRIGHT",-4,-4); ct:SetHeight(560); ct:SetJustifyH("LEFT"); ct:SetJustifyV("TOP"); ct:SetWordWrap(true); ct:SetTextColor(unpack(C.white)); ct:SetText("AzerCore Ops is an open-source operations and gameplay companion for AzerothCore players, administrators and Game Masters.\n\nPlayer Mode provides permitted gameplay, inspection and reporting features for regular players. It cannot grant administrative authority; privileged operations remain authorized and enforced by the server module.\n\nCreated and maintained by |cffffd100Fernando Santos|r.\n\nBuilt with AzerothCore, mod-playerbots, and AI-assisted development from OpenAI ChatGPT.\n\nMovement destination data adapted from AzerothAdmin under GPLv3 and derived from TrinityAdmin/MangAdmin. Our thanks to their contributors and the wider open-source community.\n\nAzerothCore and its contributors provide the server platform on which AzerCore Ops operates. mod-playerbots is acknowledged for the Playerbot integration and development environment.\n\nLicense\n|cffffffffGNU General Public License v3.0|r")
+
+  local resources=ScrollView("RESOURCES","Project resources",420)
+  for i,item in ipairs(PROJECT_LINKS) do local entry=item; Button(resources,entry.label,390,28,function() ShowCopyLink(entry.label,entry.url) end,"Open a selectable copy box for this address"):SetPoint("TOPLEFT",4,-4-(i-1)*36) end
+
+  local function Select(key)
+    for name,view in pairs(views) do if name==key then view:Show() else view:Hide() end end
+    for name,button in pairs(buttons) do button:SetBackdropColor(unpack(name==key and C.selected or C.button)); button:SetBackdropBorderColor(unpack(name==key and C.gold or C.border)) end
+  end
+  for i,definition in ipairs({{"OVERVIEW","Overview"},{"CAPABILITIES","Capabilities"},{"BUILD","Build Information"},{"CREDITS","Credits"},{"RESOURCES","Resources"}}) do
+    local key,label=definition[1],definition[2]; local b=Button(actions,label,126,26,function() Select(key) end); b:SetPoint("TOPLEFT",12,-38-(i-1)*32); buttons[key]=b
+  end
+  Button(actions,"Check Compatibility",126,28,RequestCompatibility,"Query module, registry, permissions, and build information"):SetPoint("BOTTOMLEFT",12,14)
+  Select("OVERVIEW")
   RenderCompatibility()
 end
 
@@ -3613,7 +4064,7 @@ local function BuildUI()
       local x,y=GetCursorPosition(); x=x/uiScale; y=y/uiScale
       local delta=((x-grip.startX)/main:GetWidth()+(grip.startY-y)/main:GetHeight())/2
       local value=math.max(.75,math.min(1.35,grip.startScale+delta)); value=math.floor(value*100+.5)/100
-      Settings().scale=value; main:SetScale(value); if characterUI.UpdateEquipmentCamera then characterUI.UpdateEquipmentCamera() end; SetStatus("Window scale: "..math.floor(value*100+.5).."%")
+      Settings().scale=value; main:SetScale(value); if characterUI.UpdateEquipmentCamera then characterUI.UpdateEquipmentCamera() end; if itemUI.UpdatePreviewCamera then itemUI.UpdatePreviewCamera() end; SetStatus("Window scale: "..math.floor(value*100+.5).."%")
     end)
   end)
   resizeGrip:SetScript("OnDragStop",function(self)
@@ -3647,11 +4098,28 @@ local function BuildUI()
   minimapButton=CreateFrame("Button","AZERCORE_OPS_MinimapButton",Settings().mbfCompatibility and UIParent or Minimap); minimapButton:SetWidth(24); minimapButton:SetHeight(22); minimapButton:SetFrameStrata("HIGH"); minimapButton:SetFrameLevel(100); minimapButton:RegisterForClicks("LeftButtonUp","RightButtonUp"); minimapButton:RegisterForDrag("LeftButton")
   local bg=minimapButton:CreateTexture(nil,"BACKGROUND"); bg:SetTexture("Interface\\Minimap\\UI-Minimap-Background"); bg:SetAllPoints()
   local bd=minimapButton:CreateTexture(nil,"OVERLAY"); bd:SetTexture("Interface\\Minimap\\MiniMap-TrackingBorder"); bd:SetPoint("TOPLEFT",-6,6); bd:SetPoint("BOTTOMRIGHT",6,-6)
-  local icon=minimapButton:CreateTexture(nil,"ARTWORK"); icon:SetTexture("Interface\\AddOns\\AzerCoreOps\\Media\\azercoreops-icon.tga"); icon:SetPoint("TOPLEFT",2,-2); icon:SetPoint("BOTTOMRIGHT",-2,2)
+  local minimapIconPath="Interface\\AddOns\\AzerCoreOps\\Media\\azercoreops-icon.tga"
+  minimapButton:SetNormalTexture(minimapIconPath); local icon=minimapButton:GetNormalTexture(); icon:SetDrawLayer("ARTWORK",2); icon:ClearAllPoints(); icon:SetPoint("TOPLEFT",2,-2); icon:SetPoint("BOTTOMRIGHT",-2,2); icon:SetTexCoord(.06,.94,.06,.94); icon:SetVertexColor(1,1,1,1); icon:SetAlpha(1); icon:Show(); minimapButton.icon=icon
+  minimapButton:SetPushedTexture(minimapIconPath); local pushed=minimapButton:GetPushedTexture(); pushed:SetDrawLayer("ARTWORK",3); pushed:ClearAllPoints(); pushed:SetPoint("TOPLEFT",3,-3); pushed:SetPoint("BOTTOMRIGHT",-1,1); pushed:SetTexCoord(.06,.94,.06,.94); pushed:SetVertexColor(1,1,1,1); pushed:SetAlpha(1)
+  minimapButton:SetHighlightTexture("Interface\\Minimap\\UI-Minimap-ZoomButton-Highlight","ADD"); local highlight=minimapButton:GetHighlightTexture(); highlight:ClearAllPoints(); highlight:SetPoint("TOPLEFT",-2,2); highlight:SetPoint("BOTTOMRIGHT",2,-2)
+  minimapButton.tooltipText="AzerCore Ops"; minimapButton.tooltip="AzerCore Ops"
   local tx=minimapButton:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); tx:SetPoint("CENTER"); tx:SetText(""); tx:SetTextColor(unpack(C.gold))
   minimapButton:SetScript("OnClick",function(_,button) if button=="RightButton" then HideMain() elseif main:IsShown() then HideMain() else ShowMain() end end)
-  minimapButton:SetScript("OnDragStart",function(self) self:SetScript("OnUpdate",function() local mx,my=Minimap:GetCenter(); local px,py=GetCursorPosition(); local s=Minimap:GetEffectiveScale(); AzerCoreOpsDB.minimapAngle=math.deg(math.atan2(py/s-my,px/s-mx)); PositionMinimap() end) end)
-  minimapButton:SetScript("OnDragStop",function(self) self:SetScript("OnUpdate",nil) end); PositionMinimap(); ApplySettings()
+  minimapButton:SetScript("OnEnter",function(self) GameTooltip:SetOwner(self,"ANCHOR_LEFT"); GameTooltip:SetText("AzerCore Ops",1,.82,0); GameTooltip:AddLine("Operations and gameplay companion",1,1,1); GameTooltip:AddLine("Left-click: open or hide",.75,.75,.75); GameTooltip:AddLine("Right-click: hide",.75,.75,.75); GameTooltip:Show() end)
+  minimapButton:SetScript("OnLeave",function() GameTooltip:Hide() end)
+  local function MaintainMinimapIcon(self)
+    local parent=self:GetParent(); local inMBF=parent and parent.GetName and parent:GetName()=="MinimapButtonFrame"
+    if inMBF then
+      if self.icon:GetDrawLayer()~="OVERLAY" then self.icon:SetDrawLayer("OVERLAY",7) end
+      if not self.icon:IsShown() then self.icon:Show() end
+      if self.icon:GetAlpha()~=1 then self.icon:SetAlpha(1) end
+    elseif self.icon:GetDrawLayer()~="ARTWORK" then
+      self.icon:SetDrawLayer("ARTWORK",2); self.icon:Show(); self.icon:SetAlpha(1)
+    end
+  end
+  minimapButton:SetScript("OnUpdate",MaintainMinimapIcon)
+  minimapButton:SetScript("OnDragStart",function(self) self:SetScript("OnUpdate",function(button) MaintainMinimapIcon(button); local mx,my=Minimap:GetCenter(); local px,py=GetCursorPosition(); local s=Minimap:GetEffectiveScale(); AzerCoreOpsDB.minimapAngle=math.deg(math.atan2(py/s-my,px/s-mx)); PositionMinimap() end) end)
+  minimapButton:SetScript("OnDragStop",function(self) self:SetScript("OnUpdate",MaintainMinimapIcon) end); PositionMinimap(); ApplySettings()
   if Settings().startMinimized then HideMain() end
 end
 
@@ -3783,6 +4251,42 @@ events:SetScript("OnEvent",function(_,event,arg1)
       Platform.NPCUI.ignoreStream=false
     elseif kind=="NPC_ERROR" then
       SetStatus(f.reason or "NPC inspection failed",true)
+    elseif kind=="ITEM_BEGIN" then
+      if tonumber(f.id)==tonumber(Platform.ItemUI.captureId) then
+        Platform.ItemUI.server={begin=f,crafts={},reagents={},recipes={},sources={},uses={},requirements={},access=nil,preview=nil}; Platform.ItemUI.loading=true
+      end
+    elseif kind=="ITEM_ACCESS" then
+      if Platform.ItemUI.loading then Platform.ItemUI.server.access=f; if Platform.ItemUI.Render then Platform.ItemUI.Render() end end
+    elseif kind=="ITEM_PREVIEW" then
+      if Platform.ItemUI.loading then Platform.ItemUI.server.preview=f; if Platform.ItemUI.Render then Platform.ItemUI.Render() end end
+    elseif kind=="ITEM_REQUIREMENT" then
+      if Platform.ItemUI.loading then table.insert(Platform.ItemUI.server.requirements,f); if Platform.ItemUI.Render then Platform.ItemUI.Render() end end
+    elseif kind=="ITEM_CRAFT" then
+      if Platform.ItemUI.loading then table.insert(Platform.ItemUI.server.crafts,f) end
+    elseif kind=="ITEM_REAGENT" then
+      if Platform.ItemUI.loading then table.insert(Platform.ItemUI.server.reagents,f) end
+    elseif kind=="ITEM_RECIPE" then
+      if Platform.ItemUI.loading then table.insert(Platform.ItemUI.server.recipes,f) end
+    elseif kind=="ITEM_SOURCE" then
+      if Platform.ItemUI.loading then table.insert(Platform.ItemUI.server.sources,f) end
+    elseif kind=="ITEM_USE" then
+      if Platform.ItemUI.loading then table.insert(Platform.ItemUI.server.uses,f) end
+    elseif kind=="ITEM_END" then
+      if tonumber(f.id)==tonumber(Platform.ItemUI.captureId) then Platform.ItemUI.loading=false; if Platform.ItemUI.Render then Platform.ItemUI.Render() end; SetStatus(string.format("Item inspection loaded — %s crafting method(s)",f.crafts or 0)) end
+    elseif kind=="ITEM_ERROR" then
+      Platform.ItemUI.loading=false; SetStatus(f.reason or "Item inspection failed",true); if Platform.ItemUI.Render then Platform.ItemUI.Render() end
+    elseif kind=="MOVEMENT_CATALOG_BEGIN" then
+      Platform.MovementUI.serverCatalog={}; Platform.MovementUI.loading=true
+    elseif kind=="MOVEMENT_DESTINATION" then
+      local d={id=tonumber(f.id),name=f.name,category=f.category,map=tonumber(f.map),x=tonumber(f.x),y=tonumber(f.y),z=tonumber(f.z),o=tonumber(f.o),source="AzerothCore game_tele"}; table.insert(Platform.MovementUI.serverCatalog,d)
+    elseif kind=="MOVEMENT_CATALOG_END" then
+      Platform.MovementUI.loading=false; if Platform.MovementUI.RefreshCatalog then Platform.MovementUI.RefreshCatalog() end; if Platform.MovementUI.Render then Platform.MovementUI.Render() end; SetStatus("Loaded "..tostring(f.count or #Platform.MovementUI.serverCatalog).." server destinations plus the validated built-in catalogue")
+    elseif kind=="MOVEMENT_CURRENT" then
+      if Platform.MovementUI.OnCurrent then Platform.MovementUI.OnCurrent(f) end
+    elseif kind=="MOVEMENT_RESULT" then
+      SetStatus((f.result or "Movement").." — "..tostring(f.reason or ""),f.result~="SUCCESS")
+    elseif kind=="MOVEMENT_ERROR" then
+      SetStatus(f.reason or "Movement operation failed",true)
     elseif kind=="ERROR" then
       SetStatus(f.reason or "AzerCore Ops server-module error",true)
     elseif kind=="QUEST_SEARCH" then
@@ -3911,6 +4415,15 @@ if ChatFrame_AddMessageEventFilter then
   for _,eventName in ipairs({"CHAT_MSG_SYSTEM","CHAT_MSG_SAY","CHAT_MSG_YELL","CHAT_MSG_WHISPER","CHAT_MSG_PARTY","CHAT_MSG_PARTY_LEADER","CHAT_MSG_RAID","CHAT_MSG_RAID_LEADER","CHAT_MSG_GUILD","CHAT_MSG_OFFICER","CHAT_MSG_CHANNEL"}) do
     ChatFrame_AddMessageEventFilter(eventName,HideProtocol)
   end
+  ChatFrame_AddMessageEventFilter("CHAT_MSG_SYSTEM",function(_,event,message)
+    if event~="CHAT_MSG_SYSTEM" or not lookup.kind or GetTime()>lookup.expires then return false end
+    local raw=tostring(message or "")
+    local plain=raw:gsub("|c%x%x%x%x%x%x%x%x",""):gsub("|r","")
+    local expectedLink=lookup.kind=="quest" and "|Hquest:" or "|Hitem:"
+    if raw:find(expectedLink,1,true) or plain:match("^%s*%d+%s*%-%s*%b[]") then return true end
+    if plain:lower():find("could not parse",1,true) or plain:lower():find("no ",1,true) and plain:lower():find("found",1,true) then return true end
+    return false
+  end)
   ChatFrame_AddMessageEventFilter("CHAT_MSG_SAY",function(_,_,message)
     local plain=tostring(message or ""):gsub("|c%x%x%x%x%x%x%x%x",""):gsub("|r","")
     return Settings().hideAuditChat and plain:find("^%s*%.")~=nil
