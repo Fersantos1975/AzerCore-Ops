@@ -2547,6 +2547,15 @@ local function BuildItem()
   Button(previewFrame,"<",26,21,function() model.azerFacing=model.azerFacing-.25; if model.SetFacing then model:SetFacing(model.azerFacing) end end,"Rotate preview left"):SetPoint("TOPLEFT",8,-8)
   Button(previewFrame,">",26,21,function() model.azerFacing=model.azerFacing+.25; if model.SetFacing then model:SetFacing(model.azerFacing) end end,"Rotate preview right"):SetPoint("TOPRIGHT",-8,-8)
   Button(previewFrame,"Reset",50,21,function() if itemUI.RefreshPreview then itemUI.RefreshPreview() end end,"Reset the wearable item preview"):SetPoint("BOTTOM",0,7)
+  itemUI.UpdatePreviewCamera=function()
+    -- DressUpModel keeps a camera distance in physical pixels while its parent
+    -- inherits the addon scale. Compensate so the model remains framed at every
+    -- supported window scale instead of clipping at larger values.
+    local windowScale=math.max(.75,math.min(1.35,Settings().scale or 1))
+    if model.SetCamDistanceScale then model:SetCamDistanceScale(windowScale) end
+    if model.SetFacing then model:SetFacing(model.azerFacing or 0) end
+  end
+  previewFrame:SetScript("OnSizeChanged",function() After(0,function() if itemUI.UpdatePreviewCamera then itemUI.UpdatePreviewCamera() end end) end)
 
   local function ItemLink(item)
     if not item then return nil end
@@ -2653,13 +2662,31 @@ local function BuildItem()
           if not passed and requirement.detail and requirement.detail~="" then table.insert(lines,"  |cffff5555"..requirement.detail.."|r") end
         end
       end
-      local acquisition=false
+      local generalAcquisition={}; local paths={}; local pathOrder={}
       for _,requirement in ipairs(requirements) do
         if tostring(requirement.kind or ""):find("^ACQUISITION_") then
-          if not acquisition then table.insert(lines,""); table.insert(lines,"|cffffd100ACQUISITION PATH REQUIREMENTS|r"); acquisition=true end
-          local passed=tonumber(requirement.passed)==1
-          table.insert(lines,string.format("%s%s:|r  |cffffffffRequired %s|r  |cffaaaaaa(Current: %s)|r",passed and "|cff55ff55" or "|cffffaa00",tostring(requirement.name or "Requirement"),tostring(requirement.required or "?"),tostring(requirement.current or "?")))
-          if requirement.detail and requirement.detail~="" then table.insert(lines,"  |cffaaaaaa"..requirement.detail.."|r") end
+          local pathId=tonumber(requirement.pathid) or 0
+          if pathId>0 then
+            if not paths[pathId] then paths[pathId]={name=requirement.pathname or ("Quest "..pathId),requirements={}}; table.insert(pathOrder,pathId) end
+            table.insert(paths[pathId].requirements,requirement)
+          else table.insert(generalAcquisition,requirement) end
+        end
+      end
+      local function AddAcquisitionLine(requirement,prefix)
+        local passed=tonumber(requirement.passed)==1
+        table.insert(lines,string.format("  %s%s%s:|r  |cffffffffRequired %s|r  |cffaaaaaa(Current: %s)|r",passed and "|cff55ff55" or "|cffffaa00",prefix or "",tostring(requirement.name or "Requirement"),tostring(requirement.required or "?"),tostring(requirement.current or "?")))
+        if requirement.detail and requirement.detail~="" then table.insert(lines,"    |cff888888"..requirement.detail.."|r") end
+      end
+      if #generalAcquisition>0 then
+        table.insert(lines,""); table.insert(lines,"|cffffd100GENERAL ACQUISITION LIMITS|r")
+        for _,requirement in ipairs(generalAcquisition) do AddAcquisitionLine(requirement) end
+      end
+      if #pathOrder>0 then
+        table.sort(pathOrder)
+        table.insert(lines,""); table.insert(lines,"|cffffd100ALTERNATIVE ACQUISITION PATHS — COMPLETE ONE|r")
+        for index,pathId in ipairs(pathOrder) do
+          local path=paths[pathId]; table.insert(lines,string.format("|cff00ccffPath %d:|r  |cffffffff%s|r  |cff888888[%d]|r",index,tostring(path.name),pathId))
+          for _,requirement in ipairs(path.requirements) do AddAcquisitionLine(requirement) end
         end
       end
     elseif not next(found) then table.insert(lines,""); table.insert(lines,"|cffaaaaaaWaiting for authoritative server race and class requirements...|r") end
@@ -2763,6 +2790,7 @@ local function BuildItem()
       if invisibleEquipLocs[item.equipLoc] then fallbackText:SetText(string.format("|cffffffff%s|r\n|cff00ccff%s|r\n|cffaaaaaaThis equipment slot has no visible character model.|r",item.name or ("Item "..tostring(item.id)),slot or "Equipment"))
       else fallbackText:SetText(string.format("|cffffffff%s|r\n|cffaaaaaa%s has no available 3D preview.|r",item.name or ("Item "..tostring(item.id)),companionKind or item.itemType or "This item")) end
     end
+    if itemUI.UpdatePreviewCamera then itemUI.UpdatePreviewCamera() end
   end
   itemUI.Render=function()
     local titles={OVERVIEW="ITEM OVERVIEW",PREVIEW="ITEM PREVIEW",CRAFTING="CRAFTING",SOURCES="SOURCES",STATS="ITEM STATS",REQUIREMENTS="REQUIREMENTS",TECHNICAL="TECHNICAL"}; workspaceTitle:SetText(titles[itemUI.view] or "ITEM")
@@ -3608,6 +3636,7 @@ local function ApplySettings()
   local s=Settings()
   if main then main:SetScale(s.scale or 1) end
   if characterUI.UpdateEquipmentCamera then characterUI.UpdateEquipmentCamera() end
+  if itemUI.UpdatePreviewCamera then itemUI.UpdatePreviewCamera() end
   if minimapButton then
     minimapButton:SetParent(s.mbfCompatibility and UIParent or Minimap)
     PositionMinimap()
@@ -4035,7 +4064,7 @@ local function BuildUI()
       local x,y=GetCursorPosition(); x=x/uiScale; y=y/uiScale
       local delta=((x-grip.startX)/main:GetWidth()+(grip.startY-y)/main:GetHeight())/2
       local value=math.max(.75,math.min(1.35,grip.startScale+delta)); value=math.floor(value*100+.5)/100
-      Settings().scale=value; main:SetScale(value); if characterUI.UpdateEquipmentCamera then characterUI.UpdateEquipmentCamera() end; SetStatus("Window scale: "..math.floor(value*100+.5).."%")
+      Settings().scale=value; main:SetScale(value); if characterUI.UpdateEquipmentCamera then characterUI.UpdateEquipmentCamera() end; if itemUI.UpdatePreviewCamera then itemUI.UpdatePreviewCamera() end; SetStatus("Window scale: "..math.floor(value*100+.5).."%")
     end)
   end)
   resizeGrip:SetScript("OnDragStop",function(self)
