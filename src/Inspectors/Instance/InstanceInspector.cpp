@@ -403,6 +403,33 @@ bool InstanceInspector::Diagnose(ChatHandler* handler)
     else
         diagnostics.Finding("WARN", "TARGET", "Selected creature", "Optional boss or event NPC target", "No creature selected", "Generic instance checks will continue, but target-specific flags and AI cannot be inspected", "Target the affected boss or event NPC and run the scan again for additional evidence");
 
+    std::set<uint32> reportedEncounters;
+    for (DungeonEncounter const* encounter : EncountersFor(player->GetMapId(), map->GetDifficulty()))
+    {
+        if (!encounter || !encounter->dbcEntry)
+            continue;
+        uint32 encounterId = encounter->dbcEntry->encounterIndex;
+        if (!reportedEncounters.insert(encounterId).second)
+            continue;
+
+        EncounterState state = script ? script->GetBossState(encounterId) : TO_BE_DECIDED;
+        char const* encounterName = encounter->dbcEntry->encounterName[0];
+        std::string severity = state == FAIL ? "FAIL" : (state == IN_PROGRESS || state == SPECIAL || state == TO_BE_DECIDED ? "WARN" : "PASS");
+        std::string detail;
+        std::string recommendation;
+        switch (state)
+        {
+            case DONE: detail = "The instance save records this encounter as completed"; recommendation = "No action required"; break;
+            case NOT_STARTED: detail = "The encounter has not started in this instance state"; recommendation = "Complete prerequisite encounters before engaging this boss"; break;
+            case IN_PROGRESS: detail = "The encounter is currently active; this becomes suspicious if no combat is occurring"; recommendation = "Finish or reset the encounter normally, then rescan"; break;
+            case FAIL: detail = "The encounter recorded a failed attempt"; recommendation = "Allow the scripted reset to complete before trying again"; break;
+            case SPECIAL: detail = "The encounter is using a script-specific transitional state"; recommendation = "Collect nearby creature and door evidence before changing state"; break;
+            case TO_BE_DECIDED: detail = "The encounter state has not been initialized by its script"; recommendation = "Do not force DONE blindly; inspect the encounter profile and required initialization transition"; break;
+            default: detail = "Unknown encounter state"; recommendation = "Export this scan for investigation"; break;
+        }
+        diagnostics.Finding(severity, "BOSS_STATE", encounterName && *encounterName ? encounterName : ("Encounter " + std::to_string(encounterId)), "Valid scripted progression state", InstanceScript::GetBossStateName(state) + " [ID " + std::to_string(encounterId) + "]", detail, recommendation);
+    }
+
     if (script && player->GetMapId() == MapIcecrownCitadel)
     {
         EncounterState saurfangState = script->GetBossState(DataDeathbringerSaurfang);
