@@ -76,7 +76,7 @@ char const* ReputationRankName(uint32 rank)
 std::string FactionName(uint32 factionId)
 {
     if (FactionEntry const* faction = sFactionStore.LookupEntry(factionId))
-        if (faction->Name[0] && *faction->Name[0]) return faction->Name[0];
+        if (faction->name[0] && *faction->name[0]) return faction->Name[0];
     return "Faction " + std::to_string(factionId);
 }
 
@@ -92,7 +92,7 @@ std::string ProfessionName(uint32 skill);
 std::string SkillName(uint32 skillId)
 {
     if (SkillLineEntry const* skill = sSkillLineStore.LookupEntry(skillId))
-        if (skill->Name[0] && *skill->Name[0]) return skill->Name[0];
+        if (skill->name[0] && *skill->name[0]) return skill->Name[0];
     return ProfessionName(skillId);
 }
 
