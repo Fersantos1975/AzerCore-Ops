@@ -1,4 +1,5 @@
 #include "InstanceInspector.h"
+#include "RecoveryGuidanceEngine.h"
 
 #include "Chat.h"
 #include "DBCStores.h"
@@ -387,12 +388,19 @@ bool InstanceInspector::Diagnose(ChatHandler* handler)
     std::string scriptName = map ? map->GetScriptName() : "";
     Protocol::SendEncounterDiagnosticBegin(handler, player->GetMapId(), player->GetInstanceId(), uint32(map->GetDifficulty()), mapName, scriptName.empty() ? "None" : scriptName);
     DiagnosticEmitter diagnostics{handler};
+    RecoveryContext recoveryContext;
+    recoveryContext.mapId = player->GetMapId();
+    recoveryContext.scriptName = scriptName;
+    recoveryContext.instanceEncounterInProgress = script && script->IsEncounterInProgress();
 
     diagnostics.Finding(script ? "PASS" : "FAIL", "INSTANCE", "Instance script", "Loaded", script ? (scriptName.empty() ? "Loaded; name unavailable" : scriptName) : "Missing", script ? "The instance has an authoritative runtime controller" : "Boss progression, doors and event state cannot be evaluated without an InstanceScript", script ? "No action required" : "Verify the map ScriptName and rebuild/restart the server before attempting encounter repairs");
     diagnostics.Finding(script && script->IsEncounterInProgress() ? "WARN" : "PASS", "INSTANCE", "Encounter activity", "No stuck encounter", script && script->IsEncounterInProgress() ? "An encounter is in progress" : "No encounter currently in progress", script && script->IsEncounterInProgress() ? "A boss state remains IN_PROGRESS somewhere in this instance" : "The instance is not globally locked by an active encounter", script && script->IsEncounterInProgress() ? "Finish or reset the active encounter normally; avoid killing scripted bosses with GM commands" : "No action required");
 
     if (Creature* selected = handler->getSelectedCreature())
     {
+        recoveryContext.selectedCreatureEntry = selected->GetEntry();
+        recoveryContext.selectedCreatureAlive = selected->IsAlive();
+        recoveryContext.selectedCreatureInCombat = selected->IsInCombat();
         CreatureTemplate const* creatureTemplate = selected->GetCreatureTemplate();
         bool selectable = !selected->HasUnitFlag(UNIT_FLAG_NOT_SELECTABLE);
         bool attackable = !selected->HasUnitFlag(UNIT_FLAG_NON_ATTACKABLE);
@@ -414,6 +422,7 @@ bool InstanceInspector::Diagnose(ChatHandler* handler)
 
         EncounterState state = script ? script->GetBossState(encounterId) : TO_BE_DECIDED;
         char const* encounterName = encounter->dbcEntry->encounterName[0];
+        recoveryContext.encounters.push_back({encounterId, encounterName && *encounterName ? encounterName : ("Encounter " + std::to_string(encounterId)), state, std::uint32_t(encounter->creditType), encounter->creditEntry});
         std::string severity = state == FAIL ? "FAIL" : (state == IN_PROGRESS || state == SPECIAL || state == TO_BE_DECIDED ? "WARN" : "PASS");
         std::string detail;
         std::string recommendation;
@@ -479,6 +488,10 @@ bool InstanceInspector::Diagnose(ChatHandler* handler)
     }
     else if (script)
         diagnostics.Finding("WARN", "PROFILE", "Encounter-specific profile", "Known profile when available", "Generic checks only for map " + std::to_string(player->GetMapId()), "This first release includes the Deathbringer Saurfang and Crimson Hall profile", "Target the affected creature for generic AI and flag checks; additional encounter profiles can be added from verified findings");
+
+    if (script)
+        for (RecoveryGuidance const& recovery : RecoveryGuidanceEngine::Evaluate(recoveryContext))
+            Protocol::SendEncounterDiagnosticRecovery(handler, recovery.id, recovery.title, recovery.confidence, recovery.evidence, recovery.verificationCommand, recovery.actionCommands, recovery.recheckCommand, recovery.expectedResult, recovery.safety);
 
     Protocol::SendEncounterDiagnosticEnd(handler, diagnostics.passed, diagnostics.warnings, diagnostics.failures);
     return true;

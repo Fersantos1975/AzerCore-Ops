@@ -19,6 +19,7 @@ void SendInstanceMember(ChatHandler* handler, std::string const& name, std::stri
 void SendInstanceEnd(ChatHandler* handler);
 void SendEncounterDiagnosticBegin(ChatHandler* handler, std::uint32_t mapId, std::uint32_t instanceId, std::uint32_t difficulty, std::string const& mapName, std::string const& scriptName);
 void SendEncounterDiagnosticFinding(ChatHandler* handler, std::string const& severity, std::string const& category, std::string const& subject, std::string const& expected, std::string const& actual, std::string const& detail, std::string const& recommendation);
+void SendEncounterDiagnosticRecovery(ChatHandler* handler, std::string const& id, std::string const& title, std::string const& confidence, std::string const& evidence, std::string const& verificationCommand, std::string const& actionCommands, std::string const& recheckCommand, std::string const& expectedResult, std::string const& safety);
 void SendEncounterDiagnosticEnd(ChatHandler* handler, std::uint32_t passed, std::uint32_t warnings, std::uint32_t failures);
 void SendEncounterDiagnosticError(ChatHandler* handler, std::string const& reason);
 void SendBindBegin(ChatHandler* handler, std::string const& player, std::string const& scope, std::uint32_t count);

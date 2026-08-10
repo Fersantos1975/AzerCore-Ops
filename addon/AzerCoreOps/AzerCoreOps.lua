@@ -94,7 +94,7 @@ local instanceUI={my={},target={},captureUntil=0,myRows={},targetRows={},myOffse
   view="OVERVIEW",viewButtons={},myHeading=nil,targetHeader=nil,autoInspect=false,bindPage=nil,bindScope=nil,unbindOperation=nil,
   myLoadState="UNLOADED",targetLoadState="UNLOADED",ignoreBindStream=false,targetPortrait=nil,targetPortraitFrame=nil,targetIdentity=nil,
   targetIdentityName=nil,targetIdentityMeta=nil}
-instanceUI.diagnostics={findings={},loading=false,header=nil,summary=nil,error=nil,generatedAt=nil,historyIndex=0}
+instanceUI.diagnostics={findings={},recoveries={},loading=false,header=nil,summary=nil,error=nil,generatedAt=nil,historyIndex=0}
 local auditUI={search={},members={},searchRows={},memberRows={},filterButtons={},filtered={},mapBox=nil,diffBox=nil,summary=nil,scroll=nil,scrollChild=nil,horizontal=nil,filter="ALL",lastMap=nil,lastDifficulty=nil,reportEdit=nil,
   searchOffset=0,selectedMap=nil,selectedName=nil,selectedType=nil,selectedMaxPlayers=nil,difficulty=0,difficultyLabel="Normal",lockedText=nil,difficultyButton=nil,difficultyMenu=nil,historyIndex=0,searchBox=nil,
   referenceId=0,expectedMembers=0,display={},groupVerdict="NOT AUDITED",groupReason="Run Group Audit",generatedAt=nil,stale=false}
@@ -3628,16 +3628,16 @@ local function BuildInstances()
   local diagnosticHeading=Section(diagnosticControls,"ENCOUNTER SCAN",C.gold); diagnosticHeading:SetPoint("TOPLEFT",10,-10)
   local diagnosticHelp=diagnosticControls:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); diagnosticHelp:SetPoint("TOPLEFT",10,-39); diagnosticHelp:SetPoint("TOPRIGHT",-10,-39); diagnosticHelp:SetJustifyH("LEFT"); diagnosticHelp:SetJustifyV("TOP"); diagnosticHelp:SetWordWrap(true); diagnosticHelp:SetTextColor(unpack(C.white)); diagnosticHelp:SetText("Enter the affected dungeon or raid. Target the boss or event NPC for extra evidence, then run the scan.\n\nThis workspace never changes encounter state, doors, creatures or lockouts.")
   local diagnosticScan=Button(diagnosticControls,"Scan Current Instance",156,28,function()
-    instanceUI.diagnostics={findings={},loading=true,header=nil,summary=nil,error=nil,generatedAt=nil,historyIndex=0}
+    instanceUI.diagnostics={findings={},recoveries={},loading=true,header=nil,summary=nil,error=nil,generatedAt=nil,historyIndex=0}
     if instanceUI.RenderDiagnostics then instanceUI.RenderDiagnostics() end
     SendCommand(CMD.instanceDiagnose); SetStatus("Collecting live encounter evidence...")
   end,"Run a read-only server scan of the current instance"); diagnosticScan:SetPoint("TOPLEFT",12,-145)
-  Button(diagnosticControls,"Clear",72,22,function() instanceUI.diagnostics={findings={},loading=false,header=nil,summary=nil,error=nil,generatedAt=nil,historyIndex=0}; instanceUI.RenderDiagnostics(); SetStatus("Encounter diagnostics cleared.") end,"Clear the displayed findings"):SetPoint("TOPLEFT",12,-181)
+  Button(diagnosticControls,"Clear",72,22,function() instanceUI.diagnostics={findings={},recoveries={},loading=false,header=nil,summary=nil,error=nil,generatedAt=nil,historyIndex=0}; instanceUI.RenderDiagnostics(); SetStatus("Encounter diagnostics cleared.") end,"Clear the displayed findings"):SetPoint("TOPLEFT",12,-181)
   local function LoadDiagnosticHistory(delta)
     AzerCoreOpsDB.diagnosticHistory=AzerCoreOpsDB.diagnosticHistory or {}
     if #AzerCoreOpsDB.diagnosticHistory==0 then SetStatus("No saved diagnostic scans yet.",true); return end
     local index=math.max(1,math.min(#AzerCoreOpsDB.diagnosticHistory,(instanceUI.diagnostics.historyIndex or 0)+delta))
-    local saved=AzerCoreOpsDB.diagnosticHistory[index]; instanceUI.diagnostics={findings=saved.findings or {},loading=false,header=saved.header,summary=saved.summary,error=saved.error,generatedAt=saved.generatedAt,historyIndex=index,historical=true}
+    local saved=AzerCoreOpsDB.diagnosticHistory[index]; instanceUI.diagnostics={findings=saved.findings or {},recoveries=saved.recoveries or {},loading=false,header=saved.header,summary=saved.summary,error=saved.error,generatedAt=saved.generatedAt,historyIndex=index,historical=true}
     instanceUI.RenderDiagnostics(); SetStatus(string.format("Viewing diagnostic history %d of %d — %s",index,#AzerCoreOpsDB.diagnosticHistory,saved.generatedAt or "unknown time"))
   end
   Button(diagnosticControls,"< Older",72,22,function() LoadDiagnosticHistory(1) end,"Open an older saved diagnostic scan"):SetPoint("TOPLEFT",12,-213)
@@ -3663,6 +3663,18 @@ local function BuildInstances()
       add(string.format("%s  %s — %s",prefix,tostring(finding.category or "CHECK"),tostring(finding.subject or "Unknown")))
       add("  Expected: "..tostring(finding.expected or "—")); add("  Actual: "..tostring(finding.actual or "—")); add("  Why: "..tostring(finding.detail or "—")); add("  Recommendation: "..tostring(finding.recommendation or "—")); add("")
     end
+    for _,recovery in ipairs(d.recoveries or {}) do
+      local heading=plain and "TEMPORARY GM RECOVERY" or "|cffffd100TEMPORARY GM RECOVERY|r"
+      local confidence=plain and tostring(recovery.confidence or "UNKNOWN") or "|cff00bfff"..tostring(recovery.confidence or "UNKNOWN").."|r"
+      local actions=tostring(recovery.actions or "—"):gsub(";;","\n")
+      add(heading.." — "..tostring(recovery.title or "Recovery guidance")); add("  Confidence: "..confidence); add("")
+      add(plain and "Evidence:" or "|cffffd100Evidence:|r"); add("  "..tostring(recovery.evidence or "—")); add("")
+      add(plain and "1. Verify the saved state:" or "|cffffd1001. Verify the saved state:|r"); add(tostring(recovery.verify or ".instance getbossstate")); add("")
+      add(plain and "2. Before proceeding:" or "|cffff40402. Before proceeding:|r"); add("  "..tostring(recovery.safety or "Confirm the encounter was legitimately completed.")); add("")
+      add(plain and "3. Apply the temporary repair:" or "|cffffd1003. Apply the temporary repair:|r"); add(actions); add("")
+      add(plain and "4. Verify the repair:" or "|cffffd1004. Verify the repair:|r"); add(tostring(recovery.recheck or ".instance getbossstate")); add("")
+      add(plain and "Expected result:" or "|cff40ff40Expected result:|r"); add("  "..tostring(recovery.expected or "Run Diagnostics again.")); add("")
+    end
     if d.summary then add(string.format("SUMMARY — %s passed, %s warnings, %s failures",d.summary.passed or 0,d.summary.warnings or 0,d.summary.failures or 0)); if d.generatedAt then add("Generated: "..d.generatedAt) end end
     return table.concat(lines,"\n")
   end
@@ -3670,6 +3682,21 @@ local function BuildInstances()
     local report=DiagnosticReport(false); diagnosticText:SetText(report); diagnosticChild:SetHeight(math.max(500,diagnosticText:GetStringHeight()+20))
   end
   local diagnosticFooter=CreateFrame("Frame",nil,diagnosticPage); diagnosticFooter:SetPoint("BOTTOMLEFT",200,12); diagnosticFooter:SetPoint("BOTTOMRIGHT",-12,12); diagnosticFooter:SetHeight(28)
+  local function RecoveryCommands()
+    local lines={}
+    for _,recovery in ipairs((instanceUI.diagnostics or {}).recoveries or {}) do
+      table.insert(lines,"# "..tostring(recovery.title or "Temporary GM Recovery"))
+      table.insert(lines,tostring(recovery.verify or ".instance getbossstate"))
+      table.insert(lines,tostring(recovery.actions or ""):gsub(";;","\n"))
+      table.insert(lines,tostring(recovery.recheck or ".instance getbossstate"))
+      table.insert(lines,"")
+    end
+    return table.concat(lines,"\n")
+  end
+  Button(diagnosticFooter,"Copy Recovery Commands",154,22,function()
+    local commands=RecoveryCommands(); if commands=="" then SetStatus("No recovery guidance was generated for this scan.",true); return end
+    ShowSelectableReport("Temporary GM recovery commands",commands)
+  end,"Copy verification, repair and recheck commands without executing them"):SetPoint("LEFT",0,0)
   Button(diagnosticFooter,"Copy",54,22,function() ShowSelectableReport("Encounter diagnostic report",DiagnosticReport(true)) end,"Copy the complete diagnostic report"):SetPoint("RIGHT",-126,0)
   Button(diagnosticFooter,"Share",58,22,function() local f=EnsureShareFrame(); f:SetCapturedMessage(DiagnosticReport(true),"INSTANCE",function() return DiagnosticReport(true) end,"INSTANCE"); f:Show(); f:Raise() end,"Share the diagnostic report through Courier"):SetPoint("RIGHT",-64,0)
   Button(diagnosticFooter,"Export",60,22,function() ShowSelectableReport("Export encounter diagnostic report",DiagnosticReport(true)) end,"Export the complete diagnostic report"):SetPoint("RIGHT",0,0)
@@ -4424,13 +4451,16 @@ events:SetScript("OnEvent",function(_,event,arg1)
       if questUI.targetLogLoading then questUI.targetLogLoading=false; questUI.targetLogError=f.reason or "Quest-log inspection failed"; RenderQuest() end
       SetStatus(f.reason or "Quest module error",true)
     elseif kind=="ENCOUNTER_DIAG_BEGIN" then
-      instanceUI.diagnostics={findings={},loading=true,header=f,summary=nil,error=nil,generatedAt=nil,historyIndex=0}; if instanceUI.RenderDiagnostics then instanceUI.RenderDiagnostics() end; SetStatus("Diagnosing "..tostring(f.name or "current instance").."...")
+      instanceUI.diagnostics={findings={},recoveries={},loading=true,header=f,summary=nil,error=nil,generatedAt=nil,historyIndex=0}; if instanceUI.RenderDiagnostics then instanceUI.RenderDiagnostics() end; SetStatus("Diagnosing "..tostring(f.name or "current instance").."...")
     elseif kind=="ENCOUNTER_DIAG_FINDING" then
       table.insert(instanceUI.diagnostics.findings,f); if instanceUI.RenderDiagnostics then instanceUI.RenderDiagnostics() end
+    elseif kind=="ENCOUNTER_DIAG_RECOVERY" then
+      instanceUI.diagnostics.recoveries=instanceUI.diagnostics.recoveries or {}; table.insert(instanceUI.diagnostics.recoveries,f); if instanceUI.RenderDiagnostics then instanceUI.RenderDiagnostics() end
     elseif kind=="ENCOUNTER_DIAG_END" then
       instanceUI.diagnostics.loading=false; instanceUI.diagnostics.summary={passed=tonumber(f.passed) or 0,warnings=tonumber(f.warnings) or 0,failures=tonumber(f.failures) or 0}; instanceUI.diagnostics.generatedAt=date("%Y-%m-%d %H:%M:%S")
-      AzerCoreOpsDB.diagnosticHistory=AzerCoreOpsDB.diagnosticHistory or {}; local snapshot={header=instanceUI.diagnostics.header,summary=instanceUI.diagnostics.summary,error=instanceUI.diagnostics.error,generatedAt=instanceUI.diagnostics.generatedAt,findings={}}
+      AzerCoreOpsDB.diagnosticHistory=AzerCoreOpsDB.diagnosticHistory or {}; local snapshot={header=instanceUI.diagnostics.header,summary=instanceUI.diagnostics.summary,error=instanceUI.diagnostics.error,generatedAt=instanceUI.diagnostics.generatedAt,findings={},recoveries={}}
       for _,finding in ipairs(instanceUI.diagnostics.findings or {}) do local copy={}; for key,value in pairs(finding) do copy[key]=value end; table.insert(snapshot.findings,copy) end
+      for _,recovery in ipairs(instanceUI.diagnostics.recoveries or {}) do local copy={}; for key,value in pairs(recovery) do copy[key]=value end; table.insert(snapshot.recoveries,copy) end
       table.insert(AzerCoreOpsDB.diagnosticHistory,1,snapshot); while #AzerCoreOpsDB.diagnosticHistory>100 do table.remove(AzerCoreOpsDB.diagnosticHistory) end
       if instanceUI.RenderDiagnostics then instanceUI.RenderDiagnostics() end; SetStatus(string.format("Encounter scan complete: %d passed, %d warnings, %d failures",instanceUI.diagnostics.summary.passed,instanceUI.diagnostics.summary.warnings,instanceUI.diagnostics.summary.failures),instanceUI.diagnostics.summary.failures>0)
     elseif kind=="ENCOUNTER_DIAG_ERROR" then
