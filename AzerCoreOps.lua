@@ -466,7 +466,6 @@ local function BuildCharacter()
     local viewportHeight=math.max(1,modelViewport:GetHeight() or 1)
     model:SetWidth(viewportWidth*.70)
     model:SetHeight(viewportHeight)
-    if model.SetCamDistanceScale then model:SetCamDistanceScale(1) end
     -- Cancel the parent window scale so the 3D module retains one physical size.
     model:SetScale(.75/math.max(.75,math.min(1.35,Settings().scale or 1)))
   end
@@ -1050,7 +1049,7 @@ local function BuildNPC()
   local text=child:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); text:SetPoint("TOPLEFT",4,-4); text:SetWidth(360); text:SetJustifyH("LEFT"); text:SetJustifyV("TOP"); text:SetTextColor(unpack(C.white)); Platform.NPCUI.text=text
 
   local modelViewport=CreateFrame("Frame",nil,workspace); modelViewport:SetPoint("TOPLEFT",workspace,"TOP",4,-35); modelViewport:SetPoint("BOTTOMRIGHT",-8,34); Platform.NPCUI.modelViewport=modelViewport
-  local model=CreateFrame("PlayerModel",nil,modelViewport); model:SetAllPoints(modelViewport); model:SetUnit("player"); if model.SetCamDistanceScale then model:SetCamDistanceScale(1) end; model.azerFacing=0; Platform.NPCUI.model=model
+  local model=CreateFrame("PlayerModel",nil,modelViewport); model:SetAllPoints(modelViewport); model:SetUnit("player"); model.azerFacing=0; Platform.NPCUI.model=model
   Button(modelViewport,"<",25,20,function() model.azerFacing=model.azerFacing-.25; model:SetFacing(model.azerFacing) end,"Rotate NPC left"):SetPoint("TOPLEFT",8,-8)
   Button(modelViewport,">",25,20,function() model.azerFacing=model.azerFacing+.25; model:SetFacing(model.azerFacing) end,"Rotate NPC right"):SetPoint("TOPRIGHT",-8,-8)
 
