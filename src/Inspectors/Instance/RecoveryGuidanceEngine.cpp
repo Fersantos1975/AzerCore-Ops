@@ -1,6 +1,8 @@
 #include "RecoveryGuidanceEngine.h"
+#include "InstanceProfile.h"
 
 #include <algorithm>
+#include <map>
 #include <sstream>
 #include <utility>
 
@@ -8,33 +10,6 @@ namespace AzerCoreOps
 {
 namespace
 {
-constexpr std::uint32_t MapIcecrownCitadel = 631;
-
-struct ProgressionRule
-{
-    std::string id;
-    std::uint32_t mapId;
-    std::uint32_t prerequisite;
-    std::string prerequisiteName;
-    std::vector<std::uint32_t> dependants;
-    std::string consequence;
-};
-
-std::vector<ProgressionRule> const& Rules()
-{
-    static std::vector<ProgressionRule> const rules{
-        {
-            "icc-saurfang-stale-state",
-            MapIcecrownCitadel,
-            3,
-            "Deathbringer Saurfang",
-            {4, 5, 6, 7, 8, 9, 10, 11},
-            "Saurfang passage door OPEN and upper-wing prerequisite PASSED"
-        }
-    };
-    return rules;
-}
-
 bool HasState(RecoveryContext const& context, std::uint32_t index, EncounterState state)
 {
     auto found = std::find_if(context.encounters.begin(), context.encounters.end(), [index](RecoveryEncounter const& encounter) { return encounter.id == index; });
@@ -47,10 +22,10 @@ RecoveryEncounter const* FindEncounter(RecoveryContext const& context, std::uint
     return found == context.encounters.end() ? nullptr : &*found;
 }
 
-std::vector<std::uint32_t> CompletedDependants(RecoveryContext const& context, ProgressionRule const& rule)
+std::vector<std::uint32_t> CompletedDependants(RecoveryContext const& context, std::vector<std::uint32_t> const& dependants)
 {
     std::vector<std::uint32_t> completed;
-    for (std::uint32_t index : rule.dependants)
+    for (std::uint32_t index : dependants)
         if (HasState(context, index, DONE))
             completed.push_back(index);
     return completed;
@@ -112,34 +87,47 @@ std::vector<RecoveryGuidance> RecoveryGuidanceEngine::Evaluate(RecoveryContext c
                 result.push_back(std::move(guidance));
             }
 
-    // Verified dependency profiles enrich the universal rules with doors, transports and
-    // branching progression relationships that cannot be inferred safely from encounter order.
-    for (ProgressionRule const& rule : Rules())
+    // Verified dependency profiles enrich the universal rules with branching progression
+    // relationships that cannot be inferred safely from encounter order. All instance-specific
+    // knowledge comes from the data-driven catalogue rather than hard-coded evaluator logic.
+    if (InstanceProfile const* profile = InstanceProfileCatalog::Find(context.mapId))
     {
-        RecoveryEncounter const* prerequisite = FindEncounter(context, rule.prerequisite);
-        if (context.mapId != rule.mapId || !prerequisite)
-            continue;
+        std::map<std::uint32_t, std::vector<std::uint32_t>> dependantsByPrerequisite;
+        std::map<std::uint32_t, std::string> consequences;
+        for (EncounterDependency const& dependency : profile->dependencies)
+        {
+            dependantsByPrerequisite[dependency.prerequisite].push_back(dependency.dependant);
+            if (consequences[dependency.prerequisite].empty())
+                consequences[dependency.prerequisite] = dependency.consequence;
+        }
 
-        EncounterState prerequisiteState = prerequisite->state;
-        std::vector<std::uint32_t> completed = CompletedDependants(context, rule);
-        if (prerequisiteState == DONE || completed.empty())
-            continue;
+        for (auto const& [prerequisiteId, dependants] : dependantsByPrerequisite)
+        {
+            RecoveryEncounter const* prerequisite = FindEncounter(context, prerequisiteId);
+            if (!prerequisite)
+                continue;
 
-        std::string stateName = InstanceScript::GetBossStateName(prerequisiteState);
-        RecoveryGuidance guidance;
-        guidance.id = rule.id;
-        guidance.title = rule.prerequisiteName;
-        guidance.confidence = completed.size() >= 3 ? "HIGH" : "MEDIUM";
-        guidance.evidence = rule.prerequisiteName + " [ID " + std::to_string(rule.prerequisite) + "] is " + stateName +
-            ", while dependant encounter IDs " + JoinIds(completed) + " are DONE. This saved progression is inconsistent.";
-        guidance.verificationCommand = ".instance getbossstate";
-        guidance.actionCommands = ".instance setbossstate " + std::to_string(rule.prerequisite) + " 3;;.instance save";
-        guidance.recheckCommand = ".instance getbossstate";
-        guidance.expectedResult = rule.prerequisiteName + " [ID " + std::to_string(rule.prerequisite) + "] DONE; " + rule.consequence;
-        guidance.safety = "Confirm that the encounter was legitimately completed in this lockout. Do not apply the repair when the boss was never defeated.";
-        bool duplicate = std::any_of(result.begin(), result.end(), [&guidance](RecoveryGuidance const& existing) { return existing.actionCommands == guidance.actionCommands; });
-        if (!duplicate)
-            result.push_back(std::move(guidance));
+            EncounterState prerequisiteState = prerequisite->state;
+            std::vector<std::uint32_t> completed = CompletedDependants(context, dependants);
+            if (prerequisiteState == DONE || completed.empty())
+                continue;
+
+            std::string stateName = InstanceScript::GetBossStateName(prerequisiteState);
+            RecoveryGuidance guidance;
+            guidance.id = profile->id + "-dependency-" + std::to_string(prerequisiteId);
+            guidance.title = prerequisite->name;
+            guidance.confidence = completed.size() >= 3 ? "HIGH" : "MEDIUM";
+            guidance.evidence = prerequisite->name + " [ID " + std::to_string(prerequisiteId) + "] is " + stateName +
+                ", while verified dependant encounter IDs " + JoinIds(completed) + " are DONE. This saved progression is inconsistent.";
+            guidance.verificationCommand = ".instance getbossstate";
+            guidance.actionCommands = ".instance setbossstate " + std::to_string(prerequisiteId) + " 3;;.instance save";
+            guidance.recheckCommand = ".instance getbossstate";
+            guidance.expectedResult = prerequisite->name + " [ID " + std::to_string(prerequisiteId) + "] DONE; " + consequences[prerequisiteId];
+            guidance.safety = "Confirm that the encounter was legitimately completed in this lockout. Do not apply the repair when the boss was never defeated.";
+            bool duplicate = std::any_of(result.begin(), result.end(), [&guidance](RecoveryGuidance const& existing) { return existing.actionCommands == guidance.actionCommands; });
+            if (!duplicate)
+                result.push_back(std::move(guidance));
+        }
     }
     return result;
 }

@@ -1,4 +1,6 @@
 #include "InstanceInspector.h"
+#include "InstanceDiagnosticEngine.h"
+#include "InstanceProfile.h"
 #include "RecoveryGuidanceEngine.h"
 
 #include "Chat.h"
@@ -63,7 +65,7 @@ struct DiagnosticEmitter
 
     void Finding(std::string const& severity, std::string const& category, std::string const& subject, std::string const& expected, std::string const& actual, std::string const& detail, std::string const& recommendation)
     {
-        if (severity == "PASS") ++passed;
+        if (severity == "PASS" || severity == "EXPECTED" || severity == "INFO") ++passed;
         else if (severity == "FAIL") ++failures;
         else ++warnings;
         Protocol::SendEncounterDiagnosticFinding(handler, severity, category, subject, expected, actual, detail, recommendation);
@@ -390,11 +392,12 @@ bool InstanceInspector::Diagnose(ChatHandler* handler)
     DiagnosticEmitter diagnostics{handler};
     RecoveryContext recoveryContext;
     recoveryContext.mapId = player->GetMapId();
+    recoveryContext.difficulty = uint32(map->GetDifficulty());
     recoveryContext.scriptName = scriptName;
     recoveryContext.instanceEncounterInProgress = script && script->IsEncounterInProgress();
 
     diagnostics.Finding(script ? "PASS" : "FAIL", "INSTANCE", "Instance script", "Loaded", script ? (scriptName.empty() ? "Loaded; name unavailable" : scriptName) : "Missing", script ? "The instance has an authoritative runtime controller" : "Boss progression, doors and event state cannot be evaluated without an InstanceScript", script ? "No action required" : "Verify the map ScriptName and rebuild/restart the server before attempting encounter repairs");
-    diagnostics.Finding(script && script->IsEncounterInProgress() ? "WARN" : "PASS", "INSTANCE", "Encounter activity", "No stuck encounter", script && script->IsEncounterInProgress() ? "An encounter is in progress" : "No encounter currently in progress", script && script->IsEncounterInProgress() ? "A boss state remains IN_PROGRESS somewhere in this instance" : "The instance is not globally locked by an active encounter", script && script->IsEncounterInProgress() ? "Finish or reset the active encounter normally; avoid killing scripted bosses with GM commands" : "No action required");
+    diagnostics.Finding(script && script->IsEncounterInProgress() ? "INFO" : "PASS", "INSTANCE", "Encounter activity", "Valid runtime activity", script && script->IsEncounterInProgress() ? "An encounter is in progress" : "No encounter currently in progress", script && script->IsEncounterInProgress() ? "The instance confirms active scripted combat" : "The instance is not globally locked by an active encounter", script && script->IsEncounterInProgress() ? "Complete or wipe the active encounter normally, then rescan" : "No action required");
 
     if (Creature* selected = handler->getSelectedCreature())
     {
@@ -409,9 +412,11 @@ bool InstanceInspector::Diagnose(ChatHandler* handler)
         diagnostics.Finding(attackable ? "PASS" : "WARN", "TARGET", "Attackable flag", "Attackable only when the encounter is ready", attackable ? "Attackable" : "UNIT_FLAG_NON_ATTACKABLE", creatureTemplate ? ("AI " + (creatureTemplate->AIName.empty() ? std::string("default") : creatureTemplate->AIName) + "; Script ID " + std::to_string(creatureTemplate->ScriptID)) : "Creature template unavailable", attackable ? "No action required" : "Allow the scripted introduction to complete; do not force combat until prerequisites pass");
     }
     else
-        diagnostics.Finding("WARN", "TARGET", "Selected creature", "Optional boss or event NPC target", "No creature selected", "Generic instance checks will continue, but target-specific flags and AI cannot be inspected", "Target the affected boss or event NPC and run the scan again for additional evidence");
+        diagnostics.Finding("INFO", "TARGET", "Selected creature", "Optional boss or event NPC target", "No creature selected", "Generic instance checks will continue; target-specific flags and AI are optional evidence", "Target an affected boss or event NPC only when investigating that creature");
 
+    InstanceProfile const* instanceProfile = InstanceProfileCatalog::Find(player->GetMapId());
     std::set<uint32> reportedEncounters;
+    std::set<uint32> reportedScriptEncounters;
     for (DungeonEncounter const* encounter : EncountersFor(player->GetMapId(), map->GetDifficulty()))
     {
         if (!encounter || !encounter->dbcEntry)
@@ -420,23 +425,81 @@ bool InstanceInspector::Diagnose(ChatHandler* handler)
         if (!reportedEncounters.insert(encounterId).second)
             continue;
 
-        EncounterState state = script ? script->GetBossState(encounterId) : TO_BE_DECIDED;
+        uint32 scriptEncounterId = InstanceProfileCatalog::ScriptEncounterId(player->GetMapId(), encounterId);
+        EncounterState state = script ? script->GetBossState(scriptEncounterId) : TO_BE_DECIDED;
         char const* encounterName = encounter->dbcEntry->encounterName[0];
-        recoveryContext.encounters.push_back({encounterId, encounterName && *encounterName ? encounterName : ("Encounter " + std::to_string(encounterId)), state, std::uint32_t(encounter->creditType), encounter->creditEntry});
-        std::string severity = state == FAIL ? "FAIL" : (state == IN_PROGRESS || state == SPECIAL || state == TO_BE_DECIDED ? "WARN" : "PASS");
-        std::string detail;
-        std::string recommendation;
-        switch (state)
+        recoveryContext.encounters.push_back({scriptEncounterId, encounterName && *encounterName ? encounterName : ("Encounter " + std::to_string(scriptEncounterId)), state, std::uint32_t(encounter->creditType), encounter->creditEntry, encounterId, false});
+        reportedScriptEncounters.insert(scriptEncounterId);
+    }
+
+    if (script && instanceProfile)
+        for (RuntimeStateDefinition const& runtimeState : instanceProfile->runtimeStates)
+            if (reportedScriptEncounters.insert(runtimeState.scriptId).second)
+                recoveryContext.encounters.push_back({runtimeState.scriptId, runtimeState.name, script->GetBossState(runtimeState.scriptId), 0, 0, runtimeState.scriptId, true});
+
+    for (RecoveryEncounter const& encounter : recoveryContext.encounters)
+    {
+        EncounterAssessment assessment = InstanceDiagnosticEngine::AssessEncounter(recoveryContext, encounter);
+        diagnostics.Finding(assessment.severity, encounter.auxiliary ? "EVENT_STATE" : "BOSS_STATE", encounter.name, "Valid state for the current progression context", InstanceScript::GetBossStateName(encounter.state) + " [script ID " + std::to_string(encounter.id) + (encounter.auxiliary || encounter.catalogueId == encounter.id ? "" : "; catalogue ID " + std::to_string(encounter.catalogueId)) + "]", assessment.detail, assessment.recommendation);
+    }
+
+    if (script && instanceProfile)
+    {
+        for (ProgressionGate const& gate : instanceProfile->gates)
         {
-            case DONE: detail = "The instance save records this encounter as completed"; recommendation = "No action required"; break;
-            case NOT_STARTED: detail = "The encounter has not started in this instance state"; recommendation = "Complete prerequisite encounters before engaging this boss"; break;
-            case IN_PROGRESS: detail = "The encounter is currently active; this becomes suspicious if no combat is occurring"; recommendation = "Finish or reset the encounter normally, then rescan"; break;
-            case FAIL: detail = "The encounter recorded a failed attempt"; recommendation = "Allow the scripted reset to complete before trying again"; break;
-            case SPECIAL: detail = "The encounter is using a script-specific transitional state"; recommendation = "Collect nearby creature and door evidence before changing state"; break;
-            case TO_BE_DECIDED: detail = "The encounter state has not been initialized by its script"; recommendation = "Do not force DONE blindly; inspect the encounter profile and required initialization transition"; break;
-            default: detail = "Unknown encounter state"; recommendation = "Export this scan for investigation"; break;
+            GateAssessment assessment = InstanceDiagnosticEngine::AssessGate(recoveryContext, gate);
+            diagnostics.Finding(assessment.severity, "GATE", gate.name, "All verified prerequisites complete", assessment.actual, assessment.detail, assessment.recommendation);
         }
-        diagnostics.Finding(severity, "BOSS_STATE", encounterName && *encounterName ? encounterName : ("Encounter " + std::to_string(encounterId)), "Valid scripted progression state", InstanceScript::GetBossStateName(state) + " [ID " + std::to_string(encounterId) + "]", detail, recommendation);
+
+        bool heroic = map->GetDifficulty() == RAID_DIFFICULTY_10MAN_HEROIC || map->GetDifficulty() == RAID_DIFFICULTY_25MAN_HEROIC;
+        for (ProfileSignal const& signal : instanceProfile->signals)
+        {
+            if (signal.heroicOnly && !heroic)
+                continue;
+            uint32 value = script->GetData(signal.dataId);
+            std::string actual;
+            switch (signal.kind)
+            {
+                case ProfileSignalKind::State:
+                    actual = value <= TO_BE_DECIDED ? InstanceScript::GetBossStateName(EncounterState(value)) : std::to_string(value);
+                    break;
+                case ProfileSignalKind::Boolean:
+                    actual = value ? "Yes" : "No";
+                    break;
+                case ProfileSignalKind::Count:
+                    actual = std::to_string(value);
+                    break;
+            }
+            diagnostics.Finding("INFO", "PROFILE_SIGNAL", signal.name, "Script-defined runtime value", actual + " [data ID " + std::to_string(signal.dataId) + "]", "This value is exported by the authoritative instance script and interpreted by the verified profile", "Use it with related boss, event and object evidence; do not change it in isolation");
+        }
+
+        auto encounterDone = [&recoveryContext](uint32 id)
+        {
+            auto found = std::find_if(recoveryContext.encounters.begin(), recoveryContext.encounters.end(), [id](RecoveryEncounter const& encounter) { return encounter.id == id; });
+            return found != recoveryContext.encounters.end() && found->state == DONE;
+        };
+        for (ProfileObject const& object : instanceProfile->objects)
+        {
+            GameObject* gameObject = player->FindNearestGameObject(object.entry, 300.0f, false);
+            if (!gameObject)
+                continue;
+            bool ready = std::all_of(object.prerequisites.begin(), object.prerequisites.end(), encounterDone);
+            std::string expected = ready ? "Available after verified prerequisites" : "Locked during current progression";
+            if (object.policy == ProfileObjectPolicy::Observe)
+            {
+                diagnostics.Finding("INFO", object.category, object.name + " [" + std::to_string(object.entry) + "]", "Script-controlled physical state", GameObjectStateName(gameObject->GetGoState()), "This object has compound room, event or transition behavior", "Compare it with its related encounter and event findings; do not change it in isolation");
+                continue;
+            }
+
+            bool available = object.policy == ProfileObjectPolicy::OpenWhenReady
+                ? gameObject->GetGoState() != GO_STATE_READY
+                : !gameObject->HasGameObjectFlag(GO_FLAG_NOT_SELECTABLE) && !gameObject->HasGameObjectFlag(GO_FLAG_INTERACT_COND);
+            std::string severity = ready == available ? (ready ? "PASS" : "EXPECTED") : "FAIL";
+            std::string actual = object.policy == ProfileObjectPolicy::OpenWhenReady
+                ? GameObjectStateName(gameObject->GetGoState())
+                : (available ? "Selectable" : "Not selectable");
+            diagnostics.Finding(severity, object.category, object.name + " [" + std::to_string(object.entry) + "]", expected, actual, "The verified profile correlates this object with prerequisite encounter states", severity == "FAIL" ? "Object and progression evidence disagree; reload the grid and rescan before recovery" : "No recovery action required");
+        }
     }
 
     if (script && player->GetMapId() == MapIcecrownCitadel)
@@ -451,7 +514,8 @@ bool InstanceInspector::Diagnose(ChatHandler* handler)
         GameObject* crimsonDoor = player->FindNearestGameObject(GoCrimsonHallDoor, 250.0f, false);
         bool saurfangDone = saurfangState == DONE;
 
-        diagnostics.Finding(saurfangDone ? "PASS" : "WARN", "ENCOUNTER", "Deathbringer Saurfang", "DONE before upper-wing access", InstanceScript::GetBossStateName(saurfangState), saurfang ? (std::string("Creature present; ") + (saurfang->IsAlive() ? "alive" : "dead")) : "Creature is not loaded or has despawned", saurfangDone ? "No action required" : "Complete Saurfang through the normal encounter script; a dead creature with a non-DONE state indicates incomplete progression");
+        bool upperWingContradiction = InstanceDiagnosticEngine::HasCompletedDependant(recoveryContext, DataDeathbringerSaurfang);
+        diagnostics.Finding(saurfangDone ? "PASS" : (upperWingContradiction ? "FAIL" : "EXPECTED"), "ENCOUNTER", "Deathbringer Saurfang", "DONE before upper-wing access", InstanceScript::GetBossStateName(saurfangState), saurfang ? (std::string("Creature present; ") + (saurfang->IsAlive() ? "alive" : "dead")) : "Creature is not loaded or has despawned", saurfangDone ? "No action required" : (upperWingContradiction ? "Later wing completion contradicts this prerequisite; verify the saved state" : "Normal progression lock; complete Saurfang through the encounter script"));
         if (saurfang && !saurfang->IsAlive() && !saurfangDone)
             diagnostics.Finding("FAIL", "CONSISTENCY", "Saurfang creature versus encounter", "Dead creature must have encounter state DONE", "Creature dead; state " + InstanceScript::GetBossStateName(saurfangState), "The creature died without the instance recording normal encounter completion", "Allow a normal reset or restore the encounter through supported instance controls; do not use .kill on scripted bosses");
 
@@ -462,7 +526,7 @@ bool InstanceInspector::Diagnose(ChatHandler* handler)
             diagnostics.Finding(severity, "DOOR", "Saurfang passage door [201825]", saurfangDone ? "Open after Saurfang is DONE" : "Closed until Saurfang is DONE", GameObjectStateName(saurfangDoor->GetGoState()), "This passage door is directly controlled by the Deathbringer Saurfang encounter", severity == "PASS" ? "No action required" : "The door and saved encounter state disagree; reload the instance and rescan before attempting a manual door change");
         }
         else
-            diagnostics.Finding("WARN", "DOOR", "Saurfang passage door [201825]", "Loaded near Deathbringer's Rise", "Not loaded in the current grid", "An unloaded game object cannot be evaluated safely", "Move to Deathbringer's Rise and scan again");
+            diagnostics.Finding("INFO", "DOOR", "Saurfang passage door [201825]", "Loaded only when its grid is active", "Not loaded in the current grid", "An unloaded game object cannot be evaluated safely and is not itself a fault", "Move to Deathbringer's Rise and rescan only when diagnosing this door");
 
         if (transporter)
         {
@@ -470,9 +534,9 @@ bool InstanceInspector::Diagnose(ChatHandler* handler)
             diagnostics.Finding(!saurfangDone || usable ? "PASS" : "FAIL", "TRANSPORT", "Deathbringer's Rise transporter [202244]", saurfangDone ? "Selectable after Saurfang is DONE" : "May remain locked before completion", usable ? "Selectable" : "Not selectable", "The transporter provides post-Saurfang access to the upper wings", !saurfangDone || usable ? "No action required" : "Reload the instance after confirming Saurfang is DONE; if still locked, inspect the post-fight event state");
         }
         else
-            diagnostics.Finding("WARN", "TRANSPORT", "Deathbringer's Rise transporter [202244]", "Loaded near Deathbringer's Rise", "Not loaded in the current grid", "Transporter state is unavailable from the player's current location", "Move to the transporter and scan again");
+            diagnostics.Finding("INFO", "TRANSPORT", "Deathbringer's Rise transporter [202244]", "Loaded only when its grid is active", "Not loaded in the current grid", "Transporter state is unavailable from the current location and is not itself a fault", "Move to the transporter and rescan only when diagnosing it");
 
-        diagnostics.Finding(saurfangDone ? "PASS" : "FAIL", "PREREQUISITE", "Upper-wing access", "Deathbringer Saurfang DONE", InstanceScript::GetBossStateName(saurfangState), "Festergut, Rotface, Blood Prince Council, Valithria and later encounters require Lower Spire completion", saurfangDone ? "Upper-wing prerequisite passed" : "Complete Saurfang normally before diagnosing an upper-wing door");
+        diagnostics.Finding(saurfangDone ? "PASS" : (upperWingContradiction ? "FAIL" : "EXPECTED"), "PREREQUISITE", "Upper-wing access", "Deathbringer Saurfang DONE", InstanceScript::GetBossStateName(saurfangState), "Festergut, Rotface, Blood Prince Council, Valithria and later encounters require Lower Spire completion", saurfangDone ? "Upper-wing prerequisite passed" : (upperWingContradiction ? "Saved progression is inconsistent; inspect recovery evidence" : "Expected lock in current progression; no recovery action required"));
         diagnostics.Finding(eventNpc || saurfangDone ? "PASS" : "WARN", "EVENT", "Saurfang faction event NPC", saurfangDone ? "May despawn after completion" : "Present when the introduction is ready", eventNpc ? (std::string("Present; ") + (eventNpc->IsAlive() ? "alive" : "dead")) : "Not loaded or missing", "Muradin or High Overlord Saurfang drives the faction-specific introduction and post-fight sequence", eventNpc || saurfangDone ? "No action required" : "Move to the platform and rescan; if still missing, reload the instance rather than spawning a duplicate NPC");
 
         std::string bloodController = "Trash " + InstanceScript::GetBossStateName(bloodTrashState) + "; Council " + InstanceScript::GetBossStateName(councilState);
@@ -484,10 +548,10 @@ bool InstanceInspector::Diagnose(ChatHandler* handler)
             diagnostics.Finding(severity, "DOOR", "Crimson Hall door [201376]", "Controlled by Blood Prince trash and Council states", std::string(GameObjectStateName(crimsonDoor->GetGoState())) + "; " + bloodController, "Saurfang unlocks upper-wing access, but the Crimson Hall door also follows its own trash and Council event states", severity == "FAIL" ? "Door state disagrees with completed Blood Prince trash; reload the instance and rescan" : (!open ? "Approach and complete the Blood Prince trash event, then rescan before changing the door" : "No action required"));
         }
         else
-            diagnostics.Finding("WARN", "DOOR", "Crimson Hall door [201376]", "Loaded while near the Blood Wing", "Not loaded in the current grid; " + bloodController, "The door is outside the player's currently loaded area, so its physical state cannot be read", "Move to the closed Blood Wing door and scan again");
+            diagnostics.Finding("INFO", "DOOR", "Crimson Hall door [201376]", "Loaded while near the Blood Wing", "Not loaded in the current grid; " + bloodController, "The door is outside the player's currently loaded area, so its physical state cannot be read", "Move to the Blood Wing door and rescan only when diagnosing it");
     }
     else if (script)
-        diagnostics.Finding("WARN", "PROFILE", "Encounter-specific profile", "Known profile when available", "Generic checks only for map " + std::to_string(player->GetMapId()), "This first release includes the Deathbringer Saurfang and Crimson Hall profile", "Target the affected creature for generic AI and flag checks; additional encounter profiles can be added from verified findings");
+        diagnostics.Finding("INFO", "PROFILE", "Encounter-specific profile", "Verified profile when available", "Universal checks active for map " + std::to_string(player->GetMapId()), "No verified dependency profile is installed for this map yet", "Universal runtime checks remain active; add a source-verified profile for detailed prerequisite validation");
 
     if (script)
         for (RecoveryGuidance const& recovery : RecoveryGuidanceEngine::Evaluate(recoveryContext))

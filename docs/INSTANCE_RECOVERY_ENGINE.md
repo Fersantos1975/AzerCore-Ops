@@ -31,6 +31,24 @@ inconsistent Deathbringer Saurfang prerequisite in Icecrown Citadel.
 Adding a profile does not require addon UI changes. All rules emit the same structured recovery
 record through the chat protocol.
 
+Profiles are registered through `InstanceProfileCatalog`. The diagnostic and recovery engines
+consume the same dependency graph, preventing the visible diagnosis and suggested recovery from
+disagreeing. ICC is the first reference profile; future dungeons and raids extend the catalogue
+instead of adding map-specific branches to the evaluators.
+
+The catalogue also maps public DBC encounter indices to authoritative `InstanceScript` IDs. This
+is required for ICC because Sister Svalna is a script encounter but not a public DBC boss entry;
+Valithria, Sindragosa and the Lich King therefore use script IDs 10, 11 and 12 rather than their
+DBC catalogue indices 9, 10 and 11. Script-only trash and gauntlet states are emitted separately as
+`EVENT_STATE` findings.
+
+## Progression-aware classification
+
+The diagnostic engine classifies normal unreached encounters as `EXPECTED`, script initialization
+as `EXPECTED` or `INFO`, persistent uncertainty as `WARN`, and only source-verified contradictions
+as `FAIL`. A fresh instance therefore does not fail simply because later bosses, doors or wings are
+not yet available.
+
 ## Safety contract
 
 Every recovery record contains:

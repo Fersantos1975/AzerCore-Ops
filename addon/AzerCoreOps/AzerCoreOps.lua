@@ -3657,7 +3657,7 @@ local function BuildInstances()
     if d.loading then add(plain and "Collecting live encounter evidence..." or "|cffffff00Collecting live encounter evidence...|r") end
     if d.error then add((plain and "ERROR: " or "|cffff4040ERROR: |r")..tostring(d.error)) end
     if not d.loading and not d.error and #(d.findings or {})==0 then add("No scan loaded. Enter an instance and click Scan Current Instance.") end
-    local colors={PASS="|cff40ff40",WARN="|cffffb020",FAIL="|cffff4040"}
+    local colors={PASS="|cff40ff40",EXPECTED="|cff80dfff",INFO="|cffb0b0b0",WARN="|cffffb020",FAIL="|cffff4040"}
     for _,finding in ipairs(d.findings or {}) do
       local prefix=plain and ("["..tostring(finding.severity).."]") or ((colors[finding.severity] or "|cffffffff").."["..tostring(finding.severity).."]|r")
       add(string.format("%s  %s — %s",prefix,tostring(finding.category or "CHECK"),tostring(finding.subject or "Unknown")))

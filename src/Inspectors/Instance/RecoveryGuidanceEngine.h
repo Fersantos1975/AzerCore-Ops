@@ -16,11 +16,14 @@ struct RecoveryEncounter
     EncounterState state{TO_BE_DECIDED};
     std::uint32_t creditType{0};
     std::uint32_t creditEntry{0};
+    std::uint32_t catalogueId{0};
+    bool auxiliary{false};
 };
 
 struct RecoveryContext
 {
     std::uint32_t mapId{0};
+    std::uint32_t difficulty{0};
     std::string scriptName;
     std::vector<RecoveryEncounter> encounters;
     std::uint32_t selectedCreatureEntry{0};
