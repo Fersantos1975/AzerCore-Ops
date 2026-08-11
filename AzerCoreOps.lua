@@ -3818,7 +3818,8 @@ local function BuildInformation()
   local function ScrollView(key,heading,height)
     local view=CreateFrame("Frame",nil,content); view:SetAllPoints(); view:Hide(); views[key]=view
     local vh=Label(view,heading); vh:SetPoint("TOPLEFT",14,-14)
-    local scroll=CreateFrame("ScrollFrame",nil,view,"UIPanelScrollFrameTemplate"); scroll:SetPoint("TOPLEFT",12,-42); scroll:SetPoint("BOTTOMRIGHT",-30,12)
+    local scrollName="AZERCORE_OPS_Information"..key.."Scroll"
+    local scroll=CreateFrame("ScrollFrame",scrollName,view,"UIPanelScrollFrameTemplate"); scroll:SetPoint("TOPLEFT",12,-42); scroll:SetPoint("BOTTOMRIGHT",-30,12)
     local child=CreateFrame("Frame",nil,scroll); child:SetWidth(520); child:SetHeight(height or 520); scroll:SetScrollChild(child)
     scroll:EnableMouseWheel(true); scroll:SetScript("OnMouseWheel",function(self,delta) local maximum=math.max(0,child:GetHeight()-self:GetHeight()); self:SetVerticalScroll(math.max(0,math.min(maximum,self:GetVerticalScroll()-delta*32))) end)
     return child
