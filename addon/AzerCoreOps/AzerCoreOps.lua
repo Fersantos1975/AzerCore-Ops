@@ -3626,28 +3626,32 @@ local function BuildInstances()
   Button(bindFooter,"Share",54,20,ShareBindReport,"Open the Courier share window with the bind report"):SetPoint("RIGHT",-70,0)
   Button(bindFooter,"Export",62,20,ExportBindReport,"Export the complete visible bind report"):SetPoint("RIGHT",-4,0)
 
+  local diagnosticScroll, diagnosticScan, diagnosticHistoryButton, diagnosticClear, diagnosticOlder, diagnosticNewer, recoveryButton
   local diagnosticControls=CreateFrame("Frame",nil,diagnosticPage); diagnosticControls:SetPoint("TOPLEFT",12,-5); diagnosticControls:SetPoint("BOTTOMLEFT",12,10); diagnosticControls:SetWidth(180); Backdrop(diagnosticControls,C.panel)
   local diagnosticHeading=Section(diagnosticControls,"ENCOUNTER SCAN",C.gold); diagnosticHeading:SetPoint("TOPLEFT",10,-10)
   local diagnosticHelp=diagnosticControls:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); diagnosticHelp:SetPoint("TOPLEFT",10,-39); diagnosticHelp:SetPoint("TOPRIGHT",-10,-39); diagnosticHelp:SetJustifyH("LEFT"); diagnosticHelp:SetJustifyV("TOP"); diagnosticHelp:SetWordWrap(true); diagnosticHelp:SetTextColor(unpack(C.white)); diagnosticHelp:SetText("Enter the affected dungeon or raid. Target the boss or event NPC for extra evidence, then run the scan.\n\nThis workspace never changes encounter state, doors, creatures or lockouts.")
-  local diagnosticScan=Button(diagnosticControls,"Scan Current Instance",156,28,function()
+  diagnosticScan=Button(diagnosticControls,"Scan Current Instance",156,28,function()
     instanceUI.diagnostics={findings={},recoveries={},loading=true,header=nil,summary=nil,error=nil,generatedAt=nil,historyIndex=0,mode="SCAN"}
+    if diagnosticScroll then diagnosticScroll:SetVerticalScroll(0) end
     if instanceUI.RenderDiagnostics then instanceUI.RenderDiagnostics() end
     SendCommand(CMD.instanceDiagnose); SetStatus("Collecting live encounter evidence...")
   end,"Run a read-only server scan of the current instance"); diagnosticScan:SetPoint("TOPLEFT",12,-145)
 
-  Button(diagnosticControls,"Encounter History",156,28,function()
+  diagnosticHistoryButton=Button(diagnosticControls,"Encounter History",156,28,function()
     instanceUI.diagnostics.mode="HISTORY"
     instanceUI.encounterHistory={entries={},loading=true,header=nil,summary=nil,error=nil,generatedAt=nil}
+    if diagnosticScroll then diagnosticScroll:SetVerticalScroll(0) end
     if instanceUI.RenderDiagnostics then instanceUI.RenderDiagnostics() end
     SendCommand(CMD.instanceHistory); SetStatus("Loading server encounter-state history...")
-  end,"Show server-captured encounter state transitions for the current live instance"):SetPoint("TOPLEFT",12,-181)
+  end,"Show server-captured encounter state transitions for the current live instance"); diagnosticHistoryButton:SetPoint("TOPLEFT",12,-181)
 
-  Button(diagnosticControls,"Clear",72,22,function()
+  diagnosticClear=Button(diagnosticControls,"Clear",72,22,function()
     instanceUI.diagnostics={findings={},recoveries={},loading=false,header=nil,summary=nil,error=nil,generatedAt=nil,historyIndex=0,mode="SCAN"}
     instanceUI.encounterHistory={entries={},loading=false,header=nil,summary=nil,error=nil,generatedAt=nil}
+    if diagnosticScroll then diagnosticScroll:SetVerticalScroll(0) end
     instanceUI.RenderDiagnostics()
     SetStatus("Encounter diagnostics cleared.")
-  end,"Clear the displayed encounter evidence"):SetPoint("TOPLEFT",12,-217)
+  end,"Clear the displayed encounter evidence"); diagnosticClear:SetPoint("TOPLEFT",12,-217)
 
   local function LoadDiagnosticHistory(delta)
     AzerCoreOpsDB.diagnosticHistory=AzerCoreOpsDB.diagnosticHistory or {}
@@ -3655,59 +3659,26 @@ local function BuildInstances()
     local index=math.max(1,math.min(#AzerCoreOpsDB.diagnosticHistory,(instanceUI.diagnostics.historyIndex or 0)+delta))
     local saved=AzerCoreOpsDB.diagnosticHistory[index]
     instanceUI.diagnostics={findings=saved.findings or {},recoveries=saved.recoveries or {},loading=false,header=saved.header,summary=saved.summary,error=saved.error,generatedAt=saved.generatedAt,historyIndex=index,historical=true,mode="SCAN"}
+    if diagnosticScroll then diagnosticScroll:SetVerticalScroll(0) end
     instanceUI.RenderDiagnostics()
     SetStatus(string.format("Viewing diagnostic history %d of %d — %s",index,#AzerCoreOpsDB.diagnosticHistory,saved.generatedAt or "unknown time"))
   end
-  Button(diagnosticControls,"< Older",72,22,function() LoadDiagnosticHistory(1) end,"Open an older saved diagnostic scan"):SetPoint("TOPLEFT",12,-249)
-  Button(diagnosticControls,"Newer >",72,22,function() LoadDiagnosticHistory(-1) end,"Open a newer saved diagnostic scan"):SetPoint("TOPLEFT",90,-249)
+  diagnosticOlder=Button(diagnosticControls,"< Older",72,22,function() LoadDiagnosticHistory(1) end,"Open an older saved diagnostic scan"); diagnosticOlder:SetPoint("TOPLEFT",12,-249)
+  diagnosticNewer=Button(diagnosticControls,"Newer >",72,22,function() LoadDiagnosticHistory(-1) end,"Open a newer saved diagnostic scan"); diagnosticNewer:SetPoint("TOPLEFT",90,-249)
 
   local diagnosticPanel=CreateFrame("Frame",nil,diagnosticPage); diagnosticPanel:SetPoint("TOPLEFT",200,-5); diagnosticPanel:SetPoint("BOTTOMRIGHT",-12,10); Backdrop(diagnosticPanel,C.panel)
   local diagnosticTitle=Section(diagnosticPanel,"LIVE ENCOUNTER EVIDENCE",C.gold); diagnosticTitle:SetPoint("TOPLEFT",10,-10)
-  local diagnosticScroll=CreateFrame("ScrollFrame","AZERCORE_OPS_EncounterDiagnosticScroll",diagnosticPanel,"UIPanelScrollFrameTemplate"); diagnosticScroll:SetPoint("TOPLEFT",10,-32); diagnosticScroll:SetPoint("BOTTOMRIGHT",-28,36)
+  diagnosticScroll=CreateFrame("ScrollFrame","AZERCORE_OPS_EncounterDiagnosticScroll",diagnosticPanel,"UIPanelScrollFrameTemplate"); diagnosticScroll:SetPoint("TOPLEFT",10,-32); diagnosticScroll:SetPoint("BOTTOMRIGHT",-28,36)
   local diagnosticChild=CreateFrame("Frame",nil,diagnosticScroll); diagnosticChild:SetWidth(650); diagnosticChild:SetHeight(500); diagnosticScroll:SetScrollChild(diagnosticChild)
   local diagnosticText=diagnosticChild:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); diagnosticText:SetPoint("TOPLEFT",2,-2); diagnosticText:SetWidth(640); diagnosticText:SetJustifyH("LEFT"); diagnosticText:SetJustifyV("TOP"); diagnosticText:SetWordWrap(true)
 
   local function EncounterHistoryTime(value)
     local milliseconds=tonumber(value)
-    if not milliseconds then return "unknown time" end
-    return date("%Y-%m-%d %H:%M:%S",math.floor(milliseconds/1000))
+    if not milliseconds then return "unknown" end
+    return date("%m-%d %H:%M:%S",math.floor(milliseconds/1000))
   end
 
-  local function EncounterHistoryReport(plain)
-    local h=instanceUI.encounterHistory or {}
-    local lines={}
-    local function add(value) table.insert(lines,value) end
-
-    if h.header then
-      add(string.format("%s — Map %s, Instance %s, Difficulty %s",
-        h.header.name or "Current instance",
-        h.header.map or "?",
-        h.header.instance or "?",
-        h.header.difficulty or "?"))
-      add("")
-      add(plain and
-        "SERVER ENCOUNTER STATE SIGNALS" or
-        "|cffffd100SERVER ENCOUNTER STATE SIGNALS|r")
-      add("Captured directly from SetBossState requests while this instance is live.")
-      add("")
-    end
-
-    if h.loading then
-      add(plain and
-        "Loading encounter history..." or
-        "|cffffff00Loading encounter history...|r")
-    end
-
-    if h.error then
-      add((plain and "ERROR: " or "|cffff4040ERROR: |r")..tostring(h.error))
-    end
-
-    if not h.loading and not h.error and #(h.entries or {})==0 then
-      add("No encounter state transitions have been captured for this live instance yet.")
-      add("")
-      add("History is captured server-side from state changes that occur after the updated worldserver starts.")
-    end
-
+  local function EncounterHistoryClassLabel(classification,plain)
     local colors={
       NORMAL="|cff40ff40",
       INITIALIZATION="|cff80dfff",
@@ -3716,40 +3687,102 @@ local function BuildInstances()
       SUSPICIOUS="|cffff4040",
       INFO="|cffb0b0b0"
     }
+    classification=tostring(classification or "INFO")
+    if plain then return "["..classification.."]" end
+    return (colors[classification] or "|cffffffff").."["..classification.."]|r"
+  end
 
-    for _,entry in ipairs(h.entries or {}) do
-      local classification=tostring(entry.class or "INFO")
-      local prefix=plain and
-        ("["..classification.."]") or
-        ((colors[classification] or "|cffffffff").."["..classification.."]|r")
+  local function EncounterHistoryReport(plain)
+    local h=instanceUI.encounterHistory or {}
+    local entries=h.entries or {}
+    local initial,live={},{}
+    local lines={}
+    local function add(value) table.insert(lines,value) end
 
-      add(string.format(
-        "#%s  %s  %s  —  %s",
-        tostring(entry.seq or "?"),
-        EncounterHistoryTime(entry.time),
-        prefix,
-        tostring(entry.name or ("Encounter "..tostring(entry.id or "?")))))
+    for _,entry in ipairs(entries) do
+      if tostring(entry.class or "") == "INITIALIZATION" then
+        table.insert(initial,entry)
+      else
+        table.insert(live,entry)
+      end
+    end
 
-      add(string.format(
-        "  %s [%s]  ->  %s [%s]",
-        tostring(entry.oldname or "UNKNOWN"),
-        tostring(entry.old or "?"),
-        tostring(entry.newname or "UNKNOWN"),
-        tostring(entry.new or "?")))
+    if h.header then
+      add(string.format("%s — Map %s, Instance %s, Difficulty %s",
+        h.header.name or "Current instance",
+        h.header.map or "?",
+        h.header.instance or "?",
+        h.header.difficulty or "?"))
+    end
 
-      add("  "..tostring(entry.detail or ""))
+    local count=h.summary and (tonumber(h.summary.count) or #entries) or #entries
+    local anomalies=h.summary and (tonumber(h.summary.anomalies) or 0) or 0
+    if h.header or h.summary then
+      add(string.format("%d state signals  |  %d suspicious",count,anomalies))
+      add(plain and
+        "Server-captured SetBossState signals." or
+        "|cffb0b0b0Server-captured SetBossState signals.|r")
       add("")
     end
 
-    if h.summary then
-      add(string.format(
-        "SUMMARY — %d signals, %d suspicious",
-        tonumber(h.summary.count) or 0,
-        tonumber(h.summary.anomalies) or 0))
+    if h.loading then
+      add(plain and "Loading encounter history..." or "|cffffff00Loading encounter history...|r")
+      add("")
+    end
 
-      if h.generatedAt then
-        add("Retrieved: "..tostring(h.generatedAt))
+    if h.error then
+      add((plain and "ERROR: " or "|cffff4040ERROR: |r")..tostring(h.error))
+      add("")
+    end
+
+    if not h.loading and not h.error and #entries==0 then
+      add("No encounter state transitions have been captured for this live instance yet.")
+      add("")
+      add("History is captured server-side from state changes that occur after the updated worldserver starts.")
+      return table.concat(lines,"\n")
+    end
+
+    add(plain and "LIVE TRANSITIONS" or "|cffffd100LIVE TRANSITIONS|r")
+    if #live==0 then
+      add("No live encounter transitions captured yet.")
+    else
+      for _,entry in ipairs(live) do
+        local classification=tostring(entry.class or "INFO")
+        add(string.format(
+          "#%s  %s  %s",
+          tostring(entry.seq or "?"),
+          EncounterHistoryTime(entry.time),
+          tostring(entry.name or ("Encounter "..tostring(entry.id or "?")))))
+        add(string.format(
+          "  %s  %s [%s]  ->  %s [%s]",
+          EncounterHistoryClassLabel(classification,plain),
+          tostring(entry.oldname or "UNKNOWN"),
+          tostring(entry.old or "?"),
+          tostring(entry.newname or "UNKNOWN"),
+          tostring(entry.new or "?")))
+        if classification~="NORMAL" and entry.detail and entry.detail~="" then
+          add("  "..tostring(entry.detail))
+        end
+        add("")
       end
+    end
+
+    if #initial>0 then
+      add(plain and "INITIAL STATE" or "|cffffd100INITIAL STATE|r")
+      for _,entry in ipairs(initial) do
+        add(string.format(
+          "#%s  %s  %s  ->  %s [%s]",
+          tostring(entry.seq or "?"),
+          EncounterHistoryTime(entry.time),
+          tostring(entry.name or ("Encounter "..tostring(entry.id or "?"))),
+          tostring(entry.newname or "UNKNOWN"),
+          tostring(entry.new or "?")))
+      end
+      add("")
+    end
+
+    if h.generatedAt then
+      add("Retrieved: "..tostring(h.generatedAt))
     end
 
     return table.concat(lines,"\n")
@@ -3789,10 +3822,23 @@ local function BuildInstances()
     return table.concat(lines,"\n")
   end
   instanceUI.RenderDiagnostics=function()
-    if (instanceUI.diagnostics or {}).mode=="HISTORY" then
-      diagnosticTitle:SetText("ENCOUNTER STATE HISTORY")
+    local historyMode=(instanceUI.diagnostics or {}).mode=="HISTORY"
+    if historyMode then
+      diagnosticHeading:SetText("ENCOUNTER HISTORY")
+      diagnosticTitle:SetText("ENCOUNTER HISTORY")
+      diagnosticHelp:SetText("Server-captured encounter state changes for the current live instance.\n\nUse Refresh History after a pull, wipe or kill. No encounter state is changed by this view.")
+      if diagnosticHistoryButton then diagnosticHistoryButton:SetText("Refresh History") end
+      if diagnosticOlder then diagnosticOlder:Hide() end
+      if diagnosticNewer then diagnosticNewer:Hide() end
+      if recoveryButton then recoveryButton:Hide() end
     else
+      diagnosticHeading:SetText("ENCOUNTER SCAN")
       diagnosticTitle:SetText("LIVE ENCOUNTER EVIDENCE")
+      diagnosticHelp:SetText("Enter the affected dungeon or raid. Target the boss or event NPC for extra evidence, then run the scan.\n\nThis workspace never changes encounter state, doors, creatures or lockouts.")
+      if diagnosticHistoryButton then diagnosticHistoryButton:SetText("Encounter History") end
+      if diagnosticOlder then diagnosticOlder:Show() end
+      if diagnosticNewer then diagnosticNewer:Show() end
+      if recoveryButton then recoveryButton:Show() end
     end
     local report=DiagnosticReport(false)
     diagnosticText:SetText(report)
@@ -3810,14 +3856,19 @@ local function BuildInstances()
     end
     return table.concat(lines,"\n")
   end
-  Button(diagnosticFooter,"Copy Recovery Commands",154,22,function()
-    if (instanceUI.diagnostics or {}).mode=="HISTORY" then SetStatus("Recovery commands are not part of Encounter History.",true); return end
+  recoveryButton=Button(diagnosticFooter,"Copy Recovery Commands",154,22,function()
     local commands=RecoveryCommands(); if commands=="" then SetStatus("No recovery guidance was generated for this scan.",true); return end
     ShowSelectableReport("Temporary GM recovery commands",commands)
-  end,"Copy verification, repair and recheck commands without executing them"):SetPoint("LEFT",0,0)
-  Button(diagnosticFooter,"Copy",54,22,function() ShowSelectableReport("Encounter diagnostic report",DiagnosticReport(true)) end,"Copy the complete diagnostic report"):SetPoint("RIGHT",-126,0)
-  Button(diagnosticFooter,"Share",58,22,function() local f=EnsureShareFrame(); f:SetCapturedMessage(DiagnosticReport(true),"INSTANCE",function() return DiagnosticReport(true) end,"INSTANCE"); f:Show(); f:Raise() end,"Share the diagnostic report through Courier"):SetPoint("RIGHT",-64,0)
-  Button(diagnosticFooter,"Export",60,22,function() ShowSelectableReport("Export encounter diagnostic report",DiagnosticReport(true)) end,"Export the complete diagnostic report"):SetPoint("RIGHT",0,0)
+  end,"Copy verification, repair and recheck commands without executing them"); recoveryButton:SetPoint("LEFT",0,0)
+  Button(diagnosticFooter,"Copy",54,22,function()
+    local title=(instanceUI.diagnostics or {}).mode=="HISTORY" and "Encounter history" or "Encounter diagnostic report"
+    ShowSelectableReport(title,DiagnosticReport(true))
+  end,"Copy the complete visible report"):SetPoint("RIGHT",-126,0)
+  Button(diagnosticFooter,"Share",58,22,function() local f=EnsureShareFrame(); f:SetCapturedMessage(DiagnosticReport(true),"INSTANCE",function() return DiagnosticReport(true) end,"INSTANCE"); f:Show(); f:Raise() end,"Share the visible report through Courier"):SetPoint("RIGHT",-64,0)
+  Button(diagnosticFooter,"Export",60,22,function()
+    local title=(instanceUI.diagnostics or {}).mode=="HISTORY" and "Export encounter history" or "Export encounter diagnostic report"
+    ShowSelectableReport(title,DiagnosticReport(true))
+  end,"Export the complete visible report"):SetPoint("RIGHT",0,0)
   instanceUI.RenderDiagnostics()
 
   local wotlkInstances={
@@ -4569,7 +4620,7 @@ events:SetScript("OnEvent",function(_,event,arg1)
       if questUI.targetLogLoading then questUI.targetLogLoading=false; questUI.targetLogError=f.reason or "Quest-log inspection failed"; RenderQuest() end
       SetStatus(f.reason or "Quest module error",true)
     elseif kind=="ENCOUNTER_DIAG_BEGIN" then
-      instanceUI.diagnostics={findings={},recoveries={},loading=true,header=f,summary=nil,error=nil,generatedAt=nil,historyIndex=0}; if instanceUI.RenderDiagnostics then instanceUI.RenderDiagnostics() end; SetStatus("Diagnosing "..tostring(f.name or "current instance").."...")
+      instanceUI.diagnostics={findings={},recoveries={},loading=true,header=f,summary=nil,error=nil,generatedAt=nil,historyIndex=0,mode="SCAN"}; if instanceUI.RenderDiagnostics then instanceUI.RenderDiagnostics() end; SetStatus("Diagnosing "..tostring(f.name or "current instance").."...")
     elseif kind=="ENCOUNTER_DIAG_FINDING" then
       table.insert(instanceUI.diagnostics.findings,f); if instanceUI.RenderDiagnostics then instanceUI.RenderDiagnostics() end
     elseif kind=="ENCOUNTER_DIAG_RECOVERY" then
