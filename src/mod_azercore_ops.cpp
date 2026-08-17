@@ -2,6 +2,7 @@
 #include "Chat.h"
 #include "CommandScript.h"
 #include "Inspectors/Instance/InstanceInspector.h"
+#include "Inspectors/Instance/EncounterHistory.h"
 #include "Inspectors/Character/CharacterInspector.h"
 #include "Inspectors/Quest/QuestInspector.h"
 #include "Inspectors/NPC/NPCInspector.h"
@@ -28,6 +29,7 @@ public:
             { "audit", AzerCoreOps::InstanceInspector::Audit, rbac::RBAC_PERM_COMMAND_INSTANCE_LISTBINDS, Console::No },
             { "binds", AzerCoreOps::InstanceInspector::Binds, rbac::RBAC_PERM_COMMAND_INSTANCE_LISTBINDS, Console::No },
             { "diagnose", AzerCoreOps::InstanceInspector::Diagnose, rbac::RBAC_PERM_COMMAND_INSTANCE_LISTBINDS, Console::No },
+            { "history", AzerCoreOps::EncounterHistory::Show, rbac::RBAC_PERM_COMMAND_INSTANCE_LISTBINDS, Console::No },
             { "unbind", AzerCoreOps::InstanceInspector::Unbind, rbac::RBAC_PERM_COMMAND_INSTANCE_UNBIND, Console::No },
         };
         static ChatCommandTable questTable =

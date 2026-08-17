@@ -22,6 +22,10 @@ void SendEncounterDiagnosticFinding(ChatHandler* handler, std::string const& sev
 void SendEncounterDiagnosticRecovery(ChatHandler* handler, std::string const& id, std::string const& title, std::string const& confidence, std::string const& evidence, std::string const& verificationCommand, std::string const& actionCommands, std::string const& recheckCommand, std::string const& expectedResult, std::string const& safety);
 void SendEncounterDiagnosticEnd(ChatHandler* handler, std::uint32_t passed, std::uint32_t warnings, std::uint32_t failures);
 void SendEncounterDiagnosticError(ChatHandler* handler, std::string const& reason);
+void SendEncounterHistoryBegin(ChatHandler* handler, std::uint32_t mapId, std::uint32_t instanceId, std::uint32_t difficulty, std::string const& mapName, std::uint32_t count);
+void SendEncounterHistoryEntry(ChatHandler* handler, std::uint64_t sequence, std::uint64_t timestampMs, std::uint32_t encounterId, std::string const& name, std::uint32_t oldState, std::string const& oldName, std::uint32_t newState, std::string const& newName, std::string const& classification, std::string const& detail);
+void SendEncounterHistoryEnd(ChatHandler* handler, std::uint32_t count, std::uint32_t anomalies);
+void SendEncounterHistoryError(ChatHandler* handler, std::string const& reason);
 void SendBindBegin(ChatHandler* handler, std::string const& player, std::string const& scope, std::uint32_t count);
 void SendBindEntry(ChatHandler* handler, std::uint32_t mapId, std::string const& name, std::string const& type, std::uint32_t instanceId, std::uint32_t difficulty, bool permanent, bool extended, bool canReset, bool applicable, std::uint32_t resetSeconds, std::uint32_t encounterMask, std::uint32_t bossTotal, std::uint32_t bossDefeated, std::string const& reason);
 void SendBindBoss(ChatHandler* handler, std::uint32_t mapId, std::uint32_t instanceId, std::uint32_t difficulty, std::uint32_t index, bool defeated, std::string const& name);
