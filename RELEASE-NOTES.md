@@ -1,26 +1,53 @@
-# AzerCore Ops 0.6.0
+# AzerCore Ops 0.6.1
 
-AzerCore Ops 0.6.0 is the first public release of the combined AzerothCore server module and World of Warcraft 3.3.5a addon.
+AzerCore Ops 0.6.1 expands the Instance Diagnostics system with server-backed encounter history, anomaly detection, and live attempt/wipe/kill tracking.
+
+The platform continues to consist of both the AzerothCore server module and the matching World of Warcraft 3.3.5a client addon.
 
 ## Highlights
 
-- Safe Player Mode for permitted inspection and reporting features.
-- Server-authorized administrator and Game Master operations.
-- Quest, Character, Instance Access, NPC, Item, and Movement workspaces.
-- Validated and attributed Movement destination catalogue.
-- Structured in-addon reports that keep internal command output out of Blizzard chat where supported.
-- Automatic, Player, and GM operation modes backed by the module permission handshake.
-- Minimap button support, including Minimap Button Frame 3.1.1 icon and tooltip compatibility.
-- Platform Information pages for compatibility, capabilities, build details, credits, and resources.
+- Server-backed Encounter History
+- Encounter-state anomaly detection
+- Per-encounter Attempts, Wipes, and Kills counters
+- PULL #N and WIPE #N event numbering
+- RESET and KILL event tracking
+- Color-coded encounter events and states
+- Attempt Summary presentation in the addon
+- Improved Encounter History layout and readability
+
+## Wipe detection
+
+AzerCore Ops now correctly recognizes encounters that reset directly from:
+
+`IN_PROGRESS -> NOT_STARTED`
+
+as failed pulls and records them as wipes.
+
+Related follow-up reset/failure transitions are protected against double counting.
+
+## Validation
+
+Lord Marrowgar:
+
+`Attempts 1 | Wipes 0 | Kills 1`
+
+Lady Deathwhisper:
+
+`Attempts 2 | Wipes 1 | Kills 1`
+
+Testing completed with zero false-positive suspicious encounter transitions.
+
+## Versions
+
+- Server module: 0.6.1
+- Client addon: 0.6.1
+- Protocol: v1
+- Release revision: 9a3f7d2
 
 ## Installation
 
-Install the repository as `mod-azercore-ops` in the AzerothCore modules directory and rebuild the core. Copy `addon/AzerCoreOps` into the WoW client's `Interface/AddOns` directory. The addon and module must use matching release revisions.
+Install the repository as `mod-azercore-ops` in the AzerothCore modules directory and rebuild the core.
 
-## Not included
+Copy `addon/AzerCoreOps` into the WoW client's `Interface/AddOns` directory.
 
-Courier is visible as an under-construction preview but remains unavailable and non-interactive. Location sharing also remains disabled pending its authorization, verification, abuse-reporting, and safe-landing design.
-
-## Verification
-
-The 0.6.0 release candidate passed repository validation and in-game regression testing. The final server module must be rebuilt after installing this release so its reported version and release channel become `0.6.0` and `stable`.
+The addon and server module should use matching release versions.

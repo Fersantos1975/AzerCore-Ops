@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.6.1 — Encounter History and Attempt Tracking
+
+### Added
+
+- Added server-backed encounter history for dungeon and raid encounters.
+- Added encounter-state anomaly detection for suspicious transitions.
+- Added per-encounter Attempts, Wipes, and Kills statistics.
+- Added PULL, WIPE, RESET, and KILL event classification.
+- Added numbered PULL #N and WIPE #N events.
+- Added color-coded encounter states and event presentation.
+- Added an Attempt Summary to the Encounter History workspace.
+
+### Fixed
+
+- Correctly count direct `IN_PROGRESS -> NOT_STARTED` encounter resets as wipes.
+- Prevent alternate wipe/reset chains from counting the same failed attempt twice.
+- Preserve correct attempt counts when encounter recording starts during an active pull.
+
+### Validation
+
+- Validated normal pull and kill tracking with Lord Marrowgar.
+- Validated direct-reset wipe tracking with Lady Deathwhisper.
+- Validated a second Deathwhisper pull followed by a successful kill.
+- Completed validation with zero false-positive suspicious transitions.
+
 ## 0.6.0 — First Public Release
 
 ### Fixed
