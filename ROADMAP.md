@@ -1,54 +1,111 @@
 # AzerCore Ops Platform Roadmap
 
-## 0.5.x — Quest foundation and stabilization
+AzerCore Ops is an operational intelligence platform for AzerothCore built from a
+server-side C++ module and a matching World of Warcraft 3.3.5a addon.
 
-- Align the C++ Quest backend with the completed Quest Intelligence frontend.
-- Provide a structured active Quest Log inventory for the selected online player. *(Added in 0.5.1.)*
-- Complete objectives, requirements, rewards, NPC, and richer diagnostics payloads.
-- Replace visible chat transport with a dedicated addon communication channel.
-- Stabilize target-context and group-audit handling.
-- Present complete quest chains in sequence with the selected quest's position and every linked quest's player-specific status. *(Added in 0.5.1 alpha testing.)*
-- Add compile and field-test verification.
+The current stable baseline is `0.6.1`.
 
-## 0.6.0 — Quest Log integration
+## Completed foundation
 
-- Introduce the centralized UI State Manager for consistent, event-driven
-  navigation, workspace, filter, and selection highlighting without permanent
-  `OnUpdate` polling.
-- Extend target Quest Log inspection with live objective progress and richer diagnostics.
-- Open and highlight the selected quest in Blizzard's Quest Log.
-- Synchronize selection between AzerCore Ops and the Blizzard Quest Log.
-- Display live objective progress for self and module-supplied progress for targets.
-- Add Quest Log actions for objectives, rewards, requirements, chain, NPCs, comparison, diagnostics, and export.
+### Quest Intelligence
 
-## Role-aware operating modes
+- Quest search by numeric ID or title.
+- Structured quest details, requirements, rewards, NPC relationships, and chains.
+- SELF and TARGET inspection contexts.
+- Complete active Quest Log inspection for a selected online player.
+- Group quest auditing.
+- Search history, activity reporting, copy, share, and export workflows.
+- Player-specific numbered quest-chain presentation.
+- Server-authoritative Player and GM operating modes.
 
-- Add Automatic, Player, and GM operating modes before the wider 0.6.x workspace expansion. *(Added in 0.5.3.)*
-- Default to Automatic and derive the effective mode from the module permissions handshake. *(Added in 0.5.3.)*
-- Always allow a GM to select the safer read-only Player Mode. *(Added in 0.5.3.)*
-- Never allow an addon setting to grant GM authority; the server remains authoritative for every command. *(Added in 0.5.3.)*
-- Hide mutation and administrative operations in Player Mode while retaining permitted inspection, readiness, and report tools. *(Added in 0.5.3.)*
-- Immediately downgrade the interface if permissions are lost. *(Added in 0.5.3; a persistent global mode badge remains under consideration.)*
-- Maintain a documented feature/permission matrix and apply it through centralized UI state rather than per-frame polling. *(Initial implementation added in 0.5.3.)*
+### Character Intelligence
 
-## 0.5.3 — Character Intelligence
+- Overview, Inventory, Professions, Raid Experience, and Technical Details.
+- Event-driven target inspection and stale-response protection.
+- Privacy-safe copy, share, and export reporting.
+- Recorded raid-achievement evidence with raid and difficulty selection.
+- Self-only character saving plus separately authorized GM target saving.
 
-- Add role-aware Character inspection with Overview, Inventory, Professions, Raid Experience, and Technical Details.
-- Treat recorded raid achievements as experience evidence, never as proof of player mastery.
-- Keep Technical Details and target-save operations server-authorized and GM-only.
-- Clear stale target records immediately when the selected player changes or disappears.
-- Keep copied, shared, and exported Character reports free of sensitive technical identifiers.
-- Preserve self-only character saving while offering a separately confirmed GM target-save operation.
-- Provide a persistent raid/difficulty selector for Wrath raid-achievement evidence, with only valid difficulties per raid and event-driven target refresh. *(Added in 0.5.3.)*
+### Instance Intelligence
+
+- Structured My Binds and Target Binds inspection.
+- Exact Instance IDs, difficulty, reset information, and encounter progress.
+- Group access auditing and bind comparison.
+- Safe multi-select instance unbinding with confirmation and verification.
+- Profile-driven instance diagnostics.
+- Dynamic recovery guidance.
+- Encounter History.
+- Encounter-state anomaly detection.
+- Per-encounter Attempts, Wipes, and Kills tracking.
+- PULL, WIPE, RESET, and KILL event presentation.
+- Direct `IN_PROGRESS -> NOT_STARTED` wipe detection.
+- Protection against double-counting alternate wipe/reset chains.
+
+### Item, NPC, and Movement foundations
+
+- Server-backed Item inspection, crafting, sources, uses, and access information.
+- NPC overview, quests, loot, story, technical information, and model presentation.
+- Validated Movement catalogue.
+- Personal saved locations and Emergency Return.
+- Server-specific `game_tele` destinations.
+
+## 0.6.2 — Validation and hardening
+
+- Validate Encounter History across additional Wrath raids and dungeons.
+- Test both common wipe-state patterns:
+  - `IN_PROGRESS -> FAIL -> NOT_STARTED`
+  - `IN_PROGRESS -> NOT_STARTED`
+- Verify attempt, wipe, and kill counters across repeated pulls and resets.
+- Verify unusual encounter scripts do not create false suspicious transitions.
+- Review whether Encounter History should remain session-memory only or gain optional persistence.
+- Run a systematic Item and NPC regression pass against the current server module.
+- Re-test wearable previews, access requirements, faction/race restrictions, and fallback presentation.
+- Decide whether local dungeon test data belongs under repository test tooling or remains development-only.
+- Expand release regression coverage for Instance Intelligence.
+
+## Quest Log integration — remaining work
+
+- Extend target Quest Log inspection with live objective progress.
+- Display live objective progress for SELF and module-supplied progress for TARGET.
+- Open and highlight the selected quest in Blizzard's Quest Log where client APIs permit.
+- Synchronize selection between AzerCore Ops and Blizzard's Quest Log where practical.
+- Add richer Quest Log actions for objectives, rewards, requirements, chain, NPCs, comparison, diagnostics, and export.
+- Continue reducing dependence on visible chat transport where AzerothCore APIs permit a safer structured channel.
+
+## Deferred and safety-gated work
+
+### Courier
+
+Courier remains an under-construction preview.
+
+Before activation it requires:
+
+- A defined transport model.
+- Server-side authorization.
+- Recipient and payload validation.
+- Abuse prevention and reporting.
+- Failure and recovery handling.
+- Clear Player Mode and GM permission boundaries.
+
+### Location sharing
+
+Location sharing remains disabled.
+
+Activation requires:
+
+- Explicit authorization and consent.
+- Destination verification.
+- Safe-landing validation.
+- Abuse and reporting controls.
+- Clear visibility and revocation behavior.
 
 ## Future intelligence workspaces
 
-- Character Intelligence *(initial workspace added in 0.5.3)*
-- Instance Intelligence
 - Group Intelligence
 - Guild Intelligence
-- Item Intelligence
 - Spell Intelligence
-- Creature Intelligence
 - GameObject Intelligence
 - Database Intelligence
+
+Existing Character, Quest, Instance, Item, Creature/NPC, and Movement capabilities
+should be hardened before adding broad new workspaces.
