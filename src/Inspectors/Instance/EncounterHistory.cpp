@@ -103,10 +103,11 @@ std::pair<std::string, std::string> ClassifyTransition(
             "Initial instance-state assignment while the encounter is being loaded"
         };
 
-    if (oldState == NOT_STARTED && newState == IN_PROGRESS)
+    if ((oldState == NOT_STARTED || oldState == FAIL) &&
+        newState == IN_PROGRESS)
         return {
             "NORMAL",
-            "Encounter entered combat from the normal not-started state"
+            "Encounter entered combat from a valid pull-start state"
         };
 
     if (oldState == IN_PROGRESS && newState == DONE)
@@ -217,7 +218,7 @@ void RecordTransition(
     {
         event = "INITIALIZATION";
     }
-    else if (oldState == NOT_STARTED &&
+    else if ((oldState == NOT_STARTED || oldState == FAIL) &&
              newState == IN_PROGRESS)
     {
         EncounterCounters& current =
