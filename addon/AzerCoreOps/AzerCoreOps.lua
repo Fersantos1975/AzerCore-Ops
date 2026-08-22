@@ -1,6 +1,6 @@
 local ADDON = ...
 
--- AzerCore Ops Platform 0.6.0
+-- AzerCore Ops Platform 0.6.1
 -- Target: WoW 3.3.5a / AzerothCore. All server commands live here so that
 -- branch-specific command names can be changed without touching the UI.
 local CMD = {
@@ -96,7 +96,7 @@ local instanceUI={my={},target={},captureUntil=0,myRows={},targetRows={},myOffse
   myLoadState="UNLOADED",targetLoadState="UNLOADED",ignoreBindStream=false,targetPortrait=nil,targetPortraitFrame=nil,targetIdentity=nil,
   targetIdentityName=nil,targetIdentityMeta=nil}
 instanceUI.diagnostics={findings={},recoveries={},loading=false,header=nil,summary=nil,error=nil,generatedAt=nil,historyIndex=0,mode="SCAN"}
-instanceUI.encounterHistory={entries={},loading=false,header=nil,summary=nil,error=nil,generatedAt=nil}
+instanceUI.encounterHistory={entries={},stats={},loading=false,header=nil,summary=nil,error=nil,generatedAt=nil}
 local auditUI={search={},members={},searchRows={},memberRows={},filterButtons={},filtered={},mapBox=nil,diffBox=nil,summary=nil,scroll=nil,scrollChild=nil,horizontal=nil,filter="ALL",lastMap=nil,lastDifficulty=nil,reportEdit=nil,
   searchOffset=0,selectedMap=nil,selectedName=nil,selectedType=nil,selectedMaxPlayers=nil,difficulty=0,difficultyLabel="Normal",lockedText=nil,difficultyButton=nil,difficultyMenu=nil,historyIndex=0,searchBox=nil,
   referenceId=0,expectedMembers=0,display={},groupVerdict="NOT AUDITED",groupReason="Run Group Audit",generatedAt=nil,stale=false}
@@ -114,7 +114,7 @@ local defaults={
   rememberAuditFilter=true,autoReaudit=false,confirmResetSelected=true,
   warnNoTarget=true,compactAuditRows=false,auditFontSize=10,shiftClickInsert=true,
 }
-local ADDON_VERSION="0.6.0"
+local ADDON_VERSION="0.6.1"
 local PROTOCOL_VERSION="1"
 local TESTED_CORE="190184a04539"
 local TESTED_PLAYERBOTS="ba46fcdecde3"
@@ -3639,7 +3639,7 @@ local function BuildInstances()
 
   diagnosticHistoryButton=Button(diagnosticControls,"Encounter History",156,28,function()
     instanceUI.diagnostics.mode="HISTORY"
-    instanceUI.encounterHistory={entries={},loading=true,header=nil,summary=nil,error=nil,generatedAt=nil}
+    instanceUI.encounterHistory={entries={},stats={},loading=true,header=nil,summary=nil,error=nil,generatedAt=nil}
     if diagnosticScroll then diagnosticScroll:SetVerticalScroll(0) end
     if instanceUI.RenderDiagnostics then instanceUI.RenderDiagnostics() end
     SendCommand(CMD.instanceHistory); SetStatus("Loading server encounter-state history...")
@@ -3647,7 +3647,7 @@ local function BuildInstances()
 
   diagnosticClear=Button(diagnosticControls,"Clear",72,22,function()
     instanceUI.diagnostics={findings={},recoveries={},loading=false,header=nil,summary=nil,error=nil,generatedAt=nil,historyIndex=0,mode="SCAN"}
-    instanceUI.encounterHistory={entries={},loading=false,header=nil,summary=nil,error=nil,generatedAt=nil}
+    instanceUI.encounterHistory={entries={},stats={},loading=false,header=nil,summary=nil,error=nil,generatedAt=nil}
     if diagnosticScroll then diagnosticScroll:SetVerticalScroll(0) end
     instanceUI.RenderDiagnostics()
     SetStatus("Encounter diagnostics cleared.")
@@ -3683,7 +3683,7 @@ local function BuildInstances()
       NORMAL="|cff40ff40",
       INITIALIZATION="|cff80dfff",
       RESET_STEP="|cffffff00",
-      WIPE_CHAIN="|cff40ff40",
+      WIPE_CHAIN="|cffff8030",
       SUSPICIOUS="|cffff4040",
       INFO="|cffb0b0b0"
     }
@@ -3692,9 +3692,60 @@ local function BuildInstances()
     return (colors[classification] or "|cffffffff").."["..classification.."]|r"
   end
 
+  local function EncounterHistoryStateLabel(name,id,plain)
+    name=tostring(name or "UNKNOWN")
+    id=tostring(id or "?")
+    local text=name.." ["..id.."]"
+
+    if plain then return text end
+
+    local colors={
+      DONE="|cff40ff40",
+      FAIL="|cffff4040",
+      IN_PROGRESS="|cff00bfff",
+      NOT_STARTED="|cffc0c0c0",
+      TO_BE_DECIDED="|cff80dfff"
+    }
+
+    return (colors[name] or "|cffffffff")..text.."|r"
+  end
+
+  local function EncounterHistoryEventLabel(entry,plain)
+    local event=tostring(entry.event or "STATE")
+    local label=nil
+    local color="|cffffffff"
+
+    if event=="PULL" then
+      local n=tonumber(entry.attempt) or 0
+      label=n>0 and ("PULL #"..n) or "PULL"
+      color="|cff00bfff"
+
+    elseif event=="WIPE" then
+      local n=tonumber(entry.wipes) or 0
+      label=n>0 and ("WIPE #"..n) or "WIPE"
+      color="|cffff8030"
+
+    elseif event=="RESET" then
+      label="RESET"
+      color="|cffffff00"
+
+    elseif event=="KILL" then
+      label="KILL"
+      color="|cff40ff40"
+    end
+
+    if not label then
+      return EncounterHistoryClassLabel(entry.class,plain)
+    end
+
+    if plain then return "["..label.."]" end
+    return color.."["..label.."]|r"
+  end
+
   local function EncounterHistoryReport(plain)
     local h=instanceUI.encounterHistory or {}
     local entries=h.entries or {}
+    local stats=h.stats or {}
     local initial,live={},{}
     local lines={}
     local function add(value) table.insert(lines,value) end
@@ -3717,6 +3768,7 @@ local function BuildInstances()
 
     local count=h.summary and (tonumber(h.summary.count) or #entries) or #entries
     local anomalies=h.summary and (tonumber(h.summary.anomalies) or 0) or 0
+
     if h.header or h.summary then
       add(string.format("%d state signals  |  %d suspicious",count,anomalies))
       add(plain and
@@ -3726,7 +3778,9 @@ local function BuildInstances()
     end
 
     if h.loading then
-      add(plain and "Loading encounter history..." or "|cffffff00Loading encounter history...|r")
+      add(plain and
+        "Loading encounter history..." or
+        "|cffffff00Loading encounter history...|r")
       add("")
     end
 
@@ -3742,42 +3796,85 @@ local function BuildInstances()
       return table.concat(lines,"\n")
     end
 
-    add(plain and "LIVE TRANSITIONS" or "|cffffd100LIVE TRANSITIONS|r")
+    if #stats>0 then
+      add(plain and
+        "ATTEMPT SUMMARY" or
+        "|cffffd100ATTEMPT SUMMARY|r")
+
+      for _,s in ipairs(stats) do
+        local name=tostring(
+          s.name or
+          ("Encounter "..tostring(s.id or "?")))
+
+        local attempts=tonumber(s.attempts) or 0
+        local wipes=tonumber(s.wipes) or 0
+        local kills=tonumber(s.kills) or 0
+
+        if plain then
+          add(string.format(
+            "%s — Attempts %d  |  Wipes %d  |  Kills %d",
+            name,attempts,wipes,kills))
+        else
+          add(string.format(
+            "%s — |cff00bfffAttempts %d|r  |  |cffff8030Wipes %d|r  |  |cff40ff40Kills %d|r",
+            name,attempts,wipes,kills))
+        end
+      end
+
+      add("")
+    end
+
+    add(plain and
+      "LIVE TRANSITIONS" or
+      "|cffffd100LIVE TRANSITIONS|r")
+
     if #live==0 then
       add("No live encounter transitions captured yet.")
     else
       for _,entry in ipairs(live) do
         local classification=tostring(entry.class or "INFO")
+
         add(string.format(
           "#%s  %s  %s",
           tostring(entry.seq or "?"),
           EncounterHistoryTime(entry.time),
-          tostring(entry.name or ("Encounter "..tostring(entry.id or "?")))))
+          tostring(entry.name or
+            ("Encounter "..tostring(entry.id or "?")))))
+
         add(string.format(
-          "  %s  %s [%s]  ->  %s [%s]",
-          EncounterHistoryClassLabel(classification,plain),
-          tostring(entry.oldname or "UNKNOWN"),
-          tostring(entry.old or "?"),
-          tostring(entry.newname or "UNKNOWN"),
-          tostring(entry.new or "?")))
-        if classification~="NORMAL" and entry.detail and entry.detail~="" then
+          "  %s  %s  ->  %s",
+          EncounterHistoryEventLabel(entry,plain),
+          EncounterHistoryStateLabel(
+            entry.oldname,entry.old,plain),
+          EncounterHistoryStateLabel(
+            entry.newname,entry.new,plain)))
+
+        if classification~="NORMAL" and
+           entry.detail and
+           entry.detail~="" then
           add("  "..tostring(entry.detail))
         end
+
         add("")
       end
     end
 
     if #initial>0 then
-      add(plain and "INITIAL STATE" or "|cffffd100INITIAL STATE|r")
+      add(plain and
+        "INITIAL STATE" or
+        "|cffffd100INITIAL STATE|r")
+
       for _,entry in ipairs(initial) do
         add(string.format(
-          "#%s  %s  %s  ->  %s [%s]",
+          "#%s  %s  %s  ->  %s",
           tostring(entry.seq or "?"),
           EncounterHistoryTime(entry.time),
-          tostring(entry.name or ("Encounter "..tostring(entry.id or "?"))),
-          tostring(entry.newname or "UNKNOWN"),
-          tostring(entry.new or "?")))
+          tostring(entry.name or
+            ("Encounter "..tostring(entry.id or "?"))),
+          EncounterHistoryStateLabel(
+            entry.newname,entry.new,plain)))
       end
+
       add("")
     end
 
@@ -4181,7 +4278,7 @@ local function BuildDashboard()
   Button(quick,"Inspect Quest",150,30,function() SelectTab("Quest") end,"Open quest search and chain analysis"):SetPoint("TOPLEFT",174,-42)
   Button(quick,"Check Compatibility",150,30,function() RequestCompatibility(); OpenOptions() end,"Query the running AzerCoreOps module"):SetPoint("TOPLEFT",336,-42)
   Button(quick,"Information & Credits",170,30,function() SelectTab("Information") end,"View project links, credits, and acknowledgements"):SetPoint("TOPLEFT",498,-42)
-  local note=quick:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); note:SetPoint("TOPLEFT",12,-92); note:SetPoint("BOTTOMRIGHT",-12,12); note:SetJustifyH("LEFT"); note:SetJustifyV("TOP"); note:SetWordWrap(true); note:SetTextColor(unpack(C.white)); note:SetText("Release: v0.6.0\n\nAzerCore Ops combines safe Player Mode inspection and reporting with server-authorized administrator and Game Master operations. Courier remains under construction and is not included as an active release feature.")
+  local note=quick:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); note:SetPoint("TOPLEFT",12,-92); note:SetPoint("BOTTOMRIGHT",-12,12); note:SetJustifyH("LEFT"); note:SetJustifyV("TOP"); note:SetWordWrap(true); note:SetTextColor(unpack(C.white)); note:SetText("Release: v0.6.1\n\nAzerCore Ops combines safe Player Mode inspection and reporting with server-authorized administrator and Game Master operations. Courier remains under construction and is not included as an active release feature.")
 end
 
 
@@ -4636,12 +4733,16 @@ events:SetScript("OnEvent",function(_,event,arg1)
       instanceUI.diagnostics.loading=false; instanceUI.diagnostics.error=f.reason or "Encounter diagnostic failed"; if instanceUI.RenderDiagnostics then instanceUI.RenderDiagnostics() end; SetStatus(instanceUI.diagnostics.error,true)
     elseif kind=="ENCOUNTER_HISTORY_BEGIN" then
       instanceUI.diagnostics.mode="HISTORY"
-      instanceUI.encounterHistory={entries={},loading=true,header=f,summary=nil,error=nil,generatedAt=nil}
+      instanceUI.encounterHistory={entries={},stats={},loading=true,header=f,summary=nil,error=nil,generatedAt=nil}
       if instanceUI.RenderDiagnostics then instanceUI.RenderDiagnostics() end
       SetStatus("Receiving encounter history for "..tostring(f.name or "current instance").."...")
     elseif kind=="ENCOUNTER_HISTORY_ENTRY" then
       instanceUI.encounterHistory.entries=instanceUI.encounterHistory.entries or {}
       table.insert(instanceUI.encounterHistory.entries,f)
+      if instanceUI.RenderDiagnostics then instanceUI.RenderDiagnostics() end
+    elseif kind=="ENCOUNTER_HISTORY_STATS" then
+      instanceUI.encounterHistory.stats=instanceUI.encounterHistory.stats or {}
+      table.insert(instanceUI.encounterHistory.stats,f)
       if instanceUI.RenderDiagnostics then instanceUI.RenderDiagnostics() end
     elseif kind=="ENCOUNTER_HISTORY_END" then
       instanceUI.encounterHistory.loading=false

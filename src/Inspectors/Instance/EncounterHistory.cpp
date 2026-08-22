@@ -26,6 +26,13 @@ namespace
 constexpr std::size_t MaxEntriesPerInstance = 64;
 constexpr std::uint64_t WipeChainWindowMs = 10000;
 
+struct EncounterCounters
+{
+    std::uint32_t attempts{0};
+    std::uint32_t wipes{0};
+    std::uint32_t kills{0};
+};
+
 struct EncounterHistoryEntry
 {
     std::uint64_t sequence{0};
@@ -37,10 +44,24 @@ struct EncounterHistoryEntry
     EncounterState oldState{TO_BE_DECIDED};
     EncounterState newState{TO_BE_DECIDED};
     std::string classification;
+    std::string event;
+    std::uint32_t attempt{0};
+    std::uint32_t wipes{0};
+    std::uint32_t kills{0};
     std::string detail;
 };
 
-std::unordered_map<std::uint32_t, std::deque<EncounterHistoryEntry>> HistoryByInstance;
+using EncounterCounterMap =
+    std::unordered_map<std::uint32_t, EncounterCounters>;
+
+std::unordered_map<
+    std::uint32_t,
+    std::deque<EncounterHistoryEntry>> HistoryByInstance;
+
+std::unordered_map<
+    std::uint32_t,
+    EncounterCounterMap> CountersByInstance;
+
 std::mutex HistoryMutex;
 std::uint64_t NextSequence = 0;
 
@@ -73,7 +94,8 @@ std::pair<std::string, std::string> ClassifyTransition(
     EncounterState newState,
     std::uint64_t timestampMs)
 {
-    EncounterHistoryEntry const* previous = PreviousFor(entries, encounterId);
+    EncounterHistoryEntry const* previous =
+        PreviousFor(entries, encounterId);
 
     if (oldState == TO_BE_DECIDED)
         return {
@@ -90,7 +112,7 @@ std::pair<std::string, std::string> ClassifyTransition(
     if (oldState == IN_PROGRESS && newState == DONE)
         return {
             "NORMAL",
-            "DONE was requested after the encounter had been in progress"
+            "Encounter completed after an active pull"
         };
 
     if (oldState == IN_PROGRESS && newState == FAIL)
@@ -99,10 +121,16 @@ std::pair<std::string, std::string> ClassifyTransition(
             "Encounter failed directly from an active pull"
         };
 
+    if (oldState == FAIL && newState == NOT_STARTED)
+        return {
+            "RESET_STEP",
+            "Encounter returned to the not-started state after a failed attempt"
+        };
+
     if (oldState == IN_PROGRESS && newState == NOT_STARTED)
         return {
             "RESET_STEP",
-            "Encounter left the active state; this may be the first step of normal wipe handling"
+            "Encounter reset directly from an active pull; counted as a wipe"
         };
 
     if (oldState == NOT_STARTED && newState == FAIL)
@@ -137,6 +165,21 @@ std::pair<std::string, std::string> ClassifyTransition(
     };
 }
 
+EncounterCounters CurrentCounters(
+    std::uint32_t instanceId,
+    std::uint32_t encounterId)
+{
+    auto instanceItr = CountersByInstance.find(instanceId);
+    if (instanceItr == CountersByInstance.end())
+        return {};
+
+    auto encounterItr = instanceItr->second.find(encounterId);
+    if (encounterItr == instanceItr->second.end())
+        return {};
+
+    return encounterItr->second;
+}
+
 void RecordTransition(
     Map* map,
     std::uint32_t encounterId,
@@ -152,21 +195,116 @@ void RecordTransition(
 
     std::lock_guard<std::mutex> lock(HistoryMutex);
 
-    std::deque<EncounterHistoryEntry>& entries = HistoryByInstance[instanceId];
+    std::deque<EncounterHistoryEntry>& entries =
+        HistoryByInstance[instanceId];
+
     std::uint64_t timestampMs = CurrentTimeMs();
-    auto classification = ClassifyTransition(entries, encounterId, oldState, newState, timestampMs);
+
+    auto classification =
+        ClassifyTransition(
+            entries,
+            encounterId,
+            oldState,
+            newState,
+            timestampMs);
+
+    EncounterCounters counters =
+        CurrentCounters(instanceId, encounterId);
+
+    std::string event = "STATE";
+
+    if (classification.first == "INITIALIZATION")
+    {
+        event = "INITIALIZATION";
+    }
+    else if (oldState == NOT_STARTED &&
+             newState == IN_PROGRESS)
+    {
+        EncounterCounters& current =
+            CountersByInstance[instanceId][encounterId];
+
+        ++current.attempts;
+        counters = current;
+        event = "PULL";
+    }
+    else if (oldState == IN_PROGRESS &&
+             newState == FAIL)
+    {
+        EncounterCounters& current =
+            CountersByInstance[instanceId][encounterId];
+
+        // If recording started in the middle of an already-active
+        // pull, preserve a sensible attempt count.
+        if (current.attempts <= current.wipes + current.kills)
+            ++current.attempts;
+
+        ++current.wipes;
+        counters = current;
+        event = "WIPE";
+    }
+    else if (oldState == IN_PROGRESS &&
+             newState == NOT_STARTED)
+    {
+        EncounterCounters& current =
+            CountersByInstance[instanceId][encounterId];
+
+        // Many encounter scripts reset directly from IN_PROGRESS
+        // to NOT_STARTED without emitting FAIL. For attempt tracking
+        // this is still a failed pull and therefore counts as a wipe.
+        if (current.attempts <= current.wipes + current.kills)
+            ++current.attempts;
+
+        ++current.wipes;
+        counters = current;
+        event = "WIPE";
+    }
+    else if (classification.first == "WIPE_CHAIN")
+    {
+        // The preceding IN_PROGRESS -> NOT_STARTED transition already
+        // counted this failed attempt. Do not increment the wipe twice.
+        counters =
+            CurrentCounters(instanceId, encounterId);
+        event = "RESET";
+    }
+    else if (oldState == IN_PROGRESS &&
+             newState == DONE)
+    {
+        EncounterCounters& current =
+            CountersByInstance[instanceId][encounterId];
+
+        if (current.attempts <= current.wipes + current.kills)
+            ++current.attempts;
+
+        ++current.kills;
+        counters = current;
+        event = "KILL";
+    }
+    else if (oldState == FAIL &&
+             newState == NOT_STARTED)
+    {
+        counters =
+            CurrentCounters(instanceId, encounterId);
+        event = "RESET";
+    }
 
     EncounterHistoryEntry entry;
     entry.sequence = ++NextSequence;
     entry.timestampMs = timestampMs;
     entry.mapId = map->GetId();
     entry.instanceId = instanceId;
-    entry.difficulty = static_cast<std::uint32_t>(map->GetDifficulty());
+    entry.difficulty =
+        static_cast<std::uint32_t>(map->GetDifficulty());
     entry.encounterId = encounterId;
     entry.oldState = oldState;
     entry.newState = newState;
-    entry.classification = std::move(classification.first);
-    entry.detail = std::move(classification.second);
+    entry.classification =
+        std::move(classification.first);
+    entry.event = std::move(event);
+    entry.attempt = counters.attempts;
+    entry.wipes = counters.wipes;
+    entry.kills = counters.kills;
+    entry.detail =
+        std::move(classification.second);
 
     entries.push_back(std::move(entry));
 
@@ -177,18 +315,59 @@ void RecordTransition(
 void ClearInstance(std::uint32_t instanceId)
 {
     std::lock_guard<std::mutex> lock(HistoryMutex);
+
     HistoryByInstance.erase(instanceId);
+    CountersByInstance.erase(instanceId);
 }
 
-std::vector<EncounterHistoryEntry> Snapshot(std::uint32_t instanceId)
+struct EncounterHistorySnapshot
+{
+    std::vector<EncounterHistoryEntry> entries;
+
+    std::vector<
+        std::pair<
+            std::uint32_t,
+            EncounterCounters>> counters;
+};
+
+EncounterHistorySnapshot Snapshot(
+    std::uint32_t instanceId)
 {
     std::lock_guard<std::mutex> lock(HistoryMutex);
 
-    auto itr = HistoryByInstance.find(instanceId);
-    if (itr == HistoryByInstance.end())
-        return {};
+    EncounterHistorySnapshot snapshot;
 
-    return {itr->second.begin(), itr->second.end()};
+    auto historyItr =
+        HistoryByInstance.find(instanceId);
+
+    if (historyItr != HistoryByInstance.end())
+    {
+        snapshot.entries.assign(
+            historyItr->second.begin(),
+            historyItr->second.end());
+    }
+
+    auto countersItr =
+        CountersByInstance.find(instanceId);
+
+    if (countersItr != CountersByInstance.end())
+    {
+        snapshot.counters.reserve(
+            countersItr->second.size());
+
+        for (auto const& pair : countersItr->second)
+            snapshot.counters.push_back(pair);
+
+        std::sort(
+            snapshot.counters.begin(),
+            snapshot.counters.end(),
+            [](auto const& left, auto const& right)
+            {
+                return left.first < right.first;
+            });
+    }
+
+    return snapshot;
 }
 
 std::string ResolveEncounterName(Map* map, std::uint32_t scriptId)
@@ -288,7 +467,9 @@ bool EncounterHistory::Show(ChatHandler* handler)
     Player* player = handler->GetPlayer();
     Map* map = player->GetMap();
 
-    if (!map || !map->Instanceable() || !map->GetInstanceId())
+    if (!map ||
+        !map->Instanceable() ||
+        !map->GetInstanceId())
     {
         Protocol::SendEncounterHistoryError(
             handler,
@@ -296,19 +477,23 @@ bool EncounterHistory::Show(ChatHandler* handler)
         return true;
     }
 
-    std::vector<EncounterHistoryEntry> entries = Snapshot(map->GetInstanceId());
+    EncounterHistorySnapshot snapshot =
+        Snapshot(map->GetInstanceId());
 
     Protocol::SendEncounterHistoryBegin(
         handler,
         map->GetId(),
         map->GetInstanceId(),
-        static_cast<std::uint32_t>(map->GetDifficulty()),
+        static_cast<std::uint32_t>(
+            map->GetDifficulty()),
         map->GetMapName(),
-        static_cast<std::uint32_t>(entries.size()));
+        static_cast<std::uint32_t>(
+            snapshot.entries.size()));
 
     std::uint32_t anomalies = 0;
 
-    for (EncounterHistoryEntry const& entry : entries)
+    for (EncounterHistoryEntry const& entry :
+         snapshot.entries)
     {
         if (entry.classification == "SUSPICIOUS")
             ++anomalies;
@@ -318,22 +503,46 @@ bool EncounterHistory::Show(ChatHandler* handler)
             entry.sequence,
             entry.timestampMs,
             entry.encounterId,
-            ResolveEncounterName(map, entry.encounterId),
-            static_cast<std::uint32_t>(entry.oldState),
-            InstanceScript::GetBossStateName(entry.oldState),
-            static_cast<std::uint32_t>(entry.newState),
-            InstanceScript::GetBossStateName(entry.newState),
+            ResolveEncounterName(
+                map,
+                entry.encounterId),
+            static_cast<std::uint32_t>(
+                entry.oldState),
+            InstanceScript::GetBossStateName(
+                entry.oldState),
+            static_cast<std::uint32_t>(
+                entry.newState),
+            InstanceScript::GetBossStateName(
+                entry.newState),
             entry.classification,
+            entry.event,
+            entry.attempt,
+            entry.wipes,
+            entry.kills,
             entry.detail);
+    }
+
+    for (auto const& pair :
+         snapshot.counters)
+    {
+        Protocol::SendEncounterHistoryStats(
+            handler,
+            pair.first,
+            ResolveEncounterName(map, pair.first),
+            pair.second.attempts,
+            pair.second.wipes,
+            pair.second.kills);
     }
 
     Protocol::SendEncounterHistoryEnd(
         handler,
-        static_cast<std::uint32_t>(entries.size()),
+        static_cast<std::uint32_t>(
+            snapshot.entries.size()),
         anomalies);
 
     return true;
 }
+
 } // namespace AzerCoreOps
 
 void AddSC_azercore_ops_encounter_history()
