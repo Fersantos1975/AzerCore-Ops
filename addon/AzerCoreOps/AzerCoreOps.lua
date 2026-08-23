@@ -2506,16 +2506,15 @@ local function BuildItem()
     local s=NonEmpty(titleBox,"an item name or ID"); if not s then return end
     local directId=tonumber(s)
     if directId and directId>0 then itemIdBox:SetText(directId); itemUI.Select(directId); SetStatus("Inspecting item ID "..directId)
-    else itemUI.selected=nil; itemUI.view="OVERVIEW"; itemUI.Render(); BeginLookup("item",string.format(CMD.itemLookup,s)) end
+    else itemIdBox:SetText(""); itemUI.selected=nil; itemUI.view="OVERVIEW"; itemUI.Render(); BeginLookup("item",string.format(CMD.itemLookup,s)) end
   end,"Search by item name or inspect an exact item ID"); lookupButton:SetPoint("TOPLEFT",10,-80)
   local clearButton=Button(operations,"Clear",42,24,function() if itemUI.Clear then itemUI.Clear() end end,"Clear the item search and selected item"); clearButton:SetPoint("LEFT",lookupButton,"RIGHT",4,0)
   local idLabel=Section(operations,"ITEM ID",C.gold); idLabel:SetPoint("TOPLEFT",10,-116)
   itemIdBox=Edit(operations,76,true); itemIdBox:SetPoint("TOPLEFT",10,-133); itemIdBox.azerCoreOpsExpected="item"
   local quantityLabel=Section(operations,"QTY",C.gold); quantityLabel:SetPoint("TOPLEFT",94,-116)
   local count=Edit(operations,44,true); count:SetPoint("TOPLEFT",94,-133); count:SetText("1")
-  local previewButton=Button(operations,"Inspect Item",128,24,function() local id=PositiveId(itemIdBox,"item"); if id then itemUI.Select(id) end end,"Load the entered item into the Item Inspector"); previewButton:SetPoint("TOPLEFT",10,-164)
-  local addItem=Button(operations,"Add Item",128,24,function() local id=PositiveId(itemIdBox,"item"); local n=PositiveId(count,"quantity"); if id and n then SendCommand(string.format(CMD.itemAdd,id,n)) end end,"Add the selected quantity to your inventory"); addItem:SetPoint("TOPLEFT",10,-195); Platform:RegisterRoleButton(addItem,"GM_REQUIRED")
-  local removeItem=Button(operations,"Remove Item",128,24,function() local id=PositiveId(itemIdBox,"item"); local n=PositiveId(count,"quantity"); if id and n then Confirm(string.format(CMD.itemRemove,id,n)) end end,"Remove the selected quantity from your inventory"); removeItem:SetPoint("TOPLEFT",10,-226); Platform:RegisterRoleButton(removeItem,"GM_REQUIRED")
+  local addItem=Button(operations,"Add Item",128,24,function() local id=PositiveId(itemIdBox,"item"); local n=PositiveId(count,"quantity"); if id and n then SendCommand(string.format(CMD.itemAdd,id,n)) end end,"Add the selected quantity to your inventory"); addItem:SetPoint("TOPLEFT",10,-164); Platform:RegisterRoleButton(addItem,"GM_REQUIRED")
+  local removeItem=Button(operations,"Remove Item",128,24,function() local id=PositiveId(itemIdBox,"item"); local n=PositiveId(count,"quantity"); if id and n then Confirm(string.format(CMD.itemRemove,id,n)) end end,"Remove the selected quantity from your inventory"); removeItem:SetPoint("TOPLEFT",10,-195); Platform:RegisterRoleButton(removeItem,"GM_REQUIRED")
 
   local body=CreateFrame("Frame",nil,p); body:SetPoint("TOPLEFT",166,-70); body:SetPoint("BOTTOMRIGHT",-10,36); Backdrop(body,C.panel)
   local identity=CreateFrame("Frame",nil,body); identity:SetPoint("TOPLEFT",8,-8); identity:SetPoint("TOPRIGHT",-8,-8); identity:SetHeight(82); Backdrop(identity,C.bg)
@@ -2833,11 +2832,46 @@ local function BuildItem()
     if not retry or retry==0 then itemUI.server={crafts={},reagents={},recipes={},sources={},uses={},requirements={},access=nil,preview=nil}; itemUI.captureId=id; itemUI.loading=true; SendCommand(string.format(CMD.itemInspect,id)) end
     itemIdBox:SetText(id); selectedName:SetText(name); selectedMeta:SetText(string.format("Item ID %d  •  %s%s",id,itemType or "Loading item data",itemLevel and ("  •  Item level "..itemLevel) or "")); icon:SetTexture(texture or "Interface\\Icons\\INV_Misc_QuestionMark")
     if quality then local r,g,b=GetItemQualityColor(quality); iconFrame:SetBackdropBorderColor(r,g,b); selectedName:SetTextColor(r,g,b) else selectedName:SetTextColor(unpack(C.white)) end
-    itemUI.view="PREVIEW"; itemUI.Render(); SetStatus("Selected item "..name.." ["..id.."]")
+    if not retry or retry==0 then itemUI.view="PREVIEW" end
+    itemUI.Render(); SetStatus("Selected item "..name.." ["..id.."]")
     if (not itemType or not texture) and (retry or 0)<20 then After(.25,function() if itemUI.selected and itemUI.selected.id==id then itemUI.Select(id,result,(retry or 0)+1) end end) end
   end
   local views={{"Overview","OVERVIEW"},{"Preview","PREVIEW"},{"Crafting","CRAFTING"},{"Sources","SOURCES"},{"Stats","STATS"},{"Requirements","REQUIREMENTS"},{"Technical","TECHNICAL"}}
-  for i,d in ipairs(views) do local label,key=d[1],d[2]; local b=Button(action,label,88,22,function() itemUI.view=key; itemUI.Render() end,"Open the Item "..label.." workspace"); b:SetPoint("TOPLEFT",8,-29-(i-1)*27); itemUI.viewButtons[key]=b; b:SetScript("OnLeave",function() itemUI.Render(); GameTooltip:Hide() end) end
+  for i,d in ipairs(views) do
+    local label,key=d[1],d[2]
+    local b=Button(action,label,88,22,function()
+      local enteredId=tonumber(itemIdBox:GetText())
+      local selectedId=itemUI.selected and itemUI.selected.id
+
+      if not selectedId and (not enteredId or enteredId<=0) then
+        local searchText=titleBox:GetText()
+        if searchText and searchText~="" then
+          local searchId=tonumber(searchText)
+          if searchId and searchId>0 then
+            SetStatus("No item selected. Click Search to inspect that exact Item ID.",true)
+          else
+            SetStatus("No item selected. Click Search, then select an item from the results.",true)
+          end
+        else
+          SetStatus("No item selected. Search for an item or enter an exact Item ID.",true)
+        end
+        return
+      end
+
+      if enteredId and enteredId>0 and enteredId~=selectedId then
+        itemUI.Select(enteredId,nil,0)
+      elseif selectedId then
+        local selected=itemUI.selected
+        itemUI.Select(selectedId,{title=selected.name,link=selected.link},20)
+      end
+
+      itemUI.view=key
+      itemUI.Render()
+    end,"Open the Item "..label.." workspace")
+    b:SetPoint("TOPLEFT",8,-29-(i-1)*27)
+    itemUI.viewButtons[key]=b
+    b:SetScript("OnLeave",function() itemUI.Render(); GameTooltip:Hide() end)
+  end
   Button(action,"Copy",88,22,function() ShowSelectableReport("Copy Item report",ItemReport()) end,"Copy the active Item report"):SetPoint("BOTTOMLEFT",8,61)
   Button(action,"Share",88,22,function() local f=EnsureShareFrame(); f:SetCapturedMessage(ItemReport(),"ITEM",function() return ItemReport(),"ITEM" end); f:Show(); f:Raise() end,"Share the active Item report"):SetPoint("BOTTOMLEFT",8,34)
   Button(action,"Export",88,22,function() ShowSelectableReport("Export Item report",ItemReport()) end,"Export the active Item report"):SetPoint("BOTTOMLEFT",8,7)
