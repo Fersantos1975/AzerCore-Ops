@@ -2601,7 +2601,8 @@ local function BuildItem()
   local function EnsureItemLinkRows(count)
     for i=#itemUI.linkRows+1,count do
       local row=Button(reportChild,"",355,24,function(self) if IsShiftKeyDown() and self.link then if HandleModifiedItemClick then HandleModifiedItemClick(self.link) elseif ChatEdit_InsertLink then ChatEdit_InsertLink(self.link) end end end,"Shift-click linked entries to insert them into chat")
-      local rowLabel=row:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); rowLabel:SetPoint("LEFT",7,0); rowLabel:SetPoint("RIGHT",-7,0); rowLabel:SetJustifyH("LEFT"); rowLabel:SetWordWrap(false); row:SetFontString(rowLabel)
+      local rowLabel=row:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); rowLabel:SetJustifyH("LEFT"); rowLabel:SetJustifyV("TOP"); rowLabel:SetWordWrap(false); row:SetFontString(rowLabel); row.label=rowLabel
+      local rowDetail=row:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); rowDetail:SetJustifyH("LEFT"); rowDetail:SetJustifyV("TOP"); rowDetail:SetWordWrap(true); rowDetail:SetTextColor(unpack(C.muted)); rowDetail:Hide(); row.detail=rowDetail
       row:SetPoint("TOPLEFT",4,-4-(i-1)*27); row:SetScript("OnEnter",function(self) self:SetBackdropColor(unpack(C.hover)); if self.link then GameTooltip:SetOwner(self,"ANCHOR_RIGHT"); GameTooltip:SetHyperlink(self.link); GameTooltip:Show() end end); row:SetScript("OnLeave",function(self) self:SetBackdropColor(unpack(C.button)); GameTooltip:Hide() end); row:Hide(); itemUI.linkRows[i]=row
     end
   end
@@ -2641,7 +2642,7 @@ local function BuildItem()
     table.insert(lines,""); table.insert(lines,"|cff888888Shift-click the selected-item icon to insert its item link into chat.|r")
     return table.concat(lines,"\n")
   end
-  local statNames={ITEM_MOD_STRENGTH_SHORT="Strength",ITEM_MOD_AGILITY_SHORT="Agility",ITEM_MOD_STAMINA_SHORT="Stamina",ITEM_MOD_INTELLECT_SHORT="Intellect",ITEM_MOD_SPIRIT_SHORT="Spirit",ITEM_MOD_HIT_RATING_SHORT="Hit Rating",ITEM_MOD_CRIT_RATING_SHORT="Critical Strike Rating",ITEM_MOD_HASTE_RATING_SHORT="Haste Rating",ITEM_MOD_ATTACK_POWER_SHORT="Attack Power",ITEM_MOD_RANGED_ATTACK_POWER_SHORT="Ranged Attack Power",ITEM_MOD_SPELL_POWER_SHORT="Spell Power",ITEM_MOD_MANA_REGENERATION_SHORT="Mana per 5 sec",ITEM_MOD_EXPERTISE_RATING_SHORT="Expertise Rating",ITEM_MOD_DODGE_RATING_SHORT="Dodge Rating",ITEM_MOD_PARRY_RATING_SHORT="Parry Rating",ITEM_MOD_BLOCK_RATING_SHORT="Block Rating",ITEM_MOD_RESILIENCE_RATING_SHORT="Resilience Rating",EMPTY_SOCKET_RED="Red Socket",EMPTY_SOCKET_YELLOW="Yellow Socket",EMPTY_SOCKET_BLUE="Blue Socket",EMPTY_SOCKET_META="Meta Socket"}
+  local statNames={RESISTANCE0_NAME="Armor",RESISTANCE1_NAME="Holy Resistance",RESISTANCE2_NAME="Fire Resistance",RESISTANCE3_NAME="Nature Resistance",RESISTANCE4_NAME="Frost Resistance",RESISTANCE5_NAME="Shadow Resistance",RESISTANCE6_NAME="Arcane Resistance",ITEM_MOD_STRENGTH_SHORT="Strength",ITEM_MOD_AGILITY_SHORT="Agility",ITEM_MOD_STAMINA_SHORT="Stamina",ITEM_MOD_INTELLECT_SHORT="Intellect",ITEM_MOD_SPIRIT_SHORT="Spirit",ITEM_MOD_HIT_RATING_SHORT="Hit Rating",ITEM_MOD_CRIT_RATING_SHORT="Critical Strike Rating",ITEM_MOD_HASTE_RATING_SHORT="Haste Rating",ITEM_MOD_ATTACK_POWER_SHORT="Attack Power",ITEM_MOD_RANGED_ATTACK_POWER_SHORT="Ranged Attack Power",ITEM_MOD_SPELL_POWER_SHORT="Spell Power",ITEM_MOD_MANA_REGENERATION_SHORT="Mana per 5 sec",ITEM_MOD_EXPERTISE_RATING_SHORT="Expertise Rating",ITEM_MOD_DODGE_RATING_SHORT="Dodge Rating",ITEM_MOD_PARRY_RATING_SHORT="Parry Rating",ITEM_MOD_BLOCK_RATING_SHORT="Block Rating",ITEM_MOD_RESILIENCE_RATING_SHORT="Resilience Rating",EMPTY_SOCKET_RED="Red Socket",EMPTY_SOCKET_YELLOW="Yellow Socket",EMPTY_SOCKET_BLUE="Blue Socket",EMPTY_SOCKET_META="Meta Socket"}
   local statOrder={"ITEM_MOD_STRENGTH_SHORT","ITEM_MOD_AGILITY_SHORT","ITEM_MOD_STAMINA_SHORT","ITEM_MOD_INTELLECT_SHORT","ITEM_MOD_SPIRIT_SHORT","ITEM_MOD_ATTACK_POWER_SHORT","ITEM_MOD_RANGED_ATTACK_POWER_SHORT","ITEM_MOD_SPELL_POWER_SHORT","ITEM_MOD_HIT_RATING_SHORT","ITEM_MOD_CRIT_RATING_SHORT","ITEM_MOD_HASTE_RATING_SHORT","ITEM_MOD_EXPERTISE_RATING_SHORT","ITEM_MOD_DODGE_RATING_SHORT","ITEM_MOD_PARRY_RATING_SHORT","ITEM_MOD_BLOCK_RATING_SHORT","ITEM_MOD_RESILIENCE_RATING_SHORT","ITEM_MOD_MANA_REGENERATION_SHORT","EMPTY_SOCKET_META","EMPTY_SOCKET_RED","EMPTY_SOCKET_YELLOW","EMPTY_SOCKET_BLUE"}
   local function ColoredStatsReport(item)
     local stats=GetItemStats and GetItemStats(ItemLink(item)); if not stats then return "|cffaaaaaaNo numeric item stats are available from the client cache.|r" end
@@ -2688,9 +2689,14 @@ local function BuildItem()
       for _,requirement in ipairs(requirements) do
         if requirement.kind~="FACTION_RACE" and requirement.kind~="CLASS" and not tostring(requirement.kind or ""):find("^ACQUISITION_") then
           if not extra then table.insert(lines,""); table.insert(lines,"|cffffd100CHARACTER CHECKS|r"); extra=true end
-          local passed=tonumber(requirement.passed)==1
-          table.insert(lines,string.format("%s%s:|r  |cffffffffRequired %s|r  |cffaaaaaa(Current: %s)|r",passed and "|cff55ff55" or "|cffff5555",tostring(requirement.name or requirement.kind or "Requirement"),tostring(requirement.required or "?"),tostring(requirement.current or "?")))
-          if not passed and requirement.detail and requirement.detail~="" then table.insert(lines,"  |cffff5555"..requirement.detail.."|r") end
+          if requirement.kind=="LEGACY_HONOR" then
+            table.insert(lines,string.format("|cffffaa00%s:|r  |cffffffffRequired %s|r  |cffffaa00(%s)|r",tostring(requirement.name or "Legacy honor rank"),tostring(requirement.required or "?"),tostring(requirement.current or "Informational")))
+            if requirement.detail and requirement.detail~="" then table.insert(lines,"  |cff888888"..requirement.detail.."|r") end
+          else
+            local passed=tonumber(requirement.passed)==1
+            table.insert(lines,string.format("%s%s:|r  |cffffffffRequired %s|r  |cffaaaaaa(Current: %s)|r",passed and "|cff55ff55" or "|cffff5555",tostring(requirement.name or requirement.kind or "Requirement"),tostring(requirement.required or "?"),tostring(requirement.current or "?")))
+            if not passed and requirement.detail and requirement.detail~="" then table.insert(lines,"  |cffff5555"..requirement.detail.."|r") end
+          end
         end
       end
       local generalAcquisition={}; local paths={}; local pathOrder={}
@@ -2752,7 +2758,7 @@ local function BuildItem()
     if itemUI.view=="STATS" then
       table.insert(lines,"ITEM STATS")
       local found=false
-      if GetItemStats and item.link then local stats=GetItemStats(item.link); if stats then for stat,value in pairs(stats) do table.insert(lines,string.format("%s: %s",stat,value)); found=true end end end
+      if GetItemStats and item.link then local stats=GetItemStats(item.link); if stats then for stat,value in pairs(stats) do local label=statNames[stat] or stat:gsub("^ITEM_MOD_",""):gsub("_SHORT$",""):gsub("_"," "); table.insert(lines,string.format("%s: %s",label,value)); found=true end end end
       if not found then table.insert(lines,"No numeric item stats are available from the client cache.") end
     elseif itemUI.view=="CRAFTING" then
       local server=itemUI.server or {}; table.insert(lines,"CRAFTING METHODS")
@@ -2766,7 +2772,7 @@ local function BuildItem()
       for _,use in ipairs(server.uses or {}) do table.insert(lines,string.format("%s — %s skill %s — creates %sx %s [Item %s]",use.spellname or ("Spell "..tostring(use.spell)),use.profession or "Unknown",use.rank or "?",use.count or "1",use.resultname or "Unknown",use.resultid or "?")) end
     elseif itemUI.view=="SOURCES" then
       local sources=itemUI.server and itemUI.server.sources or {}; table.insert(lines,"KNOWN SOURCES")
-      if #sources==0 then table.insert(lines,"No vendor, creature-drop or quest-reward source was reported.") end
+      if #sources==0 then table.insert(lines,"No vendor, creature-drop, gameobject-loot or quest-reward source was reported.") end
       for _,source in ipairs(sources) do table.insert(lines,string.format("%s — %s [%s]%s",source.type or "SOURCE",source.name or "Unknown",source.id or "?",source.detail and source.detail~="" and (" — "..source.detail) or "")) end
     elseif itemUI.view=="REQUIREMENTS" then
       table.insert(lines,string.format("Minimum level: %s\nItem level: %s\nEquipment slot: %s\nType: %s\nSubtype: %s",item.minLevel or "0",item.itemLevel or "?",equipNames[item.equipLoc] or item.equipLoc or "Not equippable",item.itemType or "?",item.subType or "?"))
@@ -2842,10 +2848,34 @@ local function BuildItem()
           for _,use in ipairs(server.uses or {}) do table.insert(entries,{text=string.format("    %s creates %sx %s",use.profession or use.spellname or "Craft",use.count or "1",use.resultname or use.resultid or "Unknown"),link=ItemLink({id=use.resultid,name=use.resultname,quality=1})}) end
           if #entries==0 then table.insert(entries,{text=itemUI.loading and "Loading crafting information..." or "No crafting method was reported for this item."}) end
         else
-          for _,source in ipairs(server.sources or {}) do local link=source.type=="QUEST_REWARD" and QuestLink(source.id,source.name) or nil; table.insert(entries,{text=string.format("%s — %s%s",source.type or "SOURCE",source.name or source.id or "Unknown",source.detail and source.detail~="" and (" — "..source.detail) or ""),link=link}) end
-          if #entries==0 then table.insert(entries,{text=itemUI.loading and "Loading item sources..." or "No vendor, creature-drop or quest-reward source was reported."}) end
+          for _,source in ipairs(server.sources or {}) do
+            local link=source.type=="QUEST_REWARD" and QuestLink(source.id,source.name) or nil
+            table.insert(entries,{text=string.format("%s — %s",source.type or "SOURCE",source.name or source.id or "Unknown"),detail=source.detail or "",link=link})
+          end
+          if #entries==0 then table.insert(entries,{text=itemUI.loading and "Loading item sources..." or "No vendor, creature-drop, gameobject-loot or quest-reward source was reported."}) end
         end
-        EnsureItemLinkRows(#entries); for i,entry in ipairs(entries) do local row=itemUI.linkRows[i]; row.link=entry.link; row:SetText(entry.text); row:Show() end; reportChild:SetHeight(math.max(370,#entries*27+10))
+        EnsureItemLinkRows(#entries)
+        local y=-4
+        for i,entry in ipairs(entries) do
+          local row=itemUI.linkRows[i]
+          row:ClearAllPoints(); row:SetPoint("TOPLEFT",4,y); row:SetWidth(355); row.link=entry.link
+          row.label:ClearAllPoints()
+          if itemUI.view=="SOURCES" then
+            row.label:SetPoint("TOPLEFT",7,-5); row.label:SetWidth(341); row.label:SetJustifyV("TOP"); row.label:SetWordWrap(true); row:SetText(entry.text or "")
+            local titleHeight=math.max(13,math.ceil(row.label:GetStringHeight() or 13)); row.label:SetHeight(titleHeight)
+            local detail=tostring(entry.detail or "")
+            local detailHeight=0
+            if detail~="" then
+              row.detail:ClearAllPoints(); row.detail:SetPoint("TOPLEFT",row.label,"BOTTOMLEFT",0,-3); row.detail:SetWidth(341); row.detail:SetText(detail); row.detail:SetWordWrap(true); row.detail:Show()
+              detailHeight=math.max(13,math.ceil(row.detail:GetStringHeight() or 13)); row.detail:SetHeight(detailHeight)
+            else row.detail:SetText(""); row.detail:Hide() end
+            row:SetHeight(10+titleHeight+(detailHeight>0 and (3+detailHeight) or 0))
+          else
+            row.detail:SetText(""); row.detail:Hide(); row.label:SetPoint("LEFT",7,0); row.label:SetPoint("RIGHT",-7,0); row.label:SetJustifyV("MIDDLE"); row.label:SetWordWrap(false); row:SetHeight(24); row:SetText(entry.text or "")
+          end
+          row:Show(); y=y-row:GetHeight()-3
+        end
+        reportChild:SetHeight(math.max(370,-y+7))
       else
         if showResults then reportText:SetText("") elseif itemUI.view=="OVERVIEW" then reportText:SetText(ColoredTooltipReport(itemUI.selected) or ItemReport()) elseif itemUI.view=="STATS" then reportText:SetText(ColoredStatsReport(itemUI.selected)) elseif itemUI.view=="REQUIREMENTS" then reportText:SetText(ColoredRequirementsReport(itemUI.selected)) else reportText:SetText(ItemReport()) end
         reportChild:SetHeight(math.max(370,reportText:GetStringHeight()+170))

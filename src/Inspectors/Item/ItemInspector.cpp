@@ -1,14 +1,18 @@
 #include "ItemInspector.h"
 
 #include "Chat.h"
+#include "CreatureData.h"
 #include "DatabaseEnv.h"
 #include "DBCStores.h"
 #include "ObjectMgr.h"
+#include "Opcodes.h"
 #include "Player.h"
 #include "Protocol/ChatProtocol.h"
 #include "QuestDef.h"
 #include "SpellInfo.h"
 #include "SpellMgr.h"
+#include "WorldPacket.h"
+#include "WorldSession.h"
 
 #include <algorithm>
 #include <cstdlib>
@@ -87,6 +91,28 @@ std::string SpellName(uint32 spellId)
     return "Spell " + std::to_string(spellId);
 }
 
+std::string LegacyHonorRankName(uint32 rank)
+{
+    switch (rank)
+    {
+        case 5: return "Private / Scout";
+        case 6: return "Corporal / Grunt";
+        case 7: return "Sergeant";
+        case 8: return "Master Sergeant / Senior Sergeant";
+        case 9: return "Sergeant Major / First Sergeant";
+        case 10: return "Knight / Stone Guard";
+        case 11: return "Knight-Lieutenant / Blood Guard";
+        case 12: return "Knight-Captain / Legionnaire";
+        case 13: return "Knight-Champion / Centurion";
+        case 14: return "Lieutenant Commander / Champion";
+        case 15: return "Commander / Lieutenant General";
+        case 16: return "Marshal / General";
+        case 17: return "Field Marshal / Warlord";
+        case 18: return "Grand Marshal / High Warlord";
+        default: return "Legacy PvP rank " + std::to_string(rank);
+    }
+}
+
 std::string ProfessionName(uint32 skill);
 
 std::string SkillName(uint32 skillId)
@@ -104,6 +130,89 @@ struct ItemPreviewInfo
     uint32 display = 0;
 };
 
+uint32 ResolveCreatureDisplay(uint32 creatureEntry)
+{
+    if (!creatureEntry)
+        return 0;
+
+    if (CreatureTemplate const* creatureTemplate = sObjectMgr->GetCreatureTemplate(creatureEntry))
+        if (CreatureModel const* model = creatureTemplate->GetFirstValidModel())
+            return model->CreatureDisplayID;
+
+    return 0;
+}
+
+// Prime the 3.3.5 client creature cache before DressUpModel:SetCreature().
+// Keep this payload aligned with WorldSession::HandleCreatureQueryOpcode();
+// CreatureTemplate::queryData is not equivalent on the supported core branch.
+void SendCreatureCacheRecord(ChatHandler* handler, uint32 creatureEntry)
+{
+    if (!handler || !creatureEntry)
+        return;
+
+    WorldSession* session = handler->GetSession();
+    if (!session)
+        return;
+
+    CreatureTemplate const* creature = sObjectMgr->GetCreatureTemplate(creatureEntry);
+    if (!creature)
+        return;
+
+    std::string name = creature->Name;
+    std::string title = creature->SubName;
+
+    LocaleConstant locale = session->GetSessionDbLocaleIndex();
+    if (locale >= 0)
+    {
+        if (CreatureLocale const* creatureLocale = sObjectMgr->GetCreatureLocale(creatureEntry))
+        {
+            ObjectMgr::GetLocaleString(creatureLocale->Name, locale, name);
+            ObjectMgr::GetLocaleString(creatureLocale->Title, locale, title);
+        }
+    }
+
+    WorldPacket data(SMSG_CREATURE_QUERY_RESPONSE, 100);
+    data << uint32(creatureEntry);
+    data << name;
+    data << uint8(0) << uint8(0) << uint8(0);
+    data << title;
+    data << creature->IconName;
+    data << uint32(creature->type_flags);
+    data << uint32(creature->type);
+    data << uint32(creature->family);
+    data << uint32(creature->rank);
+    data << uint32(creature->KillCredit[0]);
+    data << uint32(creature->KillCredit[1]);
+
+    for (uint32 index = 0; index < 4; ++index)
+    {
+        if (CreatureModel const* model = creature->GetModelByIdx(index))
+            data << uint32(model->CreatureDisplayID);
+        else
+            data << uint32(0);
+    }
+
+    data << float(creature->ModHealth);
+    data << float(creature->ModMana);
+    data << uint8(creature->RacialLeader);
+
+    CreatureQuestItemList const* questItems = sObjectMgr->GetCreatureQuestItemList(creatureEntry);
+    if (questItems)
+    {
+        for (std::size_t index = 0; index < MAX_CREATURE_QUEST_ITEMS; ++index)
+            data << (index < questItems->size() ? uint32((*questItems)[index]) : uint32(0));
+    }
+    else
+    {
+        for (std::size_t index = 0; index < MAX_CREATURE_QUEST_ITEMS; ++index)
+            data << uint32(0);
+    }
+
+    data << uint32(creature->movementId);
+
+    session->SendPacket(&data);
+}
+
 void ResolvePreviewSpell(uint32 spellId, ItemPreviewInfo& preview, uint8 depth = 0)
 {
     if (!spellId || depth > 3 || preview.display || preview.creature) return;
@@ -115,18 +224,22 @@ void ResolvePreviewSpell(uint32 spellId, ItemPreviewInfo& preview, uint8 depth =
         // 36 learns the actual mount/pet spell; follow it before inspecting its effects.
         if (effect.Effect == 36 && effect.TriggerSpell > 0)
             ResolvePreviewSpell(uint32(effect.TriggerSpell), preview, depth + 1);
-        // Aura 78 is Mounted; MiscValue is the CreatureDisplayInfo ID used by the client model.
+        // Aura 78 is Mounted; MiscValue is the creature template entry.
+        // Resolve its authoritative display ID from AzerothCore's loaded creature data.
+        // Keep the creature entry as metadata/fallback for clients where display resolution fails.
         if (effect.ApplyAuraName == 78 && effect.MiscValue > 0)
         {
             preview.type = "MOUNT";
-            preview.display = uint32(effect.MiscValue);
+            preview.creature = uint32(effect.MiscValue);
+            preview.display = ResolveCreatureDisplay(preview.creature);
             preview.spell = spellId;
         }
         // Effects 28 and 56 summon a creature/pet; MiscValue is the creature template entry.
-        if ((effect.Effect == 28 || effect.Effect == 56) && effect.MiscValue > 0 && !preview.display)
+        if ((effect.Effect == 28 || effect.Effect == 56) && effect.MiscValue > 0 && !preview.display && !preview.creature)
         {
             preview.type = "COMPANION";
             preview.creature = uint32(effect.MiscValue);
+            preview.display = ResolveCreatureDisplay(preview.creature);
             preview.spell = spellId;
         }
     }
@@ -149,6 +262,7 @@ void EmitAccessAndPreview(ChatHandler* handler, ItemTemplate const* item)
     uint32 currentReputation = item->RequiredReputationFaction && player ? uint32(player->GetReputationRank(item->RequiredReputationFaction)) : 0;
     bool reputationAllowed = !item->RequiredReputationFaction || currentReputation >= item->RequiredReputationRank;
     bool uniqueAllowed = item->MaxCount <= 0 || !player || !player->HasItemCount(item->ItemId, uint32(item->MaxCount), true);
+    bool legacyHonorRequirement = item->RequiredHonorRank > 0;
     bool usable = raceAllowed && classAllowed && levelAllowed && skillAllowed && spellAllowed && reputationAllowed && uniqueAllowed;
     std::vector<std::string> failures;
     if (!raceAllowed) failures.emplace_back("Faction or race restriction");
@@ -160,7 +274,10 @@ void EmitAccessAndPreview(ChatHandler* handler, ItemTemplate const* item)
     if (!uniqueAllowed) failures.emplace_back("Unique item limit reached");
     std::ostringstream reason;
     for (std::string const& failure : failures) { if (reason.tellp() > 0) reason << "; "; reason << failure; }
-    Protocol::SendItemAccess(handler, raceMask, classMask, ItemFaction(item, raceMask), MaskNames(raceMask, races, PlayableRaceMask, "All playable races"), MaskNames(classMask, classes, PlayableClassMask, "All playable classes"), usable, usable ? "All evaluated requirements passed" : reason.str());
+    std::string successReason = legacyHonorRequirement
+        ? "All enforced requirements passed; legacy honor rank is informational in AzerothCore 3.3.5"
+        : "All evaluated requirements passed";
+    Protocol::SendItemAccess(handler, raceMask, classMask, ItemFaction(item, raceMask), MaskNames(raceMask, races, PlayableRaceMask, "All playable races"), MaskNames(classMask, classes, PlayableClassMask, "All playable classes"), usable, usable ? successReason : reason.str());
 
     Protocol::SendItemRequirement(handler, "FACTION_RACE", 0, ItemFaction(item, raceMask), MaskNames(raceMask, races, PlayableRaceMask, "All playable races"), player ? MaskNames(playerRaceMask, races, PlayableRaceMask, "Unknown") : "No character", raceAllowed, raceAllowed ? "Faction and race allowed" : "Character faction or race is not permitted");
     Protocol::SendItemRequirement(handler, "CLASS", 0, "Classes", MaskNames(classMask, classes, PlayableClassMask, "All playable classes"), player ? MaskNames(playerClassMask, classes, PlayableClassMask, "Unknown") : "No character", classAllowed, classAllowed ? "Class allowed" : "Character class is not permitted");
@@ -170,6 +287,8 @@ void EmitAccessAndPreview(ChatHandler* handler, ItemTemplate const* item)
         Protocol::SendItemRequirement(handler, "SKILL", item->RequiredSkill, SkillName(item->RequiredSkill), std::to_string(item->RequiredSkillRank), player ? std::to_string(player->GetSkillValue(item->RequiredSkill)) : "Unknown", skillAllowed, skillAllowed ? "Skill requirement met" : "Required skill or rank is missing");
     if (item->RequiredSpell)
         Protocol::SendItemRequirement(handler, "SPELL", item->RequiredSpell, SpellName(item->RequiredSpell), "Known", player && player->HasSpell(item->RequiredSpell) ? "Known" : "Not known", spellAllowed, spellAllowed ? "Required spell known" : "Required spell is missing");
+    if (item->RequiredHonorRank)
+        Protocol::SendItemRequirement(handler, "LEGACY_HONOR", item->RequiredHonorRank, "Legacy honor rank", LegacyHonorRankName(item->RequiredHonorRank), "Not enforced by AzerothCore 3.3.5", true, "RequiredHonorRank is preserved for the client tooltip but is not enforced by Player::CanUseItem in the WotLK core");
     if (item->RequiredReputationFaction)
         Protocol::SendItemRequirement(handler, "REPUTATION", item->RequiredReputationFaction, FactionName(item->RequiredReputationFaction), ReputationRankName(item->RequiredReputationRank), ReputationRankName(currentReputation), reputationAllowed, reputationAllowed ? "Reputation requirement met" : "Reputation rank is too low");
     if (item->MaxCount > 0)
@@ -178,6 +297,9 @@ void EmitAccessAndPreview(ChatHandler* handler, ItemTemplate const* item)
     ItemPreviewInfo preview;
     for (_Spell const& itemSpell : item->Spells)
         if (itemSpell.SpellId > 0) ResolvePreviewSpell(uint32(itemSpell.SpellId), preview);
+    if (preview.creature)
+        SendCreatureCacheRecord(handler, preview.creature);
+
     Protocol::SendItemPreview(handler, preview.type, preview.spell, preview.creature, preview.display);
 }
 
@@ -274,14 +396,46 @@ void EmitSources(ChatHandler* handler, uint32 itemId)
     }
 
     QueryResult drops = WorldDatabase.Query(
-        "SELECT DISTINCT ct.entry, ct.name, clt.Chance FROM creature_loot_template clt JOIN creature_template ct ON ct.lootid = clt.Entry WHERE clt.Item = {} ORDER BY clt.Chance DESC LIMIT 40", itemId);
+        "SELECT DISTINCT ct.entry, ct.name, clt.Chance, clt.GroupId FROM creature_loot_template clt JOIN creature_template ct ON ct.lootid = clt.Entry WHERE clt.Item = {} ORDER BY clt.Chance DESC LIMIT 40", itemId);
     if (drops)
     {
         do
         {
             Field* fields = drops->Fetch();
-            Protocol::SendItemSource(handler, "CREATURE_DROP", fields[0].Get<uint32>(), fields[1].Get<std::string>(), std::to_string(fields[2].Get<float>()) + "% chance");
+            float chance = fields[2].Get<float>();
+            uint32 groupId = fields[3].Get<uint32>();
+            std::ostringstream detail;
+            if (chance > 0.0f)
+                detail << chance << "% chance";
+            else if (groupId)
+                detail << "Equal-chance loot group " << groupId << " (group roll; raw Chance=0)";
+            else
+                detail << "Loot-template chance calculated by the core (raw Chance=0)";
+            Protocol::SendItemSource(handler, "CREATURE_DROP", fields[0].Get<uint32>(), fields[1].Get<std::string>(), detail.str());
         } while (drops->NextRow());
+    }
+
+    QueryResult gameObjects = WorldDatabase.Query(
+        "SELECT DISTINCT gt.entry, gt.name, 'DIRECT' AS source_kind "
+        "FROM gameobject_loot_template glt "
+        "JOIN gameobject_template gt ON gt.data1 = glt.Entry "
+        "WHERE glt.Item = {0} AND gt.type IN (3, 25) "
+        "UNION "
+        "SELECT DISTINCT gt.entry, gt.name, 'REFERENCE' AS source_kind "
+        "FROM gameobject_loot_template glt "
+        "JOIN reference_loot_template rlt ON rlt.Entry = glt.Reference "
+        "JOIN gameobject_template gt ON gt.data1 = glt.Entry "
+        "WHERE rlt.Item = {0} AND glt.Reference <> 0 AND gt.type IN (3, 25) "
+        "ORDER BY name LIMIT 40", itemId);
+    if (gameObjects)
+    {
+        do
+        {
+            Field* fields = gameObjects->Fetch();
+            std::string sourceKind = fields[2].Get<std::string>();
+            Protocol::SendItemSource(handler, "GAMEOBJECT_LOOT", fields[0].Get<uint32>(), fields[1].Get<std::string>(),
+                sourceKind == "REFERENCE" ? "Gameobject reference loot" : "Gameobject loot");
+        } while (gameObjects->NextRow());
     }
 
     QueryResult quests = WorldDatabase.Query(
