@@ -2513,8 +2513,36 @@ local function BuildItem()
   itemIdBox=Edit(operations,76,true); itemIdBox:SetPoint("TOPLEFT",10,-133); itemIdBox.azerCoreOpsExpected="item"
   local quantityLabel=Section(operations,"QTY",C.gold); quantityLabel:SetPoint("TOPLEFT",94,-116)
   local count=Edit(operations,44,true); count:SetPoint("TOPLEFT",94,-133); count:SetText("1")
-  local addItem=Button(operations,"Add Item",128,24,function() local id=PositiveId(itemIdBox,"item"); local n=PositiveId(count,"quantity"); if id and n then SendCommand(string.format(CMD.itemAdd,id,n)) end end,"Add the selected quantity to your inventory"); addItem:SetPoint("TOPLEFT",10,-164); Platform:RegisterRoleButton(addItem,"GM_REQUIRED")
-  local removeItem=Button(operations,"Remove Item",128,24,function() local id=PositiveId(itemIdBox,"item"); local n=PositiveId(count,"quantity"); if id and n then Confirm(string.format(CMD.itemRemove,id,n)) end end,"Remove the selected quantity from your inventory"); removeItem:SetPoint("TOPLEFT",10,-195); Platform:RegisterRoleButton(removeItem,"GM_REQUIRED")
+
+  local function RefreshItemAfterMutation(id)
+    id=tonumber(id)
+    if not id then return end
+
+    After(.5,function()
+      local selected=itemUI.selected
+      if not selected or selected.id~=id or not itemUI.Select then return end
+
+      local activeView=itemUI.view
+      itemUI.Select(id,{title=selected.name,link=selected.link},0)
+      itemUI.view=activeView
+      itemUI.Render()
+    end)
+  end
+
+  local addItem=Button(operations,"Add Item",128,24,function()
+    local id=PositiveId(itemIdBox,"item"); local n=PositiveId(count,"quantity")
+    if id and n then
+      SendCommand(string.format(CMD.itemAdd,id,n))
+      RefreshItemAfterMutation(id)
+    end
+  end,"Add the selected quantity to your inventory"); addItem:SetPoint("TOPLEFT",10,-164); Platform:RegisterRoleButton(addItem,"GM_REQUIRED")
+
+  local removeItem=Button(operations,"Remove Item",128,24,function()
+    local id=PositiveId(itemIdBox,"item"); local n=PositiveId(count,"quantity")
+    if id and n then
+      Confirm(string.format(CMD.itemRemove,id,n),nil,function() RefreshItemAfterMutation(id) end)
+    end
+  end,"Remove the selected quantity from your inventory"); removeItem:SetPoint("TOPLEFT",10,-195); Platform:RegisterRoleButton(removeItem,"GM_REQUIRED")
 
   local body=CreateFrame("Frame",nil,p); body:SetPoint("TOPLEFT",166,-70); body:SetPoint("BOTTOMRIGHT",-10,36); Backdrop(body,C.panel)
   local identity=CreateFrame("Frame",nil,body); identity:SetPoint("TOPLEFT",8,-8); identity:SetPoint("TOPRIGHT",-8,-8); identity:SetHeight(82); Backdrop(identity,C.bg)
@@ -4054,7 +4082,7 @@ local function ApplySettings()
   local s=Settings()
   if main then main:SetScale(s.scale or 1) end
   if characterUI.UpdateEquipmentCamera then characterUI.UpdateEquipmentCamera() end
-  if itemUI.UpdatePreviewCamera then itemUI.UpdatePreviewCamera() end
+  if Platform.ItemUI.UpdatePreviewCamera then Platform.ItemUI.UpdatePreviewCamera() end
   if minimapButton then
     minimapButton:SetParent(s.mbfCompatibility and UIParent or Minimap)
     PositionMinimap()
@@ -4427,7 +4455,7 @@ local function BuildInformation()
   local function ScrollView(key,heading,height)
     local view=CreateFrame("Frame",nil,content); view:SetAllPoints(); view:Hide(); views[key]=view
     local vh=Label(view,heading); vh:SetPoint("TOPLEFT",14,-14)
-    local scroll=CreateFrame("ScrollFrame",nil,view,"UIPanelScrollFrameTemplate"); scroll:SetPoint("TOPLEFT",12,-42); scroll:SetPoint("BOTTOMRIGHT",-30,12)
+    local scroll=CreateFrame("ScrollFrame","AZERCORE_OPS_InfoScroll_"..key,view,"UIPanelScrollFrameTemplate"); scroll:SetPoint("TOPLEFT",12,-42); scroll:SetPoint("BOTTOMRIGHT",-30,12)
     local child=CreateFrame("Frame",nil,scroll); child:SetWidth(520); child:SetHeight(height or 520); scroll:SetScrollChild(child)
     scroll:EnableMouseWheel(true); scroll:SetScript("OnMouseWheel",function(self,delta) local maximum=math.max(0,child:GetHeight()-self:GetHeight()); self:SetVerticalScroll(math.max(0,math.min(maximum,self:GetVerticalScroll()-delta*32))) end)
     return child
@@ -4482,7 +4510,7 @@ local function BuildUI()
       local x,y=GetCursorPosition(); x=x/uiScale; y=y/uiScale
       local delta=((x-grip.startX)/main:GetWidth()+(grip.startY-y)/main:GetHeight())/2
       local value=math.max(.75,math.min(1.35,grip.startScale+delta)); value=math.floor(value*100+.5)/100
-      Settings().scale=value; main:SetScale(value); if characterUI.UpdateEquipmentCamera then characterUI.UpdateEquipmentCamera() end; if itemUI.UpdatePreviewCamera then itemUI.UpdatePreviewCamera() end; SetStatus("Window scale: "..math.floor(value*100+.5).."%")
+      Settings().scale=value; main:SetScale(value); if characterUI.UpdateEquipmentCamera then characterUI.UpdateEquipmentCamera() end; if Platform.ItemUI.UpdatePreviewCamera then Platform.ItemUI.UpdatePreviewCamera() end; SetStatus("Window scale: "..math.floor(value*100+.5).."%")
     end)
   end)
   resizeGrip:SetScript("OnDragStop",function(self)
