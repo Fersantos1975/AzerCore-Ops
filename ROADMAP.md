@@ -3,7 +3,7 @@
 AzerCore Ops is an operational intelligence platform for AzerothCore built from a
 server-side C++ module and a matching World of Warcraft 3.3.5a addon.
 
-The current stable baseline is `0.6.1`.
+The current stable baseline is `0.6.2`.
 
 ## Completed foundation
 
@@ -51,15 +51,24 @@ The current stable baseline is `0.6.1`.
 
 ## 0.6.2 — Validation and hardening
 
+Completed release scope:
+
+- Corrected pull accounting for encounters that transition directly from `FAIL -> IN_PROGRESS`.
+- Revalidated repeated pull, wipe, reset, and kill counters with zero suspicious transitions in the tested Saurfang sequence.
+- Simplified exact-ID Item inspection into an automatic workspace-driven workflow.
+- Hardened addon Item UI state, delayed cache refreshes, and post-mutation refresh behavior.
+- Revalidated equipment stats and authoritative access requirements.
+- Added explicit informational handling for legacy PvP honor-rank metadata.
+- Corrected equal-chance creature-loot reporting and added GameObject loot sources.
+- Hardened Item Source layout for long source details.
+- Completed server-backed mount/companion display resolution and WoW 3.3.5 creature-cache priming for textured previews.
+
+Post-0.6.2 hardening:
+
 - Validate Encounter History across additional Wrath raids and dungeons.
-- Test both common wipe-state patterns:
-  - `IN_PROGRESS -> FAIL -> NOT_STARTED`
-  - `IN_PROGRESS -> NOT_STARTED`
-- Verify attempt, wipe, and kill counters across repeated pulls and resets.
 - Verify unusual encounter scripts do not create false suspicious transitions.
 - Review whether Encounter History should remain session-memory only or gain optional persistence.
-- Run a systematic Item and NPC regression pass against the current server module.
-- Re-test wearable previews, access requirements, faction/race restrictions, and fallback presentation.
+- Continue systematic NPC regression coverage.
 - Decide whether local dungeon test data belongs under repository test tooling or remains development-only.
 - Expand release regression coverage for Instance Intelligence.
 

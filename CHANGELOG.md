@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.6.2 — Validation and Item Hardening
+
+### Changed
+
+- Treat `FAIL -> IN_PROGRESS` as a valid encounter pull start, incrementing Attempts and emitting `PULL #N`.
+- Removed the redundant explicit Inspect Item step for exact item IDs; Item Action Bar views now inspect the selected item automatically.
+- Kept fuzzy/name searches deliberate while preserving the active Item workspace during client-cache refreshes and retries.
+- Improved Item Sources presentation with wrapped detail rows and dynamic row heights.
+
+### Fixed
+
+- Hardened Item UI state handling during settings updates, window resizing, and delayed item refreshes.
+- Refresh Item Inspector data automatically after Add Item and Remove Item operations so ownership-dependent requirements remain current.
+- Resolve mount and companion creature entries through AzerothCore creature data and prime the WoW 3.3.5 client creature cache before model preview.
+- Preserve fully textured mount/companion previews without relying on hard-coded creature IDs or raw model paths.
+- Report legacy `RequiredHonorRank` as informational because AzerothCore 3.3.5 does not enforce it through `Player::CanUseItem`.
+- Added readable Armor and resistance stat names from the client item-stat API.
+- Distinguish equal-chance creature loot groups whose raw database Chance is zero instead of reporting a misleading `0%`.
+- Added GameObject loot sources, including direct and one-level reference loot paths.
+
+### Validation
+
+- Validated Saurfang encounter tracking across four attempts, three wipes, one kill, and zero suspicious transitions.
+- Validated automatic item inspection, delayed refresh behavior, and ownership mutation refresh.
+- Validated armor/stat, profession, reputation, unique-item, faction/race/class, and legacy honor requirement presentation.
+- Validated creature-drop equal-chance sources and GameObject loot sources.
+- Validated a fully textured server-backed Swift Alliance Steed preview after client creature-cache priming.
+- Completed the final Item Inspector regression pass without AzerCore Ops Lua runtime errors.
+
 ## 0.6.1 — Encounter History and Attempt Tracking
 
 ### Added

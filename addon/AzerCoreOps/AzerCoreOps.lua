@@ -1,6 +1,6 @@
 local ADDON = ...
 
--- AzerCore Ops Platform 0.6.1
+-- AzerCore Ops Platform 0.6.2
 -- Target: WoW 3.3.5a / AzerothCore. All server commands live here so that
 -- branch-specific command names can be changed without touching the UI.
 local CMD = {
@@ -114,7 +114,7 @@ local defaults={
   rememberAuditFilter=true,autoReaudit=false,confirmResetSelected=true,
   warnNoTarget=true,compactAuditRows=false,auditFontSize=10,shiftClickInsert=true,
 }
-local ADDON_VERSION="0.6.1"
+local ADDON_VERSION="0.6.2"
 local PROTOCOL_VERSION="1"
 local TESTED_CORE="190184a04539"
 local TESTED_PLAYERBOTS="ba46fcdecde3"
@@ -4370,7 +4370,7 @@ local function BuildDashboard()
   Button(quick,"Inspect Quest",150,30,function() SelectTab("Quest") end,"Open quest search and chain analysis"):SetPoint("TOPLEFT",174,-42)
   Button(quick,"Check Compatibility",150,30,function() RequestCompatibility(); OpenOptions() end,"Query the running AzerCoreOps module"):SetPoint("TOPLEFT",336,-42)
   Button(quick,"Information & Credits",170,30,function() SelectTab("Information") end,"View project links, credits, and acknowledgements"):SetPoint("TOPLEFT",498,-42)
-  local note=quick:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); note:SetPoint("TOPLEFT",12,-92); note:SetPoint("BOTTOMRIGHT",-12,12); note:SetJustifyH("LEFT"); note:SetJustifyV("TOP"); note:SetWordWrap(true); note:SetTextColor(unpack(C.white)); note:SetText("Release: v0.6.1\n\nAzerCore Ops combines safe Player Mode inspection and reporting with server-authorized administrator and Game Master operations. Courier remains under construction and is not included as an active release feature.")
+  local note=quick:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); note:SetPoint("TOPLEFT",12,-92); note:SetPoint("BOTTOMRIGHT",-12,12); note:SetJustifyH("LEFT"); note:SetJustifyV("TOP"); note:SetWordWrap(true); note:SetTextColor(unpack(C.white)); note:SetText("Release: v0.6.2\n\nAzerCore Ops combines safe Player Mode inspection and reporting with server-authorized administrator and Game Master operations. This release hardens Item Inspector previews, requirements, sources, refresh behavior, and encounter-attempt tracking. Courier remains under construction and is not included as an active release feature.")
 end
 
 
