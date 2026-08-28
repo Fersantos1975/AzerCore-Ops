@@ -86,12 +86,12 @@ local characterUI={activity={},buttons={},viewButtons={},target=nil,identityFram
     {key="RS",name="The Ruby Sanctum",difficulties={{key="10N",name="10 Player"},{key="25N",name="25 Player"},{key="10H",name="10 Player Heroic"},{key="25H",name="25 Player Heroic"}}},
   }}
 Platform.NPCUI={activity={},buttons={},viewButtons={},server={quests={},loot={},story={}},captureEntry=nil,ignoreStream=false,
-  view="OVERVIEW",activeOperation="Inspect NPC",autoInspect=false,Update=nil,Render=nil,Inspect=nil,
+  view="OVERVIEW",activeOperation="Inspect NPC",autoInspect=true,Update=nil,Render=nil,Inspect=nil,
   identityName=nil,identityMeta=nil,portrait=nil,workspaceTitle=nil,text=nil,textChild=nil,model=nil,modelViewport=nil,
   questRows={},lootRows={},
   searchResults={},spawns={},searchRows={},spawnRows={},
   searchQuery="",searchLoading=false,spawnsLoading=false,spawnTotal=0,
-  selectedSearch=nil,selectedSpawn=nil,searchBox=nil,
+  selectedSearch=nil,selectedSpawn=nil,searchBox=nil,requestEntry=nil,inspectionLoading=false,
   lootLinkRetry=0,lootLinkRetryPending=false,
   Search=nil,LoadSpawns=nil,SelectSearchResult=nil,GoToSpawn=nil,EmergencyReturn=nil}
 Platform.ItemUI={view="OVERVIEW",selected=nil,buttons={},viewButtons={},Select=nil,Render=nil,Report=nil,server={crafts={},reagents={},recipes={},sources={},uses={}},linkRows={}}
@@ -1132,22 +1132,22 @@ local function BuildNPC()
   local opDefs={
     {"Inspect NPC",function() Platform.NPCUI.autoInspect=true; Platform.NPCUI.activeOperation="Inspect NPC"; Platform.NPCUI.Inspect(false) end,"Inspect the selected creature and resume automatic target inspection"},
     {"Go to Spawn",function()
-      Platform.NPCUI.autoInspect=false
+      Platform.NPCUI.autoInspect=true
       Platform.NPCUI.activeOperation="Go to Spawn"
       if Platform.NPCUI.GoToSpawn then Platform.NPCUI.GoToSpawn() end
     end,"Teleport to the selected database spawn while preserving an Emergency Return point","GM_REQUIRED"},
     {"Emergency Return",function()
-      Platform.NPCUI.autoInspect=false
+      Platform.NPCUI.autoInspect=true
       Platform.NPCUI.activeOperation="Emergency Return"
       if Platform.NPCUI.EmergencyReturn then Platform.NPCUI.EmergencyReturn() end
     end,"Return to the position saved before the last AzerCore Ops teleport","GM_REQUIRED"},
-    {"NPC Info",function() Platform.NPCUI.autoInspect=false; Platform.NPCUI.activeOperation="NPC Info"; Platform.NPCUI.view="TECHNICAL"; Platform.NPCUI.Inspect(false); Platform.NPCUI.Render() end,"Load technical NPC information inside AzerCore Ops","GM_REQUIRED"},
-    {"Kill",function() Platform.NPCUI.autoInspect=false; Platform.NPCUI.activeOperation="Kill"; Confirm(CMD.npcKill) end,"Kill the selected creature","GM_REQUIRED"},
-    {"Respawn",function() Platform.NPCUI.autoInspect=false; Platform.NPCUI.activeOperation="Respawn"; SendCommand(CMD.npcRespawn) end,"Respawn the selected creature","GM_REQUIRED"},
-    {"Move Here",function() Platform.NPCUI.autoInspect=false; Platform.NPCUI.activeOperation="Move Here"; Confirm(CMD.npcMove) end,"Move the selected spawn to your position","GM_REQUIRED"},
-    {"Summon Here",function() Platform.NPCUI.autoInspect=false; Platform.NPCUI.activeOperation="Summon Here"; SendCommand(CMD.summon) end,"Summon the selected creature to you","GM_REQUIRED"},
-    {"NPC Near",function() Platform.NPCUI.autoInspect=false; Platform.NPCUI.activeOperation="NPC Near"; SendCommand(CMD.npcNear) end,"List nearby creature spawns","GM_REQUIRED"},
-    {"Delete NPC",function() Platform.NPCUI.autoInspect=false; Platform.NPCUI.activeOperation="Delete NPC"; Confirm(CMD.npcDelete) end,"Permanently delete the selected spawn","GM_REQUIRED"},
+    {"NPC Info",function() Platform.NPCUI.autoInspect=true; Platform.NPCUI.activeOperation="NPC Info"; Platform.NPCUI.view="TECHNICAL"; Platform.NPCUI.Inspect(false); Platform.NPCUI.Render() end,"Load technical NPC information inside AzerCore Ops","GM_REQUIRED"},
+    {"Kill",function() Platform.NPCUI.autoInspect=true; Platform.NPCUI.activeOperation="Kill"; Confirm(CMD.npcKill) end,"Kill the selected creature","GM_REQUIRED"},
+    {"Respawn",function() Platform.NPCUI.autoInspect=true; Platform.NPCUI.activeOperation="Respawn"; SendCommand(CMD.npcRespawn) end,"Respawn the selected creature","GM_REQUIRED"},
+    {"Move Here",function() Platform.NPCUI.autoInspect=true; Platform.NPCUI.activeOperation="Move Here"; Confirm(CMD.npcMove) end,"Move the selected spawn to your position","GM_REQUIRED"},
+    {"Summon Here",function() Platform.NPCUI.autoInspect=true; Platform.NPCUI.activeOperation="Summon Here"; SendCommand(CMD.summon) end,"Summon the selected creature to you","GM_REQUIRED"},
+    {"NPC Near",function() Platform.NPCUI.autoInspect=true; Platform.NPCUI.activeOperation="NPC Near"; SendCommand(CMD.npcNear) end,"List nearby creature spawns","GM_REQUIRED"},
+    {"Delete NPC",function() Platform.NPCUI.autoInspect=true; Platform.NPCUI.activeOperation="Delete NPC"; Confirm(CMD.npcDelete) end,"Permanently delete the selected spawn","GM_REQUIRED"},
   }
   local function RefreshNPCOperationButtons()
     for name,button in pairs(Platform.NPCUI.buttons) do
@@ -1159,7 +1159,7 @@ local function BuildNPC()
   for i,d in ipairs(opDefs) do
     local operationName,operationClick=d[1],d[2]
     local b=Button(operations,operationName,128,24,function()
-      Platform.NPCUI.activeOperation=operationName; Platform.NPCUI.autoInspect=operationName=="Inspect NPC"; RefreshNPCOperationButtons(); operationClick()
+      Platform.NPCUI.activeOperation=operationName; Platform.NPCUI.autoInspect=true; RefreshNPCOperationButtons(); operationClick()
     end,d[3]); b:SetPoint("TOPLEFT",10,-30-(i-1)*31); Platform.NPCUI.buttons[operationName]=b
     b:SetScript("OnLeave",function() RefreshNPCOperationButtons(); GameTooltip:Hide() end)
     if d[4] then Platform:RegisterRoleButton(b,d[4]) end
@@ -1179,7 +1179,7 @@ local function BuildNPC()
   local searchBox=CreateFrame("EditBox",nil,searchPanel,"InputBoxTemplate")
   searchBox:SetHeight(20)
   searchBox:SetPoint("LEFT",105,0)
-  searchBox:SetPoint("RIGHT",-94,0)
+  searchBox:SetPoint("RIGHT",-178,0)
   searchBox:SetAutoFocus(false)
   searchBox:SetMaxLetters(80)
   Platform.NPCUI.searchBox=searchBox
@@ -1194,7 +1194,19 @@ local function BuildNPC()
     end,
     "Search by creature name or exact Entry ID"
   )
-  searchButton:SetPoint("RIGHT",-10,0)
+  searchButton:SetPoint("RIGHT",-92,0)
+
+  local clearButton=Button(
+    searchPanel,
+    "Clear",
+    76,
+    22,
+    function()
+      if Platform.NPCUI.Clear then Platform.NPCUI.Clear() end
+    end,
+    "Clear NPC search, selection and loaded inspection data"
+  )
+  clearButton:SetPoint("RIGHT",-10,0)
 
   searchBox:SetScript("OnEnterPressed",function(self)
     self:ClearFocus()
@@ -1220,7 +1232,7 @@ local function BuildNPC()
   local wt=Section(workspace,"NPC OVERVIEW",C.inspect); wt:SetPoint("TOPLEFT",10,-10); Platform.NPCUI.workspaceTitle=wt
   local refresh=Button(workspace,"",23,21,function() Platform.NPCUI.Inspect(false) end,"Refresh the selected NPC")
   local rt=refresh:CreateTexture(nil,"ARTWORK"); rt:SetTexture("Interface\\Buttons\\UI-RotationRight-Button-Up"); rt:SetPoint("TOPLEFT",2,-2); rt:SetPoint("BOTTOMRIGHT",-2,2); refresh:SetPoint("BOTTOMLEFT",8,7)
-  local help=Button(workspace,"?",22,21,nil,"NPC inspection follows the selected creature automatically while Inspect NPC is active. Shift-click quest and item rows to insert game links into chat."); help:SetPoint("LEFT",refresh,"RIGHT",5,0)
+  local help=Button(workspace,"?",22,21,nil,"NPC inspection follows selected creatures automatically. Use Inspect NPC or Refresh to force a new scan. Shift-click quest and item rows to insert game links into chat."); help:SetPoint("LEFT",refresh,"RIGHT",5,0)
 
   local scroll=CreateFrame("ScrollFrame","AZERCORE_OPS_NPCScroll",workspace,"UIPanelScrollFrameTemplate"); scroll:SetPoint("TOPLEFT",8,-31); scroll:SetPoint("BOTTOMRIGHT",-29,34)
   local child=CreateFrame("Frame",nil,scroll); child:SetWidth(380); child:SetHeight(420); scroll:SetScrollChild(child); Platform.NPCUI.textChild=child
@@ -1230,6 +1242,43 @@ local function BuildNPC()
   local model=CreateFrame("PlayerModel",nil,modelViewport); model:SetAllPoints(modelViewport); model:SetUnit("player"); if model.SetCamDistanceScale then model:SetCamDistanceScale(1) end; model.azerFacing=0; Platform.NPCUI.model=model
   Button(modelViewport,"<",25,20,function() model.azerFacing=model.azerFacing-.25; model:SetFacing(model.azerFacing) end,"Rotate NPC left"):SetPoint("TOPLEFT",8,-8)
   Button(modelViewport,">",25,20,function() model.azerFacing=model.azerFacing+.25; model:SetFacing(model.azerFacing) end,"Rotate NPC right"):SetPoint("TOPRIGHT",-8,-8)
+
+  Platform.NPCUI.Clear=function()
+    Platform.NPCUI.autoInspect=true
+    Platform.NPCUI.activeOperation="Inspect NPC"
+    Platform.NPCUI.server={quests={},loot={},lootReferences={},story={}}
+    Platform.NPCUI.captureEntry=nil
+    Platform.NPCUI.requestEntry=nil
+    Platform.NPCUI.inspectionLoading=false
+    Platform.NPCUI.ignoreStream=true
+    Platform.NPCUI.searchQuery=""
+    Platform.NPCUI.searchResults={}
+    Platform.NPCUI.spawns={}
+    Platform.NPCUI.spawnTotal=0
+    Platform.NPCUI.selectedSearch=nil
+    Platform.NPCUI.selectedSpawn=nil
+    Platform.NPCUI.searchLoading=false
+    Platform.NPCUI.spawnsLoading=false
+    Platform.NPCUI.lootLinkRetry=0
+    Platform.NPCUI.lootLinkRetryPending=false
+    Platform.NPCUI.view="OVERVIEW"
+
+    searchBox:SetText("")
+    searchBox:ClearFocus()
+
+    if Platform.NPCUI.RefreshOperationButtons then
+      Platform.NPCUI.RefreshOperationButtons()
+    end
+
+    Platform.NPCUI.Render()
+
+    portrait:SetTexture("Interface\\Icons\\INV_Misc_QuestionMark")
+    model:SetUnit("player")
+    iname:SetText("No creature selected")
+    imeta:SetText("Search for an NPC or target a live creature to inspect it.")
+
+    SetStatus("NPC workspace cleared.")
+  end
 
   local function QuestLink(q)
     if GetQuestLink then local link=GetQuestLink(tonumber(q.id)); if link then return link end end
@@ -2578,7 +2627,36 @@ local function BuildNPC()
   end
   for i,d in ipairs(views) do
     local viewLabel,viewKey=d[1],d[2]
-    local b=Button(action,viewLabel,88,22,function() Platform.NPCUI.view=viewKey; Platform.NPCUI.Render() end,"Open the NPC "..viewLabel.." workspace"); b:SetPoint("TOPLEFT",8,-29-(i-1)*27); Platform.NPCUI.viewButtons[viewKey]=b
+    local b=Button(
+      action,
+      viewLabel,
+      88,
+      22,
+      function()
+        Platform.NPCUI.view=viewKey
+
+        local entry=TargetCreatureEntry()
+        local loadedEntry=
+          Platform.NPCUI.server
+          and Platform.NPCUI.server.begin
+          and Platform.NPCUI.server.begin.entry
+          or nil
+
+        if
+          entry
+          and tonumber(loadedEntry)~=tonumber(entry)
+          and Platform.NPCUI.Inspect
+        then
+          Platform.NPCUI.Inspect(true)
+        end
+
+        Platform.NPCUI.Render()
+      end,
+      "Open the NPC "..viewLabel.." workspace"
+    )
+
+    b:SetPoint("TOPLEFT",8,-29-(i-1)*27)
+    Platform.NPCUI.viewButtons[viewKey]=b
     b:SetScript("OnLeave",function() if Platform.NPCUI.Render then Platform.NPCUI.Render() end; GameTooltip:Hide() end)
   end
   local copyButton=Button(
@@ -2678,9 +2756,35 @@ local function BuildNPC()
     RefreshNPCOperationButtons()
     Platform.NPCUI.Render()
   end
-  Platform.NPCUI.Inspect=function(silent)
-    local id,err=TargetCreatureEntry(); if not id then if not silent then SetStatus(err,true) end; Platform.NPCUI.Update(); return end
-    Platform.NPCUI.captureEntry=id; Platform.NPCUI.ignoreStream=false; SendCommand(CMD.npcInspect); if silent then SetStatus("Inspecting "..tostring(UnitName("target")).."...") end
+  Platform.NPCUI.Inspect=function(silent,force)
+    local id,err=TargetCreatureEntry()
+
+    if not id then
+      Platform.NPCUI.requestEntry=nil
+      Platform.NPCUI.inspectionLoading=false
+      if not silent then SetStatus(err,true) end
+      Platform.NPCUI.Update()
+      return
+    end
+
+    if
+      not force
+      and Platform.NPCUI.inspectionLoading
+      and tonumber(Platform.NPCUI.requestEntry)==tonumber(id)
+    then
+      return
+    end
+
+    Platform.NPCUI.requestEntry=id
+    Platform.NPCUI.inspectionLoading=true
+    Platform.NPCUI.captureEntry=id
+    Platform.NPCUI.ignoreStream=false
+
+    SendCommand(CMD.npcInspect)
+
+    if silent then
+      SetStatus("Inspecting "..tostring(UnitName("target")).."...")
+    end
   end
 
   Platform.NPCUI.Search=function()
@@ -2699,7 +2803,7 @@ local function BuildNPC()
       return
     end
 
-    Platform.NPCUI.autoInspect=false
+    Platform.NPCUI.autoInspect=true
     Platform.NPCUI.activeOperation="Search NPC"
     Platform.NPCUI.searchQuery=query
     Platform.NPCUI.searchResults={}
@@ -6639,6 +6743,7 @@ events:SetScript("OnEvent",function(_,event,arg1)
       After(.35,function() if activeTab=="Character" and characterUI.autoInspect then characterUI.Inspect(true) end end)
     end
     Platform.NPCUI.server={quests={},loot={},story={}}; Platform.NPCUI.captureEntry=nil; Platform.NPCUI.ignoreStream=false
+    Platform.NPCUI.requestEntry=nil; Platform.NPCUI.inspectionLoading=false
     if Platform.NPCUI.Update then Platform.NPCUI.Update() end
     if activeTab=="NPC" and Platform.NPCUI.autoInspect and Platform.NPCUI.Inspect then
       After(.35,function() if activeTab=="NPC" and Platform.NPCUI.autoInspect then Platform.NPCUI.Inspect(true) end end)
@@ -6854,7 +6959,10 @@ events:SetScript("OnEvent",function(_,event,arg1)
 
     elseif kind=="NPC_BEGIN" then
       local selected=TargetCreatureEntry()
-      Platform.NPCUI.ignoreStream=not selected or tonumber(selected)~=tonumber(f.entry)
+      Platform.NPCUI.ignoreStream=
+        not selected
+        or tonumber(selected)~=tonumber(f.entry)
+        or tonumber(Platform.NPCUI.requestEntry)~=tonumber(f.entry)
       if not Platform.NPCUI.ignoreStream then
         Platform.NPCUI.captureEntry=tonumber(f.entry)
         Platform.NPCUI.server={begin=f,quests={},loot={},lootReferences={},story={}}
@@ -6891,12 +6999,18 @@ events:SetScript("OnEvent",function(_,event,arg1)
     elseif kind=="NPC_STORY_END" then
       if not Platform.NPCUI.ignoreStream then Platform.NPCUI.server.storyCount=tonumber(f.count) or 0 end
     elseif kind=="NPC_END" then
+      if tonumber(f.entry)==tonumber(Platform.NPCUI.requestEntry) then
+        Platform.NPCUI.requestEntry=nil
+        Platform.NPCUI.inspectionLoading=false
+      end
       local selected=TargetCreatureEntry()
       if not Platform.NPCUI.ignoreStream and tonumber(f.entry)==tonumber(Platform.NPCUI.captureEntry) and tonumber(selected)==tonumber(f.entry) then
         Platform.NPCUI.Update(); SetStatus(string.format("NPC inspection loaded for %s — %s quest relation(s)",f.name or "creature",f.quests or 0))
       end
       Platform.NPCUI.ignoreStream=false
     elseif kind=="NPC_ERROR" then
+      Platform.NPCUI.requestEntry=nil
+      Platform.NPCUI.inspectionLoading=false
       Platform.NPCUI.searchLoading=false
       Platform.NPCUI.spawnsLoading=false
       if Platform.NPCUI.Render then Platform.NPCUI.Render() end
