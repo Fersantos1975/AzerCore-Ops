@@ -32,6 +32,8 @@ local CMD = {
   characterRaid = ".azercoreops character raid %s %s",
   characterSaveTarget = ".azercoreops character save",
   npcInspect = ".azercoreops npc inspect",
+  npcSearch = ".azercoreops npc search %s",
+  npcSpawns = ".azercoreops npc spawns %d",
   version = ".azercoreops version",
 }
 
@@ -86,7 +88,12 @@ local characterUI={activity={},buttons={},viewButtons={},target=nil,identityFram
 Platform.NPCUI={activity={},buttons={},viewButtons={},server={quests={},loot={},story={}},captureEntry=nil,ignoreStream=false,
   view="OVERVIEW",activeOperation="Inspect NPC",autoInspect=false,Update=nil,Render=nil,Inspect=nil,
   identityName=nil,identityMeta=nil,portrait=nil,workspaceTitle=nil,text=nil,textChild=nil,model=nil,modelViewport=nil,
-  questRows={},lootRows={}}
+  questRows={},lootRows={},
+  searchResults={},spawns={},searchRows={},spawnRows={},
+  searchQuery="",searchLoading=false,spawnsLoading=false,spawnTotal=0,
+  selectedSearch=nil,selectedSpawn=nil,searchBox=nil,
+  lootLinkRetry=0,lootLinkRetryPending=false,
+  Search=nil,LoadSpawns=nil,SelectSearchResult=nil,GoToSpawn=nil,EmergencyReturn=nil}
 Platform.ItemUI={view="OVERVIEW",selected=nil,buttons={},viewButtons={},Select=nil,Render=nil,Report=nil,server={crafts={},reagents={},recipes={},sources={},uses={}},linkRows={}}
 Platform.MovementUI={view="DESTINATIONS",serverCatalog={},regions={},selectedRegion=nil,selectedZone=nil,selected=nil,current=nil,loading=false,Render=nil,Report=nil,RefreshCatalog=nil}
 local instanceUI={my={},target={},captureUntil=0,myRows={},targetRows={},myOffset=0,targetOffset=0,targetLabel=nil,
@@ -997,16 +1004,143 @@ local function BuildCharacter()
   characterUI.Update()
 end
 
+Platform.ItemCacheTooltip=
+  Platform.ItemCacheTooltip
+  or CreateFrame(
+    "GameTooltip",
+    "AZERCORE_OPS_ItemCacheTooltip",
+    UIParent,
+    "GameTooltipTemplate"
+  )
+
+Platform.ItemCacheTooltip:SetOwner(UIParent,"ANCHOR_NONE")
+Platform.ItemCacheTooltip:Hide()
+
+Platform.ItemCacheRequested=Platform.ItemCacheRequested or {}
+
+Platform.NativeItemLink=function(item)
+  if not item then return nil end
+
+  if item.link and tostring(item.link):find("|Hitem:",1,true) then
+    return item.link
+  end
+
+  local id=tonumber(item.id)
+  if not id or id<=0 then return nil end
+
+  -- First check the normal client cache.
+  local _,link=GetItemInfo(id)
+
+  if link and tostring(link):find("|Hitem:",1,true) then
+    return link
+  end
+
+  -- WoW 3.3.5 does not reliably populate uncached items merely by
+  -- repeatedly calling GetItemInfo(). Setting a hidden tooltip hyperlink
+  -- initiates the client -> server item query.
+  --
+  -- Query each item once. The existing NPC Loot retry loop will then
+  -- pick up the native hyperlink asynchronously when it arrives.
+  if
+    not Platform.ItemCacheRequested[id]
+    and Platform.ItemCacheTooltip
+  then
+    Platform.ItemCacheRequested[id]=true
+
+    Platform.ItemCacheTooltip:ClearLines()
+    Platform.ItemCacheTooltip:SetHyperlink("item:"..id)
+    Platform.ItemCacheTooltip:Hide()
+  end
+
+  return nil
+end
+
+Platform.InsertItemLink=function(link)
+  if not link or not tostring(link):find("|Hitem:",1,true) then
+    return false
+  end
+
+  local function InsertInto(editBox)
+    if not editBox then return false end
+
+    if ChatEdit_ActivateChat then
+      ChatEdit_ActivateChat(editBox)
+    end
+
+    -- IMPORTANT:
+    -- Use Blizzard's original insert function directly.
+    -- ChatEdit_InsertLink is wrapped by AzerCore Ops earlier in this file
+    -- for inserting links into AzerCore Ops input fields.
+    if originalInsertLink then
+      originalInsertLink(link)
+    elseif editBox.Insert then
+      editBox:Insert(link)
+    else
+      return false
+    end
+
+    if editBox.SetFocus then
+      editBox:SetFocus()
+    end
+
+    return true
+  end
+
+  local active=
+    ChatEdit_GetActiveWindow
+    and ChatEdit_GetActiveWindow()
+    or nil
+
+  -- Chat is already open: insert immediately.
+  if active then
+    return InsertInto(active)
+  end
+
+  -- Chat is closed. Open the default chat window first.
+  if not ChatFrame_OpenChat then
+    return false
+  end
+
+  ChatFrame_OpenChat("",DEFAULT_CHAT_FRAME)
+
+  -- 3.3.5 needs a short settling period after ChatFrame_OpenChat.
+  -- After(0) was still racing the chat edit-box activation.
+  After(.05,function()
+    local editBox=
+      ChatEdit_GetActiveWindow
+      and ChatEdit_GetActiveWindow()
+      or nil
+
+    if not editBox and DEFAULT_CHAT_FRAME then
+      editBox=DEFAULT_CHAT_FRAME.editBox
+    end
+
+    InsertInto(editBox)
+  end)
+
+  return true
+end
+
 local function BuildNPC()
   local p=NewPage("NPC")
   local header=CreateFrame("Frame",nil,p); header:SetPoint("TOPLEFT",10,-10); header:SetPoint("TOPRIGHT",-10,-10); header:SetHeight(52); Backdrop(header,C.bg)
   local h=Label(header,"NPC Inspector","GameFontNormalLarge"); h:SetPoint("TOPLEFT",12,-8)
-  local sub=header:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); sub:SetPoint("TOPLEFT",12,-31); sub:SetText("Creature identity, quests, services, location and controlled GM operations")
+  local sub=header:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); sub:SetPoint("TOPLEFT",12,-31); sub:SetText("Search, inspect, navigate to and diagnose AzerothCore creature spawns")
 
   local operations=CreateFrame("Frame",nil,p); operations:SetPoint("TOPLEFT",10,-70); operations:SetPoint("BOTTOMLEFT",10,36); operations:SetWidth(148); Backdrop(operations,C.panel)
   local opTitle=Section(operations,"OPERATIONS",C.gold); opTitle:SetPoint("TOPLEFT",10,-10)
   local opDefs={
     {"Inspect NPC",function() Platform.NPCUI.autoInspect=true; Platform.NPCUI.activeOperation="Inspect NPC"; Platform.NPCUI.Inspect(false) end,"Inspect the selected creature and resume automatic target inspection"},
+    {"Go to Spawn",function()
+      Platform.NPCUI.autoInspect=false
+      Platform.NPCUI.activeOperation="Go to Spawn"
+      if Platform.NPCUI.GoToSpawn then Platform.NPCUI.GoToSpawn() end
+    end,"Teleport to the selected database spawn while preserving an Emergency Return point","GM_REQUIRED"},
+    {"Emergency Return",function()
+      Platform.NPCUI.autoInspect=false
+      Platform.NPCUI.activeOperation="Emergency Return"
+      if Platform.NPCUI.EmergencyReturn then Platform.NPCUI.EmergencyReturn() end
+    end,"Return to the position saved before the last AzerCore Ops teleport","GM_REQUIRED"},
     {"NPC Info",function() Platform.NPCUI.autoInspect=false; Platform.NPCUI.activeOperation="NPC Info"; Platform.NPCUI.view="TECHNICAL"; Platform.NPCUI.Inspect(false); Platform.NPCUI.Render() end,"Load technical NPC information inside AzerCore Ops","GM_REQUIRED"},
     {"Kill",function() Platform.NPCUI.autoInspect=false; Platform.NPCUI.activeOperation="Kill"; Confirm(CMD.npcKill) end,"Kill the selected creature","GM_REQUIRED"},
     {"Respawn",function() Platform.NPCUI.autoInspect=false; Platform.NPCUI.activeOperation="Respawn"; SendCommand(CMD.npcRespawn) end,"Respawn the selected creature","GM_REQUIRED"},
@@ -1032,18 +1166,57 @@ local function BuildNPC()
   end
 
   local body=CreateFrame("Frame",nil,p); body:SetPoint("TOPLEFT",166,-70); body:SetPoint("BOTTOMRIGHT",-10,36); Backdrop(body,C.panel)
-  local identity=CreateFrame("Frame",nil,body); identity:SetPoint("TOPLEFT",8,-8); identity:SetPoint("TOPRIGHT",-8,-8); identity:SetHeight(82); Backdrop(identity,C.bg)
+
+  local searchPanel=CreateFrame("Frame",nil,body)
+  searchPanel:SetPoint("TOPLEFT",8,-8)
+  searchPanel:SetPoint("TOPRIGHT",-8,-8)
+  searchPanel:SetHeight(44)
+  Backdrop(searchPanel,C.bg)
+
+  local searchTitle=Section(searchPanel,"NPC SEARCH",C.gold)
+  searchTitle:SetPoint("LEFT",10,0)
+
+  local searchBox=CreateFrame("EditBox",nil,searchPanel,"InputBoxTemplate")
+  searchBox:SetHeight(20)
+  searchBox:SetPoint("LEFT",105,0)
+  searchBox:SetPoint("RIGHT",-94,0)
+  searchBox:SetAutoFocus(false)
+  searchBox:SetMaxLetters(80)
+  Platform.NPCUI.searchBox=searchBox
+
+  local searchButton=Button(
+    searchPanel,
+    "Search",
+    76,
+    22,
+    function()
+      if Platform.NPCUI.Search then Platform.NPCUI.Search() end
+    end,
+    "Search by creature name or exact Entry ID"
+  )
+  searchButton:SetPoint("RIGHT",-10,0)
+
+  searchBox:SetScript("OnEnterPressed",function(self)
+    self:ClearFocus()
+    if Platform.NPCUI.Search then Platform.NPCUI.Search() end
+  end)
+
+  searchBox:SetScript("OnEscapePressed",function(self)
+    self:ClearFocus()
+  end)
+
+  local identity=CreateFrame("Frame",nil,body); identity:SetPoint("TOPLEFT",8,-60); identity:SetPoint("TOPRIGHT",-8,-60); identity:SetHeight(82); Backdrop(identity,C.bg)
   local ih=Section(identity,"SELECTED NPC",C.inspect); ih:SetPoint("TOPLEFT",10,-8)
   local pf=CreateFrame("Frame",nil,identity); pf:SetPoint("TOPLEFT",10,-27); pf:SetSize(44,44); Backdrop(pf,C.panel)
   local portrait=pf:CreateTexture(nil,"ARTWORK"); portrait:SetPoint("TOPLEFT",3,-3); portrait:SetPoint("BOTTOMRIGHT",-3,3); Platform.NPCUI.portrait=portrait
   local iname=identity:CreateFontString(nil,"OVERLAY","GameFontNormalLarge"); iname:SetPoint("TOPLEFT",65,-31); iname:SetTextColor(unpack(C.white)); Platform.NPCUI.identityName=iname
   local imeta=identity:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); imeta:SetPoint("TOPLEFT",65,-54); imeta:SetPoint("RIGHT",-8,0); imeta:SetJustifyH("LEFT"); Platform.NPCUI.identityMeta=imeta
 
-  local action=CreateFrame("Frame",nil,body); action:SetPoint("TOPLEFT",8,-98); action:SetPoint("BOTTOMLEFT",8,8); action:SetWidth(104); Backdrop(action,C.bg)
+  local action=CreateFrame("Frame",nil,body); action:SetPoint("TOPLEFT",8,-150); action:SetPoint("BOTTOMLEFT",8,8); action:SetWidth(104); Backdrop(action,C.bg)
   local ah=Section(action,"ACTION BAR",C.gold); ah:SetPoint("TOPLEFT",8,-9)
   local views={{"Overview","OVERVIEW"},{"Story","STORY"},{"Quests","QUESTS"},{"Services","SERVICES"},{"Spawn","SPAWN"},{"Location","LOCATION"},{"Combat","COMBAT"},{"Loot","LOOT"},{"Technical","TECHNICAL"}}
 
-  local workspace=CreateFrame("Frame",nil,body); workspace:SetPoint("TOPLEFT",120,-98); workspace:SetPoint("BOTTOMRIGHT",-8,8); Backdrop(workspace,C.bg)
+  local workspace=CreateFrame("Frame",nil,body); workspace:SetPoint("TOPLEFT",120,-150); workspace:SetPoint("BOTTOMRIGHT",-8,8); Backdrop(workspace,C.bg)
   local wt=Section(workspace,"NPC OVERVIEW",C.inspect); wt:SetPoint("TOPLEFT",10,-10); Platform.NPCUI.workspaceTitle=wt
   local refresh=Button(workspace,"",23,21,function() Platform.NPCUI.Inspect(false) end,"Refresh the selected NPC")
   local rt=refresh:CreateTexture(nil,"ARTWORK"); rt:SetTexture("Interface\\Buttons\\UI-RotationRight-Button-Up"); rt:SetPoint("TOPLEFT",2,-2); rt:SetPoint("BOTTOMRIGHT",-2,2); refresh:SetPoint("BOTTOMLEFT",8,7)
@@ -1063,22 +1236,279 @@ local function BuildNPC()
     return string.format("|cffffff00|Hquest:%d:%d|h[%s]|h|r",tonumber(q.id) or 0,tonumber(q.level) or 0,q.title or ("Quest "..tostring(q.id)))
   end
   local function ItemLink(item)
-    local quality=tonumber(item.quality) or 1
-    local color=(ITEM_QUALITY_COLORS and ITEM_QUALITY_COLORS[quality] and ITEM_QUALITY_COLORS[quality].hex) or "ffffffff"
-    color=tostring(color):gsub("^|c","")
-    return string.format("|c%s|Hitem:%d:0:0:0:0:0:0:0|h[%s]|h|r",color,tonumber(item.id) or 0,item.name or ("Item "..tostring(item.id)))
+    return Platform.NativeItemLink(item)
   end
+
   local function InsertLink(link)
-    if not link then return end
-    if HandleModifiedItemClick then HandleModifiedItemClick(link) elseif ChatEdit_InsertLink then ChatEdit_InsertLink(link) end
+    return Platform.InsertItemLink(link)
   end
+
   local function AddLinkedRow(i)
-    local row=Button(child,"",355,24,function(self) if IsShiftKeyDown() and self.link then InsertLink(self.link) end end,"Shift-click to insert this quest link in chat")
-    local rowLabel=row:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); rowLabel:SetPoint("LEFT",7,0); rowLabel:SetPoint("RIGHT",-7,0); rowLabel:SetJustifyH("LEFT"); rowLabel:SetWordWrap(false)
-    row:SetFontString(rowLabel); row:SetPoint("TOPLEFT",2,-2-(i-1)*27); row:Hide(); Platform.NPCUI.questRows[i]=row
+    local row=Button(
+      child,
+      "",
+      355,
+      44,
+      function() end,
+      "Shift-click to insert this link in chat"
+    )
+
+    row:SetScript("OnMouseUp",function(self,button)
+      if button~="LeftButton" or not IsShiftKeyDown() then return end
+
+      if not self.link then
+        if self.linkExpected then
+          SetStatus(
+            "This item is not yet cached by the WoW client; its chat link is unavailable.",
+            true
+          )
+        end
+        return
+      end
+
+      InsertLink(self.link)
+    end)
+
+    local rowLabel=row:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall")
+    rowLabel:SetPoint("TOPLEFT",7,-6)
+    rowLabel:SetPoint("RIGHT",-7,0)
+    rowLabel:SetJustifyH("LEFT")
+    rowLabel:SetJustifyV("TOP")
+    rowLabel:SetWordWrap(true)
+    row:SetFontString(rowLabel)
+    row.label=rowLabel
+
+    local detail=row:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall")
+    detail:SetPoint("TOPLEFT",rowLabel,"BOTTOMLEFT",0,-3)
+    detail:SetPoint("RIGHT",-7,0)
+    detail:SetJustifyH("LEFT")
+    detail:SetJustifyV("TOP")
+    detail:SetWordWrap(true)
+    detail:SetTextColor(.75,.75,.75)
+    row.detail=detail
+
+    row:SetPoint("TOPLEFT",2,-2-(i-1)*47)
+    row:Hide()
+    Platform.NPCUI.questRows[i]=row
   end
+
   for i=1,14 do AddLinkedRow(i) end
-  local function EnsureLinkedRows(count) for i=#Platform.NPCUI.questRows+1,count do AddLinkedRow(i) end end
+
+  local function EnsureLinkedRows(count)
+    for i=#Platform.NPCUI.questRows+1,count do AddLinkedRow(i) end
+  end
+
+  local function NPCQuestStateText(state)
+    state=tostring(state or "UNKNOWN"):upper()
+
+    local color="|cffaaaaaa"
+    if state=="AVAILABLE" or state=="READY" or state=="COMPLETED" then
+      color="|cff55ff55"
+    elseif state=="ACTIVE" then
+      color="|cffffff55"
+    elseif state=="FUTURE" then
+      color="|cffffaa55"
+    elseif state=="FAILED" or state=="BLOCKED" or state=="INELIGIBLE" then
+      color="|cffff5555"
+    end
+
+    return color.."["..state.."]|r"
+  end
+
+  local function BuildNPCQuestDisplayRows(quests)
+    local rows={}
+    local byId={}
+
+    for _,q in ipairs(quests or {}) do
+      local key=tostring(q.id or "?")
+      local entry=byId[key]
+
+      if not entry then
+        entry={
+          quest=q,
+          start=false,
+          finish=false,
+        }
+        byId[key]=entry
+        table.insert(rows,entry)
+      end
+
+      local relation=tostring(q.relation or ""):upper()
+      if relation=="START" then
+        entry.start=true
+      elseif relation=="END" then
+        entry.finish=true
+      end
+    end
+
+    return rows
+  end
+
+  local function LayoutNPCQuestRow(row,y,entry)
+    local q=entry.quest or {}
+
+    local relation
+    if entry.start and entry.finish then
+      relation="START + END"
+    elseif entry.start then
+      relation="START"
+    elseif entry.finish then
+      relation="END"
+    else
+      relation="RELATION"
+    end
+
+    local state=q.eligibility or q.status or "UNKNOWN"
+
+    row:ClearAllPoints()
+    row:SetPoint("TOPLEFT",2,-y)
+    row:SetWidth(355)
+    row.label:SetWordWrap(true)
+    row.link=QuestLink(q)
+
+    row:SetText(string.format(
+      "|cffffd100%s|r  %s  %s  |cff888888[%s]|r",
+      relation,
+      NPCQuestStateText(state),
+      q.title or ("Quest "..tostring(q.id or "?")),
+      tostring(q.id or "?")
+    ))
+
+    local meta={
+      "Req Lv "..tostring(q.min or "?"),
+      "Quest Lv "..tostring(q.level or "?"),
+      tostring(q.type or "Normal"),
+    }
+
+    if tostring(q.repeatable or "0")=="1" then
+      table.insert(meta,"Repeatable")
+    end
+
+    local status=tostring(q.status or "NONE"):upper()
+    if status~="" and status~="NONE" and status~="UNKNOWN" then
+      table.insert(meta,"Status "..status)
+    end
+
+    local detailText=table.concat(meta,"  •  ")
+
+    if q.reason and q.reason~="" then
+      detailText=detailText.."\n"..q.reason
+    end
+
+    row.detail:SetText(detailText)
+    row:Show()
+
+    local titleHeight=math.max(13,row.label:GetStringHeight() or 13)
+    local detailHeight=0
+
+    if detailText~="" then
+      detailHeight=math.max(13,row.detail:GetStringHeight() or 13)
+    end
+
+    local height=math.max(
+      42,
+      math.ceil(12 + titleHeight + (detailHeight>0 and detailHeight+4 or 0))
+    )
+
+    row:SetHeight(height)
+
+    return y + height + 6
+  end
+
+  local function AddNPCSearchRow(i)
+    local row=Button(
+      child,
+      "",
+      355,
+      46,
+      function(self)
+        if self.result and Platform.NPCUI.SelectSearchResult then
+          Platform.NPCUI.SelectSearchResult(self.result)
+        end
+      end,
+      "Select this creature and load its database spawns"
+    )
+
+    local label=row:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall")
+    label:SetPoint("TOPLEFT",7,-6)
+    label:SetPoint("RIGHT",-7,0)
+    label:SetJustifyH("LEFT")
+    label:SetJustifyV("TOP")
+    label:SetWordWrap(false)
+    row:SetFontString(label)
+    row.label=label
+
+    local detail=row:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall")
+    detail:SetPoint("TOPLEFT",label,"BOTTOMLEFT",0,-4)
+    detail:SetPoint("RIGHT",-7,0)
+    detail:SetJustifyH("LEFT")
+    detail:SetJustifyV("TOP")
+    detail:SetWordWrap(false)
+    detail:SetTextColor(.70,.70,.70)
+    row.detail=detail
+
+    row:Hide()
+    Platform.NPCUI.searchRows[i]=row
+  end
+
+  local function EnsureNPCSearchRows(count)
+    for i=#Platform.NPCUI.searchRows+1,count do
+      AddNPCSearchRow(i)
+    end
+  end
+
+  local function AddNPCSpawnRow(i)
+    local row=Button(
+      child,
+      "",
+      355,
+      52,
+      function(self)
+        if not self.spawn then return end
+        Platform.NPCUI.selectedSpawn=self.spawn
+        if Platform.NPCUI.Render then Platform.NPCUI.Render() end
+        SetStatus(
+          string.format(
+            "Selected spawn %s for %s.",
+            tostring(self.spawn.guid or "?"),
+            tostring(
+              Platform.NPCUI.selectedSearch
+              and Platform.NPCUI.selectedSearch.name
+              or "NPC"
+            )
+          )
+        )
+      end,
+      "Select this database spawn. Use Go to Spawn to teleport."
+    )
+
+    local label=row:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall")
+    label:SetPoint("TOPLEFT",7,-6)
+    label:SetPoint("RIGHT",-7,0)
+    label:SetJustifyH("LEFT")
+    label:SetJustifyV("TOP")
+    label:SetWordWrap(false)
+    row:SetFontString(label)
+    row.label=label
+
+    local detail=row:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall")
+    detail:SetPoint("TOPLEFT",label,"BOTTOMLEFT",0,-4)
+    detail:SetPoint("RIGHT",-7,0)
+    detail:SetJustifyH("LEFT")
+    detail:SetJustifyV("TOP")
+    detail:SetWordWrap(true)
+    detail:SetTextColor(.70,.70,.70)
+    row.detail=detail
+
+    row:Hide()
+    Platform.NPCUI.spawnRows[i]=row
+  end
+
+  local function EnsureNPCSpawnRows(count)
+    for i=#Platform.NPCUI.spawnRows+1,count do
+      AddNPCSpawnRow(i)
+    end
+  end
 
   local function ServicesText(flags)
     flags=tonumber(flags) or 0; local names={}
@@ -1086,38 +1516,482 @@ local function BuildNPC()
     for _,d in ipairs(defs) do if bit.band(flags,d[1])~=0 then table.insert(names,"• "..d[2]) end end
     return #names>0 and table.concat(names,"\n") or "No standard NPC services are advertised."
   end
-  local function Report()
+  local function FormatNPCStoryText(value, server)
+    local story=tostring(value or "")
+    if story=="" then return "" end
+
+    local playerName=
+      (server and server.begin and server.begin.player)
+      or UnitName("player")
+      or "player"
+
+    local className=UnitClass("player") or "adventurer"
+
+    -- Blizzard quest/creature text substitutions observed in the
+    -- authoritative world DB. Keep unknown tokens untouched so that
+    -- future regression cases remain visible instead of being guessed.
+    story=story:gsub("%$[Nn]",function() return playerName end)
+    story=story:gsub("%$[Cc]",function() return className end)
+    story=story:gsub("%$[Bb]","\n")
+
+    return story
+  end
+
+  local function NPCReportColor(text,color,formatted)
+    text=tostring(text or "")
+    if not formatted then return text end
+    return "|cff"..color..text.."|r"
+  end
+
+  local function NPCStoryStatusText(value,formatted)
+    local status=tostring(value or "UNKNOWN"):upper()
+
+    local color="aaaaaa"
+
+    if status=="COMPLETED" or status=="REWARDED" or status=="READY" then
+      color="55ff55"
+    elseif status=="ACTIVE" then
+      color="ffff55"
+    elseif status=="AVAILABLE" then
+      color="55ff55"
+    elseif status=="FUTURE" or status=="BLOCKED" or status=="INELIGIBLE" then
+      color="ffaa55"
+    elseif status=="FAILED" then
+      color="ff5555"
+    end
+
+    return NPCReportColor("["..status.."]",color,formatted)
+  end
+
+  local function NPCStoryCategoryLabel(category,formatted)
+    local labels={
+      GOSSIP={"Introduction / gossip","66ccff"},
+      GOSSIP_OPTION={"Conversation option","66ccff"},
+      SPOKEN_LINE={"Spoken line","ffffff"},
+      QUEST_DETAILS={"Quest story","ffd100"},
+      QUEST_OBJECTIVES={"Quest objectives","5599ff"},
+      QUEST_REQUEST={"Quest progress dialogue","ffff55"},
+      QUEST_REWARD={"Quest completion dialogue","55ff55"},
+      QUEST_COMPLETED={"Completed text","aaaaaa"},
+    }
+
+    local entry=labels[category]
+    local label=entry and entry[1] or tostring(category or "Story")
+    local color=entry and entry[2] or "ffd100"
+
+    return NPCReportColor(label,color,formatted)
+  end
+
+  local function Report(formatted)
     local s=Platform.NPCUI.server or {}; local o=s.overview or {}; local st=s.state or {}; local l=s.location or {}; local t=s.technical or {}
-    local lines={"AZERCORE OPS — NPC REPORT",string.format("%s  |  Entry %s",s.begin and s.begin.name or UnitName("target") or "No NPC",s.begin and s.begin.entry or "?"),"View: "..Platform.NPCUI.view,""}
-    if Platform.NPCUI.view=="QUESTS" then
+    local reportName=s.begin and s.begin.name or UnitName("target") or "No NPC"
+    local reportEntry=s.begin and s.begin.entry or "?"
+
+    if Platform.NPCUI.view=="SEARCH" and Platform.NPCUI.selectedSearch then
+      reportName=Platform.NPCUI.selectedSearch.name or reportName
+      reportEntry=Platform.NPCUI.selectedSearch.entry or reportEntry
+    end
+
+    local lines={"AZERCORE OPS — NPC REPORT",string.format("%s  |  Entry %s",reportName,reportEntry),"View: "..Platform.NPCUI.view,""}
+    if Platform.NPCUI.view=="SEARCH" then
+      table.insert(lines,"Search query: "..tostring(Platform.NPCUI.searchQuery or ""))
+
+      if Platform.NPCUI.selectedSearch then
+        local selected=Platform.NPCUI.selectedSearch
+
+        table.insert(
+          lines,
+          string.format(
+            "Selected: %s (Entry %s)",
+            selected.name or "Creature",
+            selected.entry or "?"
+          )
+        )
+
+        table.insert(
+          lines,
+          string.format(
+            "Reported world spawns: %s",
+            Platform.NPCUI.spawnTotal or selected.spawns or 0
+          )
+        )
+
+        for i,spawn in ipairs(Platform.NPCUI.spawns or {}) do
+          table.insert(
+            lines,
+            string.format(
+              "%02d. Spawn %s | Map %s | %s, %s, %s | Orientation %s | SpawnMask %s | PhaseMask %s | State %s | Grid %s%s%s",
+              i,
+              spawn.guid or "?",
+              spawn.map or "?",
+              spawn.x or "?",
+              spawn.y or "?",
+              spawn.z or "?",
+              spawn.o or "?",
+              spawn.spawnmask or "?",
+              spawn.phasemask or "?",
+              spawn.status or "UNKNOWN",
+              spawn.gridloaded=="1" and "LOADED" or "INACTIVE",
+              tonumber(spawn.respawn) and tonumber(spawn.respawn)>0
+                and (" | Respawn "..tostring(spawn.respawn).."s")
+                or "",
+              spawn.samemap=="1"
+                and (" | Distance "..tostring(spawn.distance or "?"))
+                or ""
+            )
+          )
+        end
+
+        if #(Platform.NPCUI.spawns or {})==0 then
+          table.insert(
+            lines,
+            Platform.NPCUI.spawnsLoading
+              and "Loading database spawns..."
+              or "No database spawns were returned."
+          )
+        end
+      else
+        for _,result in ipairs(Platform.NPCUI.searchResults or {}) do
+          table.insert(
+            lines,
+            string.format(
+              "%s (Entry %s) | Level %s-%s | Rank %s | Type %s | Spawns %s",
+              result.name or "Creature",
+              result.entry or "?",
+              result.min or "?",
+              result.max or "?",
+              result.rank or "?",
+              result.type or "?",
+              result.spawns or "0"
+            )
+          )
+        end
+
+        if #(Platform.NPCUI.searchResults or {})==0 then
+          table.insert(
+            lines,
+            Platform.NPCUI.searchLoading
+              and "Searching..."
+              or "No NPC search results loaded."
+          )
+        end
+      end
+
+    elseif Platform.NPCUI.view=="QUESTS" then
       for _,q in ipairs(s.quests or {}) do table.insert(lines,string.format("[%s] %s (ID %s) — %s / %s%s",q.relation or "?",q.title or "Quest",q.id or "?",q.status or "?",q.eligibility or "?",q.reason and q.reason~="" and (" — "..q.reason) or "")) end
       if #(s.quests or {})==0 then table.insert(lines,"This NPC has no reported quest relations for this character.") end
     elseif Platform.NPCUI.view=="STORY" then
-      table.insert(lines,"MY STORY PROGRESS")
-      for _,q in ipairs(s.quests or {}) do table.insert(lines,string.format("[%s] %s — %s%s",q.eligibility or q.status or "?",q.title or ("Quest "..tostring(q.id)),q.relation=="START" and "Begins here" or "Returns here",q.reason and q.reason~="" and (" — "..q.reason) or "")) end
-      if #(s.quests or {})==0 then table.insert(lines,"No quest chapters are connected to this NPC for the current character.") end
-      table.insert(lines,""); table.insert(lines,"DATABASE NARRATIVE")
-      local labels={GOSSIP="Introduction / gossip",GOSSIP_OPTION="Conversation option",SPOKEN_LINE="Spoken line",QUEST_DETAILS="Quest story",QUEST_OBJECTIVES="Quest objectives",QUEST_REQUEST="Quest progress dialogue",QUEST_REWARD="Quest completion dialogue",QUEST_COMPLETED="Completed text"}
-      local previous
-      for _,story in ipairs(s.story or {}) do
-        local key=tostring(story.category or "STORY")..":"..tostring(story.id or "0")..":"..tostring(story.title or "")
-        if story.part=="1" or key~=previous then table.insert(lines,""); table.insert(lines,string.format("%s — %s%s",labels[story.category] or story.category or "Story",story.title or "NPC",story.id and story.id~="0" and (" ["..story.id.."]") or "")) end
-        table.insert(lines,story.text or ""); previous=key
+      table.insert(lines,NPCReportColor("MY STORY PROGRESS","ffd100",formatted))
+
+      for _,q in ipairs(s.quests or {}) do
+        local relation=q.relation=="START" and "Begins here" or "Returns here"
+        local relationColor=q.relation=="START" and "55ff55" or "5599ff"
+
+        local line=string.format(
+          "%s %s — %s%s",
+          NPCStoryStatusText(q.eligibility or q.status or "UNKNOWN",formatted),
+          NPCReportColor(
+            q.title or ("Quest "..tostring(q.id)),
+            "ffffff",
+            formatted
+          ),
+          NPCReportColor(relation,relationColor,formatted),
+          q.reason and q.reason~="" and
+            (" — "..NPCReportColor(q.reason,"aaaaaa",formatted))
+            or ""
+        )
+
+        table.insert(lines,line)
       end
-      if #(s.story or {})==0 then table.insert(lines,"No database storyline was found for this NPC.") end
+
+      if #(s.quests or {})==0 then
+        table.insert(
+          lines,
+          NPCReportColor(
+            "No quest chapters are connected to this NPC for the current character.",
+            "aaaaaa",
+            formatted
+          )
+        )
+      end
+
+      table.insert(lines,"")
+      table.insert(lines,NPCReportColor("DATABASE NARRATIVE","ffd100",formatted))
+
+      -- NPC_STORY is deliberately transported in small protocol chunks.
+      -- Reassemble each logical story record before presentation so that
+      -- transport boundaries never become visible line breaks.
+      local storyBlocks={}
+      local currentStory
+
+      for _,story in ipairs(s.story or {}) do
+        local key=
+          tostring(story.category or "STORY")..":"..
+          tostring(story.id or "0")..":"..
+          tostring(story.title or "")
+
+        local startsBlock=tostring(story.part or "1")=="1"
+
+        if not currentStory or startsBlock or currentStory.key~=key then
+          currentStory={
+            key=key,
+            category=story.category,
+            id=story.id,
+            title=story.title,
+            parts={},
+          }
+          table.insert(storyBlocks,currentStory)
+        end
+
+        table.insert(currentStory.parts,tostring(story.text or ""))
+      end
+
+      for _,story in ipairs(storyBlocks) do
+        table.insert(lines,"")
+
+        local heading=string.format(
+          "%s — %s%s",
+          NPCStoryCategoryLabel(story.category,formatted),
+          NPCReportColor(story.title or "NPC","ffffff",formatted),
+          story.id and story.id~="0"
+            and (" "..NPCReportColor("["..story.id.."]","888888",formatted))
+            or ""
+        )
+
+        table.insert(lines,heading)
+
+        local joined=table.concat(story.parts," ")
+        table.insert(
+          lines,
+          NPCReportColor(
+            FormatNPCStoryText(joined,s),
+            "dddddd",
+            formatted
+          )
+        )
+      end
+
+      if #(s.story or {})==0 then
+        table.insert(
+          lines,
+          NPCReportColor(
+            "No database storyline was found for this NPC.",
+            "aaaaaa",
+            formatted
+          )
+        )
+      end
+
     elseif Platform.NPCUI.view=="SERVICES" then table.insert(lines,ServicesText(o.npcflags))
     elseif Platform.NPCUI.view=="LOCATION" or Platform.NPCUI.view=="SPAWN" then table.insert(lines,string.format("Map %s  Zone %s  Area %s\nInstance %s  Phase %s\nPosition %s, %s, %s  Orientation %s",l.map or "?",l.zone or "?",l.area or "?",l.instance or "?",l.phase or "?",l.x or "?",l.y or "?",l.z or "?",l.o or "?"))
     elseif Platform.NPCUI.view=="COMBAT" then table.insert(lines,string.format("Alive: %s\nIn combat: %s\nHealth: %s / %s\nPower: %s / %s (type %s)",st.alive=="1" and "Yes" or "No",st.combat=="1" and "Yes" or "No",st.health or "?",st.maxhealth or "?",st.power or "?",st.maxpower or "?",st.powertype or "?"))
     elseif Platform.NPCUI.view=="LOOT" then
-      table.insert(lines,string.format("Creature loot template: %s\nPickpocket loot template: %s\nSkinning loot template: %s\nMoney: %s–%s copper",t.loot or "0",t.pickpocket or "0",t.skin or "0",t.mingold or "0",t.maxgold or "0"))
-      for _,item in ipairs(s.loot or {}) do table.insert(lines,string.format("%s (ID %s) — %s%%, %s–%s%s",item.name or "Item",item.id or "?",item.chance or "?",item.min or "?",item.max or "?",item.quest=="1" and " — quest item" or "")) end
+      local loot=s.loot or {}
+      local references=s.lootReferences or {}
+
+      table.insert(
+        lines,
+        string.format(
+          "Creature loot template: %s\nPickpocket loot template: %s\nSkinning loot template: %s\nMoney: %s–%s copper",
+          t.loot or "0",
+          t.pickpocket or "0",
+          t.skin or "0",
+          t.mingold or "0",
+          t.maxgold or "0"
+        )
+      )
+
+      local function AppendLootSource(label,source)
+        table.insert(lines,"\n"..label)
+
+        local count=0
+
+        for _,item in ipairs(loot) do
+          local itemSource=item.source or "CREATURE"
+
+          if itemSource==source then
+            count=count+1
+
+            local groupId=tonumber(item.group) or 0
+            local chanceText=tostring(item.chance or "?")
+
+            if groupId>0 then
+              local groupInfo=
+                Platform.NPCUI.GroupChanceInfo(
+                  item,
+                  loot,
+                  references
+                )
+
+              if
+                groupInfo
+                and groupInfo.kind=="EQUAL"
+                and groupInfo.baseline
+              then
+                chanceText=
+                  "Group "..tostring(groupId)..
+                  ", equal remainder, baseline "..
+                  string.format("%.2f",groupInfo.baseline)..
+                  "%*"
+
+              elseif
+                groupInfo
+                and groupInfo.kind=="EQUAL"
+              then
+                chanceText=
+                  "Group "..tostring(groupId)..
+                  ", equal remainder, DB Chance "..
+                  chanceText
+
+              else
+                chanceText=
+                  "Group "..tostring(groupId)..
+                  ", explicit DB chance "..
+                  chanceText.."%"
+              end
+            else
+              chanceText=chanceText.."% chance"
+            end
+
+            table.insert(
+              lines,
+              string.format(
+                "%s (ID %s) — %s, %s–%s, LootMode %s%s",
+                item.name or "Item",
+                item.id or "?",
+                chanceText,
+                item.min or "?",
+                item.max or "?",
+                item.lootmode or "1",
+                item.quest=="1" and " — quest item" or ""
+              )
+            )
+          end
+        end
+
+        if count==0 then
+          table.insert(lines,"No direct items.")
+        end
+      end
+
+      AppendLootSource("CREATURE DROPS","CREATURE")
+
+      table.insert(lines,"\nREFERENCE POOLS")
+
+      if #references==0 then
+        table.insert(lines,"No top-level reference pools.")
+      else
+        for _,ref in ipairs(references) do
+          table.insert(
+            lines,
+            string.format(
+              "Pool %s — source %s, parent table %s, raw Chance %s, Group %s, Count %s–%s, LootMode %s, %s rows (%s direct, %s nested)%s",
+              ref.reference or "?",
+              ref.source or "?",
+              ref.table or "?",
+              ref.chance or "?",
+              ref.group or "0",
+              ref.min or "?",
+              ref.max or "?",
+              ref.lootmode or "1",
+              ref.rows or "0",
+              ref.directrows or "0",
+              ref.nestedrows or "0",
+              ref.comment and ref.comment~="" and (" — "..ref.comment) or ""
+            )
+          )
+        end
+      end
+
+      table.insert(
+        lines,
+        "\n* Group baseline assumes all shown members are eligible. Conditions, LootMode and script hooks can change the eligible pool."
+      )
+
+      AppendLootSource("PICKPOCKET","PICKPOCKET")
+
+      if tonumber(t.skin or 0)>0 then
+        AppendLootSource("SKINNING","SKINNING")
+      else
+        table.insert(lines,"\nSKINNING")
+        table.insert(lines,"No skinning loot table configured.")
+      end
     elseif Platform.NPCUI.view=="TECHNICAL" then table.insert(lines,string.format("GUID: %s\nEntry: %s\nFaction template: %s\nNPC flags: %s\nUnit flags: %s\nDynamic flags: %s\nAI: %s\nScript ID: %s",s.begin and s.begin.guid or "?",s.begin and s.begin.entry or "?",o.faction or "?",o.npcflags or "?",t.unitflags or "?",t.dynamicflags or "?",t.ai or "None",t.script or "0"))
     else table.insert(lines,string.format("Level: %s (template %s–%s)\nRank: %s  Type: %s  Family: %s\nQuest relations: %d\n\nSelect another Action Bar view for detailed information.",o.level or UnitLevel("target") or "?",o.min or "?",o.max or "?",o.rank or "?",o.type or "?",o.family or "?",#(s.quests or {}))) end
     return table.concat(lines,"\n")
   end
-  Platform.NPCUI.Report=Report
+  Platform.NPCUI.GroupChanceInfo=function(entry,loot,references)
+    local groupId=tonumber(entry and entry.group) or 0
+
+    if groupId<=0 then
+      return nil
+    end
+
+    local source=tostring(entry.source or "CREATURE")
+    local tableId=tostring(entry.table or "")
+    local explicitTotal=0
+    local equalCount=0
+
+    local function Include(row)
+      if
+        tostring(row.source or "CREATURE")==source
+        and tostring(row.table or "")==tableId
+        and (tonumber(row.group) or 0)==groupId
+      then
+        local chance=tonumber(row.chance) or 0
+
+        if chance>0 then
+          explicitTotal=explicitTotal+chance
+        else
+          equalCount=equalCount+1
+        end
+      end
+    end
+
+    for _,row in ipairs(loot or {}) do
+      Include(row)
+    end
+
+    for _,row in ipairs(references or {}) do
+      Include(row)
+    end
+
+    local rawChance=tonumber(entry.chance) or 0
+
+    if rawChance>0 then
+      return {
+        kind="EXPLICIT",
+        raw=rawChance,
+        explicitTotal=explicitTotal,
+        equalCount=equalCount
+      }
+    end
+
+    local remainder=100-explicitTotal
+
+    if remainder<0 then
+      remainder=0
+    end
+
+    local baseline=nil
+
+    if equalCount>0 and explicitTotal<100 then
+      baseline=remainder/equalCount
+    end
+
+    return {
+      kind="EQUAL",
+      raw=rawChance,
+      explicitTotal=explicitTotal,
+      equalCount=equalCount,
+      remainder=remainder,
+      baseline=baseline
+    }
+  end
+
+  Platform.NPCUI.Report=function() return Report(false) end
   Platform.NPCUI.Render=function()
-    local s=Platform.NPCUI.server or {}; local title={OVERVIEW="NPC OVERVIEW",STORY="NPC STORY",QUESTS="QUEST INTELLIGENCE",SERVICES="SERVICES",SPAWN="SPAWN INFORMATION",LOCATION="LOCATION",COMBAT="COMBAT STATE",LOOT="LOOT",TECHNICAL="TECHNICAL"}
+    local s=Platform.NPCUI.server or {}; local title={SEARCH="NPC SEARCH / WORLD SPAWNS",OVERVIEW="NPC OVERVIEW",STORY="NPC STORY",QUESTS="QUEST INTELLIGENCE",SERVICES="SERVICES",SPAWN="SPAWN INFORMATION",LOCATION="LOCATION",COMBAT="COMBAT STATE",LOOT="LOOT",TECHNICAL="TECHNICAL"}
     wt:SetText(title[Platform.NPCUI.view] or "NPC")
     for key,button in pairs(Platform.NPCUI.viewButtons) do
       if key==Platform.NPCUI.view then button:SetBackdropColor(unpack(C.selected)); button:SetBackdropBorderColor(unpack(C.gold))
@@ -1125,38 +1999,795 @@ local function BuildNPC()
     end
     if Platform.NPCUI.view=="OVERVIEW" then modelViewport:Show(); scroll:Hide() else modelViewport:Hide(); scroll:Show() end
     for _,row in ipairs(Platform.NPCUI.questRows) do row:Hide() end
-    if Platform.NPCUI.view=="QUESTS" then
-      text:SetText("")
-      EnsureLinkedRows(#(s.quests or {}))
-      for i,q in ipairs(s.quests or {}) do local row=Platform.NPCUI.questRows[i]; if row then row.link=QuestLink(q); row:SetText(string.format("%s  [%s]  %s — %s",q.relation or "?",q.eligibility or "?",q.title or ("Quest "..q.id),q.reason or "")); row:Show() end end
-      child:SetHeight(math.max(360,#(s.quests or {})*27+8))
-    elseif Platform.NPCUI.view=="LOOT" and #(s.loot or {})>0 then
-      text:SetText("")
-      EnsureLinkedRows(#(s.loot or {}))
-      for i,item in ipairs(s.loot or {}) do local row=Platform.NPCUI.questRows[i]; if row then row.link=ItemLink(item); row:SetText(string.format("%s  —  %s%%  •  %s–%s%s",item.name or ("Item "..tostring(item.id)),item.chance or "?",item.min or "?",item.max or "?",item.quest=="1" and "  •  Quest" or "")); row:Show() end end
-      child:SetHeight(math.max(360,#(s.loot or {})*27+8))
-    else text:SetText(Report()); child:SetHeight(math.max(360,text:GetStringHeight()+16)) end
+    for _,row in ipairs(Platform.NPCUI.searchRows or {}) do row:Hide() end
+    for _,row in ipairs(Platform.NPCUI.spawnRows or {}) do row:Hide() end
+
+    local searchContentWidth=nil
+
+    if Platform.NPCUI.view=="SEARCH" or Platform.NPCUI.view=="LOOT" then
+      local availableWidth=scroll:GetWidth() or 0
+
+      -- During the first frame after /reload WoW can report zero width.
+      -- Use the known NPC workspace fallback until layout is resolved.
+      if availableWidth<420 then availableWidth=480 end
+
+      searchContentWidth=math.floor(availableWidth-18)
+
+      child:SetWidth(searchContentWidth)
+      text:SetWidth(searchContentWidth-12)
+    else
+      -- Preserve the dimensions used by the validated Quest / Story views.
+      child:SetWidth(380)
+      text:SetWidth(360)
+    end
+
+    if Platform.NPCUI.view=="SEARCH" then
+      local selected=Platform.NPCUI.selectedSearch
+
+      if not selected then
+        local results=Platform.NPCUI.searchResults or {}
+
+        if Platform.NPCUI.searchLoading then
+          text:SetText(
+            "Searching for |cffffd100"..
+            tostring(Platform.NPCUI.searchQuery or "")..
+            "|r..."
+          )
+        elseif #results==0 then
+          text:SetText(
+            "Search by creature name or exact Entry ID.\n"..
+            "Select a result to load its authoritative database spawns."
+          )
+        else
+          text:SetText(
+            string.format(
+              "%d search result%s for |cffffd100%s|r\n"..
+              "Select an NPC to load its world spawns.",
+              #results,
+              #results==1 and "" or "s",
+              tostring(Platform.NPCUI.searchQuery or "")
+            )
+          )
+        end
+
+        EnsureNPCSearchRows(#results)
+
+        local y=math.max(50,math.ceil(text:GetStringHeight()+16))
+
+        for i,result in ipairs(results) do
+          local row=Platform.NPCUI.searchRows[i]
+
+          row:ClearAllPoints()
+          row:SetPoint("TOPLEFT",2,-y)
+          row:SetWidth(math.max(355,(searchContentWidth or 380)-8))
+          row:SetHeight(46)
+          row.result=result
+          row:SetBackdropColor(unpack(C.button))
+          row:SetBackdropBorderColor(unpack(C.border))
+
+          row:SetText(
+            string.format(
+              "|cffffd100%s|r  |cff888888[Entry %s]|r",
+              result.name or "Creature",
+              result.entry or "?"
+            )
+          )
+
+          local minLevel=tostring(result.min or "?")
+          local maxLevel=tostring(result.max or "?")
+          local levelText=minLevel==maxLevel and minLevel or (minLevel.."–"..maxLevel)
+
+          row.detail:SetText(
+            string.format(
+              "Level %s  •  Rank %s  •  Type %s  •  %s world spawn%s",
+              levelText,
+              tostring(result.rank or "?"),
+              tostring(result.type or "?"),
+              tostring(result.spawns or "0"),
+              tonumber(result.spawns)==1 and "" or "s"
+            )
+          )
+
+          row:Show()
+          y=y+52
+        end
+
+        child:SetHeight(math.max(360,y+8))
+
+      else
+        local spawns=Platform.NPCUI.spawns or {}
+
+        local headerText=string.format(
+          "|cffffd100%s|r  |cff888888[Entry %s]|r\n%s",
+          selected.name or "Creature",
+          selected.entry or "?",
+          Platform.NPCUI.spawnsLoading
+            and "Loading authoritative database spawns..."
+            or string.format(
+              "Showing %d of %d database spawn%s. Select one, then use Go to Spawn.",
+              #spawns,
+              tonumber(Platform.NPCUI.spawnTotal) or #spawns,
+              (tonumber(Platform.NPCUI.spawnTotal) or #spawns)==1 and "" or "s"
+            )
+        )
+
+        text:SetText(headerText)
+
+        EnsureNPCSpawnRows(#spawns)
+
+        local y=math.max(58,math.ceil(text:GetStringHeight()+16))
+
+        for i,spawn in ipairs(spawns) do
+          local row=Platform.NPCUI.spawnRows[i]
+          local selectedSpawn=
+            Platform.NPCUI.selectedSpawn
+            and tostring(Platform.NPCUI.selectedSpawn.guid)==tostring(spawn.guid)
+
+          row:ClearAllPoints()
+          row:SetPoint("TOPLEFT",2,-y)
+          row:SetWidth(math.max(355,(searchContentWidth or 380)-8))
+          row:SetHeight(64)
+          row.spawn=spawn
+
+          if selectedSpawn then
+            row:SetBackdropColor(unpack(C.selected))
+            row:SetBackdropBorderColor(unpack(C.gold))
+          else
+            row:SetBackdropColor(unpack(C.button))
+            row:SetBackdropBorderColor(unpack(C.border))
+          end
+
+          local nearest=
+            i==1 and spawn.samemap=="1"
+            and "  |cff55ff55NEAREST|r"
+            or ""
+
+          row:SetText(
+            string.format(
+              "Spawn %s  •  Map %s%s",
+              tostring(spawn.guid or "?"),
+              tostring(spawn.map or "?"),
+              nearest
+            )
+          )
+
+          local distance=
+            spawn.samemap=="1"
+            and tonumber(spawn.distance)
+            and string.format("Distance %.2f yd",tonumber(spawn.distance))
+            or "Different map"
+
+          local spawnStatus=tostring(spawn.status or "UNKNOWN")
+          local statusColors={
+            ALIVE="|cff55ff55",
+            DEAD="|cffff5555",
+            RESPAWNING="|cffffaa00",
+            NOT_LOADED="|cffaaaaaa",
+            NOT_PRESENT="|cffffff55",
+            MAP_NOT_ACTIVE="|cff888888",
+            UNKNOWN="|cffffffff"
+          }
+
+          local statusText=
+            (statusColors[spawnStatus] or statusColors.UNKNOWN)
+            ..spawnStatus.."|r"
+
+          if tonumber(spawn.respawn) and tonumber(spawn.respawn)>0 then
+            statusText=statusText.." ("..tostring(spawn.respawn).."s)"
+          end
+
+          local gridText=
+            spawn.gridloaded=="1"
+            and "|cff55ff55LOADED|r"
+            or "|cffaaaaaaINACTIVE|r"
+
+          row.detail:SetText(
+            string.format(
+              "%s  •  Position %s, %s, %s\nState %s  •  Grid %s  •  SpawnMask %s  •  Phase %s",
+              distance,
+              tostring(spawn.x or "?"),
+              tostring(spawn.y or "?"),
+              tostring(spawn.z or "?"),
+              statusText,
+              gridText,
+              tostring(spawn.spawnmask or "?"),
+              tostring(spawn.phasemask or "?")
+            )
+          )
+
+          row:Show()
+          y=y+70
+        end
+
+        child:SetHeight(math.max(360,y+8))
+      end
+
+    elseif Platform.NPCUI.view=="QUESTS" then
+      local quests=s.quests or {}
+      local displayRows=BuildNPCQuestDisplayRows(quests)
+
+      text:SetText(string.format(
+        "%d quest relation%s  •  %d unique quest%s\nShift-click a quest row to insert its link in chat.",
+        #quests,
+        #quests==1 and "" or "s",
+        #displayRows,
+        #displayRows==1 and "" or "s"
+      ))
+
+      EnsureLinkedRows(#displayRows)
+
+      local y=math.max(42,math.ceil(text:GetStringHeight()+14))
+
+      for i,entry in ipairs(displayRows) do
+        local row=Platform.NPCUI.questRows[i]
+        if row then
+          y=LayoutNPCQuestRow(row,y,entry)
+        end
+      end
+
+      child:SetHeight(math.max(360,y+6))
+
+    elseif Platform.NPCUI.view=="LOOT" then
+      local t=s.technical or {}
+      local loot=s.loot or {}
+      local references=s.lootReferences or {}
+
+      local creatureLoot={}
+      local pickpocketLoot={}
+      local skinningLoot={}
+
+      for _,item in ipairs(loot) do
+        local source=item.source or "CREATURE"
+
+        if source=="PICKPOCKET" then
+          table.insert(pickpocketLoot,item)
+        elseif source=="SKINNING" then
+          table.insert(skinningLoot,item)
+        else
+          table.insert(creatureLoot,item)
+        end
+      end
+
+      text:SetText(
+        string.format(
+          "Money: %s–%s copper\n"..
+          "Shift-click item cards to insert native item links in chat.\n"..
+          "|cff888888Grouped items follow AzerothCore group semantics. Baseline equal-remainder chance assumes all shown members are eligible; conditions, LootMode and script hooks can change the pool. Reference pools remain raw DB values.|r",
+          t.mingold or "0",
+          t.maxgold or "0"
+        )
+      )
+
+      local cards={}
+
+      local function AddHeader(label,detail)
+        table.insert(
+          cards,
+          {
+            kind="HEADER",
+            label=label,
+            detail=detail
+          }
+        )
+      end
+
+      local function AddItems(items)
+        for _,item in ipairs(items) do
+          table.insert(
+            cards,
+            {
+              kind="ITEM",
+              item=item
+            }
+          )
+        end
+      end
+
+      AddHeader(
+        "CREATURE DROPS",
+        tonumber(t.loot or 0)>0
+          and string.format(
+            "Template %s  •  %d direct item%s",
+            t.loot or "0",
+            #creatureLoot,
+            #creatureLoot==1 and "" or "s"
+          )
+          or "No creature loot table configured."
+      )
+
+      AddItems(creatureLoot)
+
+      AddHeader(
+        "REFERENCE POOLS",
+        string.format(
+          "%d top-level reference pool%s",
+          #references,
+          #references==1 and "" or "s"
+        )
+      )
+
+      for _,ref in ipairs(references) do
+        table.insert(
+          cards,
+          {
+            kind="REFERENCE",
+            reference=ref
+          }
+        )
+      end
+
+      AddHeader(
+        "PICKPOCKET",
+        tonumber(t.pickpocket or 0)>0
+          and string.format(
+            "Template %s  •  %d direct item%s",
+            t.pickpocket or "0",
+            #pickpocketLoot,
+            #pickpocketLoot==1 and "" or "s"
+          )
+          or "No pickpocket loot table configured."
+      )
+
+      AddItems(pickpocketLoot)
+
+      AddHeader(
+        "SKINNING",
+        tonumber(t.skin or 0)>0
+          and string.format(
+            "Template %s  •  %d direct item%s",
+            t.skin or "0",
+            #skinningLoot,
+            #skinningLoot==1 and "" or "s"
+          )
+          or "No skinning loot table configured."
+      )
+
+      AddItems(skinningLoot)
+
+      EnsureLinkedRows(#cards)
+
+      local y=math.max(64,math.ceil(text:GetStringHeight()+18))
+      local missingLinks=0
+
+      for i,card in ipairs(cards) do
+        local row=Platform.NPCUI.questRows[i]
+
+        if row then
+          row:ClearAllPoints()
+          row:SetPoint("TOPLEFT",2,-y)
+          row:SetWidth(math.max(355,(searchContentWidth or 380)-8))
+
+          row.link=nil
+          row.linkExpected=false
+          row.label:SetWordWrap(false)
+
+          if card.kind=="HEADER" then
+            row:SetHeight(38)
+            row:SetBackdropColor(unpack(C.panel))
+            row:SetBackdropBorderColor(unpack(C.border))
+
+            row:SetText(
+              "|cff66ccff"..
+              tostring(card.label or "LOOT")..
+              "|r"
+            )
+
+            row.detail:SetText(
+              tostring(card.detail or "")
+            )
+
+            row:Show()
+            y=y+44
+
+          elseif card.kind=="REFERENCE" then
+            local ref=card.reference or {}
+
+            row:SetHeight(
+              ref.comment and ref.comment~=""
+                and 84
+                or 68
+            )
+
+            row:SetBackdropColor(unpack(C.button))
+            row:SetBackdropBorderColor(unpack(C.border))
+
+            row:SetText(
+              string.format(
+                "|cffffd100Reference Pool %s|r  |cff888888[%s]|r",
+                tostring(ref.reference or "?"),
+                tostring(ref.source or "REFERENCE")
+              )
+            )
+
+            local detail=
+              string.format(
+                "Parent template %s  •  Raw Chance %s  •  Group %s  •  Count %s–%s  •  LootMode %s\n"..
+                "%s rows  •  %s direct items  •  %s child references",
+                tostring(ref.table or "?"),
+                tostring(ref.chance or "?"),
+                tostring(ref.group or "0"),
+                tostring(ref.min or "?"),
+                tostring(ref.max or "?"),
+                tostring(ref.lootmode or "1"),
+                tostring(ref.rows or "0"),
+                tostring(ref.directrows or "0"),
+                tostring(ref.nestedrows or "0")
+              )
+
+            if ref.comment and ref.comment~="" then
+              detail=detail.."\n"..tostring(ref.comment)
+            end
+
+            row.detail:SetText(detail)
+
+            row:Show()
+            y=y+row:GetHeight()+6
+
+          elseif card.kind=="ITEM" then
+            local item=card.item or {}
+            local link=ItemLink(item)
+
+            if not link then
+              missingLinks=missingLinks+1
+            end
+
+            row.link=link
+            row.linkExpected=true
+
+            row:SetHeight(50)
+            row:SetBackdropColor(unpack(C.button))
+            row:SetBackdropBorderColor(unpack(C.border))
+
+            local displayName
+
+            if link then
+              displayName=link
+            else
+              local quality=tonumber(item.quality) or 1
+              local r,g,b=GetItemQualityColor(quality)
+
+              local hex=string.format(
+                "ff%02x%02x%02x",
+                math.floor((r or 1)*255+.5),
+                math.floor((g or 1)*255+.5),
+                math.floor((b or 1)*255+.5)
+              )
+
+              displayName=
+                "|c"..hex..
+                tostring(
+                  item.name
+                  or ("Item "..tostring(item.id))
+                )..
+                "|r"
+            end
+
+            row:SetText(
+              string.format(
+                "%s  |cff888888[ID %s]|r",
+                displayName,
+                tostring(item.id or "?")
+              )
+            )
+
+            local chanceValue=tostring(item.chance or "?")
+            local groupId=tonumber(item.group) or 0
+            local chanceText
+
+            if groupId>0 then
+              local groupInfo=
+                Platform.NPCUI.GroupChanceInfo(
+                  item,
+                  loot,
+                  references
+                )
+
+              if
+                groupInfo
+                and groupInfo.kind=="EQUAL"
+                and groupInfo.baseline
+              then
+                chanceText=
+                  "Group "..tostring(groupId)..
+                  "  •  Equal remainder"..
+                  "  •  Baseline "..
+                  string.format("%.2f",groupInfo.baseline)..
+                  "%*"
+
+              elseif
+                groupInfo
+                and groupInfo.kind=="EQUAL"
+              then
+                chanceText=
+                  "Group "..tostring(groupId)..
+                  "  •  Equal remainder"..
+                  "  •  DB Chance "..chanceValue
+
+              else
+                chanceText=
+                  "Group "..tostring(groupId)..
+                  "  •  Explicit DB chance "..chanceValue.."%"
+              end
+            else
+              chanceText=
+                chanceValue.."% chance"
+            end
+
+            local details={
+              chanceText,
+              "Count "..
+                tostring(item.min or "?")..
+                "–"..
+                tostring(item.max or "?")
+            }
+
+            if tostring(item.lootmode or "1")~="1" then
+              table.insert(
+                details,
+                "LootMode "..tostring(item.lootmode)
+              )
+            end
+
+            if item.quest=="1" then
+              table.insert(
+                details,
+                "|cffffd100Quest item|r"
+              )
+            end
+
+            row.detail:SetText(
+              table.concat(details,"  •  ")
+            )
+
+            row:Show()
+            y=y+56
+          end
+        end
+      end
+
+      child:SetHeight(math.max(360,y+8))
+
+      if missingLinks==0 then
+        Platform.NPCUI.lootLinkRetry=0
+        Platform.NPCUI.lootLinkRetryPending=false
+
+      elseif
+        (Platform.NPCUI.lootLinkRetry or 0)<20
+        and not Platform.NPCUI.lootLinkRetryPending
+      then
+        Platform.NPCUI.lootLinkRetryPending=true
+
+        After(.25,function()
+          Platform.NPCUI.lootLinkRetryPending=false
+          Platform.NPCUI.lootLinkRetry=
+            (Platform.NPCUI.lootLinkRetry or 0)+1
+
+          if
+            Platform.NPCUI.view=="LOOT"
+            and Platform.NPCUI.Render
+          then
+            Platform.NPCUI.Render()
+          end
+        end)
+      end
+
+    else
+      text:SetText(Report(true))
+      child:SetHeight(math.max(360,text:GetStringHeight()+16))
+    end
   end
   for i,d in ipairs(views) do
     local viewLabel,viewKey=d[1],d[2]
     local b=Button(action,viewLabel,88,22,function() Platform.NPCUI.view=viewKey; Platform.NPCUI.Render() end,"Open the NPC "..viewLabel.." workspace"); b:SetPoint("TOPLEFT",8,-29-(i-1)*27); Platform.NPCUI.viewButtons[viewKey]=b
     b:SetScript("OnLeave",function() if Platform.NPCUI.Render then Platform.NPCUI.Render() end; GameTooltip:Hide() end)
   end
-  Button(action,"Copy",88,22,function() ShowSelectableReport("Copy NPC report",Report()) end,"Copy the active NPC workspace report"):SetPoint("BOTTOMLEFT",8,61)
-  Button(action,"Share",88,22,function() local f=EnsureShareFrame(); f:SetCapturedMessage(Report(),"NPC",function() return Report(),"NPC" end); f:Show(); f:Raise() end,"Share the active NPC workspace report"):SetPoint("BOTTOMLEFT",8,34)
-  Button(action,"Export",88,22,function() ShowSelectableReport("Export NPC report",Report()) end,"Export the active NPC workspace report"):SetPoint("BOTTOMLEFT",8,7)
+  local copyButton=Button(
+    workspace,
+    "Copy",
+    70,
+    22,
+    function()
+      ShowSelectableReport("Copy NPC report",Report(false))
+    end,
+    "Copy the active NPC workspace report"
+  )
+  copyButton:SetPoint("BOTTOMRIGHT",-164,7)
+
+  local shareButton=Button(
+    workspace,
+    "Share",
+    70,
+    22,
+    function()
+      local f=EnsureShareFrame()
+      f:SetCapturedMessage(
+        Report(false),
+        "NPC",
+        function() return Report(false) end,
+        "NPC"
+      )
+      f:Show()
+      f:Raise()
+    end,
+    "Share the active NPC workspace report"
+  )
+  shareButton:SetPoint("BOTTOMRIGHT",-86,7)
+
+  local exportButton=Button(
+    workspace,
+    "Export",
+    70,
+    22,
+    function()
+      ShowSelectableReport("Export NPC report",Report(false))
+    end,
+    "Export the active NPC workspace report"
+  )
+  exportButton:SetPoint("BOTTOMRIGHT",-8,7)
 
   Platform.NPCUI.Update=function()
     local valid=UnitExists("target") and not UnitIsPlayer("target")
-    local name=valid and UnitName("target") or "No creature selected"
-    if valid then SetPortraitTexture(portrait,"target"); model:SetUnit("target") else portrait:SetTexture("Interface\\Icons\\INV_Misc_QuestionMark"); model:SetUnit("player") end
-    iname:SetText(name); imeta:SetText(valid and string.format("Level %s %s\n%s",UnitLevel("target") or "?",UnitClassification("target") or "Creature",UnitIsDeadOrGhost("target") and "Dead" or "Alive") or "Select an NPC to inspect its creature data and quest relations.")
-    RefreshNPCOperationButtons(); Platform.NPCUI.Render()
+    local databaseSelection=Platform.NPCUI.selectedSearch
+
+    if valid then
+      SetPortraitTexture(portrait,"target")
+      model:SetUnit("target")
+
+      iname:SetText(UnitName("target") or "Creature")
+      imeta:SetText(
+        string.format(
+          "Level %s %s\n%s",
+          UnitLevel("target") or "?",
+          UnitClassification("target") or "Creature",
+          UnitIsDeadOrGhost("target") and "Dead" or "Alive"
+        )
+      )
+
+    elseif databaseSelection then
+      portrait:SetTexture("Interface\\Icons\\INV_Misc_QuestionMark")
+      model:SetUnit("player")
+
+      iname:SetText(databaseSelection.name or "Creature")
+      imeta:SetText(
+        string.format(
+          "Entry %s  •  Database selection\n%s world spawn%s  •  No live creature targeted",
+          tostring(databaseSelection.entry or "?"),
+          tostring(
+            tonumber(Platform.NPCUI.spawnTotal)
+            or tonumber(databaseSelection.spawns)
+            or 0
+          ),
+          (
+            tonumber(Platform.NPCUI.spawnTotal)
+            or tonumber(databaseSelection.spawns)
+            or 0
+          )==1 and "" or "s"
+        )
+      )
+
+    else
+      portrait:SetTexture("Interface\\Icons\\INV_Misc_QuestionMark")
+      model:SetUnit("player")
+
+      iname:SetText("No creature selected")
+      imeta:SetText(
+        "Search for an NPC or target a live creature to inspect it."
+      )
+    end
+
+    RefreshNPCOperationButtons()
+    Platform.NPCUI.Render()
   end
   Platform.NPCUI.Inspect=function(silent)
     local id,err=TargetCreatureEntry(); if not id then if not silent then SetStatus(err,true) end; Platform.NPCUI.Update(); return end
     Platform.NPCUI.captureEntry=id; Platform.NPCUI.ignoreStream=false; SendCommand(CMD.npcInspect); if silent then SetStatus("Inspecting "..tostring(UnitName("target")).."...") end
   end
+
+  Platform.NPCUI.Search=function()
+    local query=
+      tostring(
+        Platform.NPCUI.searchBox
+        and Platform.NPCUI.searchBox:GetText()
+        or ""
+      )
+
+    query=query:gsub("^%s+",""):gsub("%s+$","")
+
+    if query=="" then
+      SetStatus("Enter an NPC name or exact Entry ID.",true)
+      if Platform.NPCUI.searchBox then Platform.NPCUI.searchBox:SetFocus() end
+      return
+    end
+
+    Platform.NPCUI.autoInspect=false
+    Platform.NPCUI.activeOperation="Search NPC"
+    Platform.NPCUI.searchQuery=query
+    Platform.NPCUI.searchResults={}
+    Platform.NPCUI.spawns={}
+    Platform.NPCUI.spawnTotal=0
+    Platform.NPCUI.selectedSearch=nil
+    Platform.NPCUI.selectedSpawn=nil
+    Platform.NPCUI.searchLoading=true
+    Platform.NPCUI.spawnsLoading=false
+    Platform.NPCUI.view="SEARCH"
+
+    RefreshNPCOperationButtons()
+    Platform.NPCUI.Render()
+
+    SendCommand(string.format(CMD.npcSearch,query))
+  end
+
+  Platform.NPCUI.LoadSpawns=function(entry)
+    entry=tonumber(entry)
+
+    if not entry or entry<=0 then
+      SetStatus("Cannot load spawns: invalid NPC Entry ID.",true)
+      return
+    end
+
+    Platform.NPCUI.spawns={}
+    Platform.NPCUI.spawnTotal=0
+    Platform.NPCUI.selectedSpawn=nil
+    Platform.NPCUI.spawnsLoading=true
+    Platform.NPCUI.view="SEARCH"
+
+    Platform.NPCUI.Render()
+    SendCommand(string.format(CMD.npcSpawns,entry))
+  end
+
+  Platform.NPCUI.SelectSearchResult=function(result)
+    if not result or not tonumber(result.entry) then return end
+
+    Platform.NPCUI.selectedSearch=result
+    Platform.NPCUI.selectedSpawn=nil
+    Platform.NPCUI.spawns={}
+    Platform.NPCUI.spawnTotal=tonumber(result.spawns) or 0
+    Platform.NPCUI.view="SEARCH"
+
+    Platform.NPCUI.LoadSpawns(tonumber(result.entry))
+  end
+
+  Platform.NPCUI.GoToSpawn=function()
+    local spawn=Platform.NPCUI.selectedSpawn
+
+    if not spawn then
+      SetStatus("Select an NPC search result and a world spawn first.",true)
+      return
+    end
+
+    local map=tonumber(spawn.map)
+    local x=tonumber(spawn.x)
+    local y=tonumber(spawn.y)
+    local z=tonumber(spawn.z)
+    local o=tonumber(spawn.o)
+
+    if not map or not x or not y or not z or not o then
+      SetStatus("Selected spawn has incomplete coordinates.",true)
+      return
+    end
+
+    -- Use the authoritative spawn coordinates. The existing Movement
+    -- backend stores the current player location before teleporting,
+    -- which powers Emergency Return.
+    SendCommand(string.format(CMD.movementGo,map,x,y,z,o))
+
+    SetStatus(
+      string.format(
+        "Going to %s spawn %s. Emergency Return is available after a successful teleport.",
+        tostring(
+          Platform.NPCUI.selectedSearch
+          and Platform.NPCUI.selectedSearch.name
+          or "NPC"
+        ),
+        tostring(spawn.guid or "?")
+      )
+    )
+  end
+
+  Platform.NPCUI.EmergencyReturn=function()
+    SendCommand(CMD.movementReturn)
+  end
+
   Platform.NPCUI.Update()
 end
 
@@ -1457,11 +3088,42 @@ local function RenderQuest()
   local offset=questUI.resultOffset or 0
   for i,row in ipairs(questUI.rows) do
     local r=questUI.results[offset+i]
+
     if r then
-      row.id=tonumber(r.id); row.title=r.title
-      row.text:SetText(string.format("%s  [%s] %s\n%s  •  level %s",r.id or "?",FactionText(r.faction),r.title or "Unknown",EligibilityText(r.eligibility),r.min or "?"))
+      row.id=tonumber(r.id)
+      row.title=r.title
+
+      local matchLine=""
+
+      if r.matchkind=="REQUIRED_ITEM" then
+        matchLine=string.format(
+          "\n|cff66ccffRequires:|r %s |cff888888[%s]|r ×%s",
+          r.matchname or "Required item",
+          r.matchid or "?",
+          r.matchcount or "?"
+        )
+      end
+
+      row.text:SetText(
+        string.format(
+          "|cffffd100%s|r\n"..
+          "|cffaaaaaaQuest %s|r  •  %s  •  %s  •  Lv %s%s",
+          r.title or "Unknown quest",
+          r.id or "?",
+          FactionText(r.faction),
+          EligibilityText(r.eligibility),
+          r.min or "?",
+          matchLine
+        )
+      )
+
       row:Show()
-    else row.id=nil; row.title=nil; row:Hide() end
+
+    else
+      row.id=nil
+      row.title=nil
+      row:Hide()
+    end
   end
 
   local detailLines={}
@@ -1487,7 +3149,7 @@ local function RenderQuest()
     table.insert(detailLines,"")
     for _,line in ipairs(QuestChainLines(q,true,true)) do table.insert(detailLines,line) end
   else
-    table.insert(detailLines,"Select a search result, enter a partial title, or enter a Quest ID and press Search.")
+    table.insert(detailLines,"Choose Quest or Item search mode, enter a name or exact ID, then select a result.")
   end
   if questUI.detailText then
     questUI.detailText:SetText(table.concat(detailLines,"\n"))
@@ -1582,37 +3244,111 @@ local function QuestHistory()
 end
 
 local function HistoryQuery(entry)
-  if type(entry)=="table" then return tostring(entry.query or entry.title or entry.id or "") end
+  if type(entry)=="table" then
+    return tostring(entry.query or entry.title or entry.id or "")
+  end
   return tostring(entry or "")
 end
 
-local function PushQuestHistory(value,id,title)
+questUI.HistoryMode=function(entry)
+  if type(entry)=="table" and entry.mode=="ITEM" then
+    return "ITEM"
+  end
+  return "QUEST"
+end
+
+local function PushQuestHistory(value,id,title,mode)
   value=tostring(value or ""):match("^%s*(.-)%s*$")
   if value=="" and not id then return end
+
+  mode=(mode=="ITEM") and "ITEM" or "QUEST"
+
   local history=QuestHistory()
-  local key=tostring(id or "").."|"..value
+  local key=mode.."|"..tostring(id or "").."|"..value
+
   for i=#history,1,-1 do
     local e=history[i]
-    local ekey=type(e)=="table" and (tostring(e.id or "").."|"..tostring(e.query or "")) or ("|"..tostring(e))
-    if ekey==key then table.remove(history,i) end
+
+    local eMode=
+      type(e)=="table" and
+      ((e.mode=="ITEM") and "ITEM" or "QUEST") or
+      "QUEST"
+
+    local ekey=
+      type(e)=="table" and
+      (eMode.."|"..tostring(e.id or "").."|"..tostring(e.query or "")) or
+      ("QUEST||"..tostring(e))
+
+    if ekey==key then
+      table.remove(history,i)
+    end
   end
-  table.insert(history,1,{query=value,id=tonumber(id),title=title})
-  while #history>50 do table.remove(history) end
+
+  table.insert(
+    history,
+    1,
+    {
+      query=value,
+      id=tonumber(id),
+      title=title,
+      mode=mode
+    }
+  )
+
+  while #history>50 do
+    table.remove(history)
+  end
+
   questUI.historyIndex=0
 end
 
 local function UpdateLockedQuestHistory()
   if not questUI.lockedQuestId then return end
-  PushQuestHistory(questSearchBox and questSearchBox:GetText() or questUI.lockedQuestTitle,questUI.lockedQuestId,questUI.lockedQuestTitle)
+
+  PushQuestHistory(
+    questSearchBox and questSearchBox:GetText() or questUI.lockedQuestTitle,
+    questUI.lockedQuestId,
+    questUI.lockedQuestTitle,
+    questUI.searchMode or "QUEST"
+  )
 end
 
 local function ShowQuestHistory(delta)
   local history=QuestHistory()
-  if #history==0 then SetStatus("Quest search history is empty.",true); return end
-  questUI.historyIndex=math.max(1,math.min(#history,(questUI.historyIndex or 0)+delta))
-  questSearchBox:SetText(HistoryQuery(history[questUI.historyIndex]))
-  questSearchBox:SetFocus(); questSearchBox:HighlightText()
-  SetStatus("Saved quest search "..questUI.historyIndex.." of "..#history)
+
+  if #history==0 then
+    SetStatus("Quest search history is empty.",true)
+    return
+  end
+
+  questUI.historyIndex=math.max(
+    1,
+    math.min(
+      #history,
+      (questUI.historyIndex or 0)+delta
+    )
+  )
+
+  local entry=history[questUI.historyIndex]
+
+  questUI.searchMode=questUI.HistoryMode(entry)
+
+  if questUI.RefreshSearchMode then
+    questUI.RefreshSearchMode(false)
+  end
+
+  questSearchBox:SetText(HistoryQuery(entry))
+  questSearchBox:SetFocus()
+  questSearchBox:HighlightText()
+
+  SetStatus(
+    string.format(
+      "Saved %s search %d of %d",
+      questUI.searchMode=="ITEM" and "Item" or "Quest",
+      questUI.historyIndex,
+      #history
+    )
+  )
 end
 
 local function ShowSavedQuestHistory()
@@ -1621,9 +3357,27 @@ local function ShowSavedQuestHistory()
   local lines={"AzerCore Ops saved quest searches",""}
   for i,entry in ipairs(history) do
     if type(entry)=="table" then
-      table.insert(lines,string.format("%02d. %s%s",i,entry.query or entry.title or "Quest",entry.id and string.format("  [Quest ID: %d]",entry.id) or ""))
+      local mode=questUI.HistoryMode(entry)
+
+      table.insert(
+        lines,
+        string.format(
+          "%02d. [%s] %s%s",
+          i,
+          mode,
+          entry.query or entry.title or "Quest",
+          entry.id and string.format("  [Quest ID: %d]",entry.id) or ""
+        )
+      )
     else
-      table.insert(lines,string.format("%02d. %s",i,tostring(entry)))
+      table.insert(
+        lines,
+        string.format(
+          "%02d. [QUEST] %s",
+          i,
+          tostring(entry)
+        )
+      )
     end
   end
   ShowSelectableReport("Saved quest search history",table.concat(lines,"\n"),"Delete History",function()
@@ -1646,14 +3400,41 @@ local RequestQuestInfo
 
 local function RunQuestSearch()
   local raw=(questSearchBox:GetText() or ""):match("^%s*(.-)%s*$")
-  if raw=="" then SetStatus("Enter a quest title or Quest ID.",true); return end
-  PushQuestHistory(raw)
-  local numeric=tonumber(raw)
-  if numeric and numeric>0 and numeric==math.floor(numeric) then
-    questUI.results={}; questUI.resultOffset=0; LockQuest(numeric,"Quest "..numeric); UpdateLockedQuestHistory(); RenderQuest(); RequestQuestInfo(numeric); return
+
+  if raw=="" then
+    if (questUI.searchMode or "QUEST")=="ITEM" then
+      SetStatus("Enter a required item name or exact Item ID.",true)
+    else
+      SetStatus("Enter a quest title or exact Quest ID.",true)
+    end
+    return
   end
-  questUI.results={}; questUI.resultOffset=0; questUI.info=nil; questUI.chain={}; questUI.selectedId=nil; SetQuestId(nil); RenderQuest()
-  SendCommand(string.format(CMD.questSearch,raw)); SetStatus("Searching quests by partial title...")
+
+  PushQuestHistory(
+    raw,
+    nil,
+    nil,
+    questUI.searchMode or "QUEST"
+  )
+
+  questUI.results={}
+  questUI.resultOffset=0
+  questUI.info=nil
+  questUI.chain={}
+  questUI.selectedId=nil
+  SetQuestId(nil)
+  RenderQuest()
+
+  local mode=questUI.searchMode or "QUEST"
+  questUI.pendingSearchMode=mode
+
+  if mode=="ITEM" then
+    SendCommand(string.format(CMD.questSearch,"item:"..raw))
+    SetStatus("Searching quests by required item...")
+  else
+    SendCommand(string.format(CMD.questSearch,"quest:"..raw))
+    SetStatus("Searching quests by title or Quest ID...")
+  end
 end
 
 local function ClearQuestSearch()
@@ -2223,7 +4004,7 @@ local function BuildQuest()
   end
 
   StaticPopupDialogs["AZERCORE_OPS_QUEST_SEARCH_HELP"]={
-    text="Quest Search Help\n\nSearch using an exact Quest ID, for example: 24874\n\nOr enter a partial or complete quest title, for example: Blood or Blood Quickening.\n\nSearch is not case-sensitive. Press Enter or click Search.",
+    text="Quest Search Help\n\nChoose Quest or Item before searching.\n\nQUEST MODE\nSearch by partial or complete quest title, or enter an exact Quest ID.\nExample: Ghoulish Effigy or 133.\n\nITEM MODE\nSearch by required objective item name, or enter an exact Item ID.\nExample: Ghoul Rib or 884.\n\nItem results show the quest that requires the item and the required quantity.\n\nSearch is not case-sensitive. Press Enter or click Search.",
     button1=OKAY,timeout=0,whileDead=1,hideOnEscape=1,preferredIndex=3,
   }
 
@@ -2235,10 +4016,10 @@ local function BuildQuest()
   local operation=CreateFrame("Frame",nil,p); operation:SetPoint("TOPLEFT",10,-64); operation:SetPoint("BOTTOMLEFT",10,10); operation:SetWidth(150); Backdrop(operation,C.panel)
   local oh=Section(operation,"OPERATIONS",C.gold); oh:SetPoint("TOP",0,-10)
 
-  local explorer=CreateFrame("Frame",nil,p); explorer:SetPoint("TOPLEFT",168,-64); explorer:SetPoint("BOTTOMLEFT",168,10); explorer:SetWidth(218); Backdrop(explorer,C.panel)
+  local explorer=CreateFrame("Frame",nil,p); explorer:SetPoint("TOPLEFT",168,-116); explorer:SetPoint("BOTTOMLEFT",168,10); explorer:SetWidth(218); Backdrop(explorer,C.panel)
   local eh=Section(explorer,"QUEST EXPLORER",C.resolve); eh:SetPoint("TOPLEFT",10,-10)
 
-  local workspace=CreateFrame("Frame",nil,p); workspace:SetPoint("TOPLEFT",394,-64); workspace:SetPoint("BOTTOMRIGHT",-10,10); Backdrop(workspace,C.panel)
+  local workspace=CreateFrame("Frame",nil,p); workspace:SetPoint("TOPLEFT",394,-116); workspace:SetPoint("BOTTOMRIGHT",-10,10); Backdrop(workspace,C.panel)
   local workspacePages={}
   local operationButtons={}
   local activeWorkspace="DATABASE"
@@ -2305,33 +4086,272 @@ local function BuildQuest()
   Button(operation,"Open Quest Log",130,27,OpenQuestLog,"Open the Blizzard Quest Log for the logged-in character"):SetPoint("TOPLEFT",10,-350)
   Button(operation,"Clear Workspace",130,27,ClearQuestSearch,"Clear the locked quest, results and audit data"):SetPoint("TOPLEFT",10,-383)
 
-  local searchLabel=Section(explorer,"Quest title or Quest ID",C.gold); searchLabel:SetPoint("TOPLEFT",10,-36)
-  Button(explorer,"?",22,20,function() StaticPopup_Show("AZERCORE_OPS_QUEST_SEARCH_HELP") end,"How to search by quest title or Quest ID"):SetPoint("TOPRIGHT",-10,-31)
-  questSearchBox=Edit(explorer,144,false); questSearchBox:SetPoint("TOPLEFT",10,-56); questSearchBox.azerCoreOpsExpected="quest"; questSearchBox.azerCoreOpsPlain=true
-  Button(explorer,"Search",50,24,RunQuestSearch,"Enter a partial quest title or an exact Quest ID"):SetPoint("TOPRIGHT",-10,-56)
-  questSearchBox:SetScript("OnEnterPressed",function(self) self:ClearFocus(); RunQuestSearch() end)
+  local questSearchPanel=CreateFrame("Frame",nil,p)
+  questSearchPanel:SetPoint("TOPLEFT",168,-64)
+  questSearchPanel:SetPoint("TOPRIGHT",-10,-64)
+  questSearchPanel:SetHeight(44)
+  Backdrop(questSearchPanel,C.bg)
 
-  local matches=CreateFrame("Frame",nil,explorer); matches:SetPoint("TOPLEFT",8,-90); matches:SetPoint("TOPRIGHT",-8,-90); matches:SetHeight(250); Backdrop(matches,C.bg)
+  questUI.searchMode=questUI.searchMode or "QUEST"
+
+  local searchLabel=Section(
+    questSearchPanel,
+    "SEARCH",
+    C.gold
+  )
+  searchLabel:SetPoint("LEFT",10,0)
+  questUI.searchModeLabel=searchLabel
+
+  questUI.questSearchModeButton=Button(
+    questSearchPanel,
+    "Quest",
+    58,
+    22,
+    function()
+      if questUI.SetSearchMode then
+        questUI.SetSearchMode("QUEST")
+      end
+    end,
+    "Search by quest title or exact Quest ID"
+  )
+  questUI.questSearchModeButton:SetPoint("LEFT",68,0)
+
+  questUI.itemSearchModeButton=Button(
+    questSearchPanel,
+    "Item",
+    52,
+    22,
+    function()
+      if questUI.SetSearchMode then
+        questUI.SetSearchMode("ITEM")
+      end
+    end,
+    "Search quests by required item name or exact Item ID"
+  )
+  questUI.itemSearchModeButton:SetPoint("LEFT",130,0)
+
+  questUI.questSearchModeButton:SetScript(
+    "OnLeave",
+    function()
+      if questUI.RefreshSearchMode then
+        questUI.RefreshSearchMode()
+      end
+      GameTooltip:Hide()
+    end
+  )
+
+  questUI.itemSearchModeButton:SetScript(
+    "OnLeave",
+    function()
+      if questUI.RefreshSearchMode then
+        questUI.RefreshSearchMode()
+      end
+      GameTooltip:Hide()
+    end
+  )
+
+  questSearchBox=CreateFrame(
+    "EditBox",
+    nil,
+    questSearchPanel
+  )
+  questSearchBox:SetHeight(24)
+  questSearchBox:SetPoint("LEFT",190,0)
+  questSearchBox:SetPoint("RIGHT",-122,0)
+  questSearchBox:SetAutoFocus(false)
+  questSearchBox:SetMaxLetters(100)
+  questSearchBox:SetFontObject(ChatFontNormal)
+  questSearchBox:SetTextInsets(7,7,0,0)
+
+  questSearchBox:SetBackdrop({
+    bgFile="Interface\\Buttons\\WHITE8X8",
+    edgeFile="Interface\\Tooltips\\UI-Tooltip-Border",
+    edgeSize=10,
+    insets={left=2,right=2,top=2,bottom=2}
+  })
+
+  questSearchBox:SetBackdropColor(0.035,0.04,0.05,1)
+  questSearchBox:SetBackdropBorderColor(unpack(C.border))
+  questSearchBox:SetTextColor(unpack(C.white))
+
+  questSearchBox.azerCoreOpsExpected="quest"
+  questSearchBox.azerCoreOpsPlain=true
+
+  questSearchBox:SetScript(
+    "OnEditFocusGained",
+    function(self)
+      activeInput=self
+      self:SetBackdropBorderColor(unpack(C.gold))
+    end
+  )
+
+  questSearchBox:SetScript(
+    "OnEditFocusLost",
+    function(self)
+      if activeInput==self then
+        activeInput=nil
+      end
+      self:SetBackdropBorderColor(unpack(C.border))
+      self:HighlightText(0,0)
+    end
+  )
+
+  local questSearchHelp=Button(
+    questSearchPanel,
+    "?",
+    22,
+    20,
+    function()
+      StaticPopup_Show("AZERCORE_OPS_QUEST_SEARCH_HELP")
+    end,
+    "Choose Quest or Item search mode"
+  )
+  questSearchHelp:SetPoint("RIGHT",-88,0)
+
+  local questSearchButton=Button(
+    questSearchPanel,
+    "Search",
+    76,
+    22,
+    RunQuestSearch,
+    "Search using the selected Quest or Item mode"
+  )
+  questSearchButton:SetPoint("RIGHT",-8,0)
+
+  questUI.RefreshSearchMode=function()
+    local questSelected=(questUI.searchMode or "QUEST")=="QUEST"
+
+    if questUI.questSearchModeButton then
+      questUI.questSearchModeButton:SetBackdropColor(
+        unpack(questSelected and C.selected or C.button)
+      )
+      questUI.questSearchModeButton:SetBackdropBorderColor(
+        unpack(questSelected and C.gold or C.border)
+      )
+    end
+
+    if questUI.itemSearchModeButton then
+      questUI.itemSearchModeButton:SetBackdropColor(
+        unpack((not questSelected) and C.selected or C.button)
+      )
+      questUI.itemSearchModeButton:SetBackdropBorderColor(
+        unpack((not questSelected) and C.gold or C.border)
+      )
+    end
+
+    if questUI.searchModeLabel then
+      questUI.searchModeLabel:SetText("SEARCH")
+    end
+  end
+
+  questUI.SetSearchMode=function(mode)
+    mode=(mode=="ITEM") and "ITEM" or "QUEST"
+
+    if questUI.searchMode==mode then
+      if questSearchBox then
+        questSearchBox:SetFocus()
+      end
+      return
+    end
+
+    questUI.searchMode=mode
+
+    questUI.results={}
+    questUI.resultOffset=0
+
+    questUI.RefreshSearchMode()
+    RenderQuest()
+
+    if questSearchBox then
+      questSearchBox:SetFocus()
+      questSearchBox:HighlightText()
+    end
+
+    if mode=="ITEM" then
+      SetStatus(
+        "Item search selected — enter a required item name or exact Item ID."
+      )
+    else
+      SetStatus(
+        "Quest search selected — enter a quest title or exact Quest ID."
+      )
+    end
+  end
+
+  questUI.RefreshSearchMode()
+
+  questSearchBox:SetScript(
+    "OnEnterPressed",
+    function(self)
+      self:ClearFocus()
+      RunQuestSearch()
+    end
+  )
+
+  questSearchBox:SetScript(
+    "OnEscapePressed",
+    function(self)
+      self:ClearFocus()
+    end
+  )
+
+  local matches=CreateFrame("Frame",nil,explorer); matches:SetPoint("TOPLEFT",8,-36); matches:SetPoint("TOPRIGHT",-8,-36); matches:SetHeight(250); Backdrop(matches,C.bg)
   local mh=Section(matches,"QUEST MATCHES",C.gold); mh:SetPoint("TOPLEFT",8,-8)
   questUI.summary=matches:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); questUI.summary:SetPoint("TOPRIGHT",-24,-8); questUI.summary:SetTextColor(unpack(C.white))
   local function ScrollResults(delta)
-    local maxOffset=math.max(0,#questUI.results-7)
-    questUI.resultOffset=math.max(0,math.min(maxOffset,(questUI.resultOffset or 0)+delta)); RenderQuest()
+    local maxOffset=math.max(0,#questUI.results-4)
+    questUI.resultOffset=math.max(
+      0,
+      math.min(
+        maxOffset,
+        (questUI.resultOffset or 0)+delta
+      )
+    )
+    RenderQuest()
   end
   Button(matches,"^",18,18,function() ScrollResults(-1) end,"Scroll results up"):SetPoint("TOPRIGHT",-4,-27)
   Button(matches,"v",18,18,function() ScrollResults(1) end,"Scroll results down"):SetPoint("BOTTOMRIGHT",-4,5)
   matches:EnableMouseWheel(true); matches:SetScript("OnMouseWheel",function(_,delta) ScrollResults(delta>0 and -1 or 1) end)
   questUI.rows={}
-  for i=1,7 do
-    local row=Button(matches,"",172,28,function(self)
-      if not self.id then return end
-      LockQuest(self.id,self.title); questSearchBox:SetText(self.title or ""); UpdateLockedQuestHistory(); RequestQuestInfo(self.id); SetOperation("DATABASE","Quest Database")
-    end)
-    row.text=row:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); row.text:SetPoint("TOPLEFT",5,-2); row.text:SetPoint("BOTTOMRIGHT",-5,2); row.text:SetJustifyH("LEFT"); row.text:SetJustifyV("TOP")
-    row:SetPoint("TOPLEFT",8,-28-(i-1)*30); row:Hide(); questUI.rows[i]=row
+  for i=1,4 do
+    local row=Button(
+      matches,
+      "",
+      172,
+      54,
+      function(self)
+        if not self.id then return end
+
+        LockQuest(self.id,self.title)
+        UpdateLockedQuestHistory()
+        RequestQuestInfo(self.id)
+        SetOperation("DATABASE","Quest Database")
+      end
+    )
+
+    row.text=row:CreateFontString(
+      nil,
+      "OVERLAY",
+      "GameFontHighlightSmall"
+    )
+
+    row.text:SetPoint("TOPLEFT",5,-3)
+    row.text:SetPoint("BOTTOMRIGHT",-5,3)
+    row.text:SetJustifyH("LEFT")
+    row.text:SetJustifyV("TOP")
+    row.text:SetWordWrap(true)
+
+    row:SetPoint(
+      "TOPLEFT",
+      8,
+      -28-(i-1)*56
+    )
+
+    row:Hide()
+    questUI.rows[i]=row
   end
 
-  local selected=CreateFrame("Frame",nil,explorer); selected:SetPoint("TOPLEFT",8,-348); selected:SetPoint("BOTTOMRIGHT",-8,8); Backdrop(selected,C.bg)
+  local selected=CreateFrame("Frame",nil,explorer); selected:SetPoint("TOPLEFT",8,-294); selected:SetPoint("BOTTOMRIGHT",-8,8); Backdrop(selected,C.bg)
   local sh=Section(selected,"LOCKED QUEST",C.gold); sh:SetPoint("TOPLEFT",8,-8)
   questIdBox=Edit(selected,1,false); questIdBox:SetPoint("TOPLEFT",-20,20); questIdBox.azerCoreOpsExpected="quest"; questIdBox:SetAutoFocus(false); questIdBox:Hide()
   questIdBox:SetScript("OnTextChanged",function(self,userInput) if userInput and not questUI.questIdInternal then questUI.selectedId=tonumber(self:GetText()) end end)
@@ -2589,18 +4609,16 @@ local function BuildItem()
   previewFrame:SetScript("OnSizeChanged",function() After(0,function() if itemUI.UpdatePreviewCamera then itemUI.UpdatePreviewCamera() end end) end)
 
   local function ItemLink(item)
-    if not item then return nil end
-    if item.link and item.link:find("|Hitem:") then return item.link end
-    local quality=tonumber(item.quality) or 1; local color=(ITEM_QUALITY_COLORS and ITEM_QUALITY_COLORS[quality] and ITEM_QUALITY_COLORS[quality].hex) or "ffffffff"; color=tostring(color):gsub("^|c","")
-    return string.format("|c%s|Hitem:%d:0:0:0:0:0:0:0|h[%s]|h|r",color,tonumber(item.id) or 0,item.name or ("Item "..tostring(item.id)))
+    return Platform.NativeItemLink(item)
   end
+
   local function QuestLink(id,name)
     if GetQuestLink then local link=GetQuestLink(tonumber(id)); if link then return link end end
     return string.format("|cffffff00|Hquest:%d:0|h[%s]|h|r",tonumber(id) or 0,name or ("Quest "..tostring(id)))
   end
   local function EnsureItemLinkRows(count)
     for i=#itemUI.linkRows+1,count do
-      local row=Button(reportChild,"",355,24,function(self) if IsShiftKeyDown() and self.link then if HandleModifiedItemClick then HandleModifiedItemClick(self.link) elseif ChatEdit_InsertLink then ChatEdit_InsertLink(self.link) end end end,"Shift-click linked entries to insert them into chat")
+      local row=Button(reportChild,"",355,24,function(self) if IsShiftKeyDown() and self.link then Platform.InsertItemLink(self.link) end end,"Shift-click linked entries to insert them into chat")
       local rowLabel=row:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); rowLabel:SetJustifyH("LEFT"); rowLabel:SetJustifyV("TOP"); rowLabel:SetWordWrap(false); row:SetFontString(rowLabel); row.label=rowLabel
       local rowDetail=row:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); rowDetail:SetJustifyH("LEFT"); rowDetail:SetJustifyV("TOP"); rowDetail:SetWordWrap(true); rowDetail:SetTextColor(unpack(C.muted)); rowDetail:Hide(); row.detail=rowDetail
       row:SetPoint("TOPLEFT",4,-4-(i-1)*27); row:SetScript("OnEnter",function(self) self:SetBackdropColor(unpack(C.hover)); if self.link then GameTooltip:SetOwner(self,"ANCHOR_RIGHT"); GameTooltip:SetHyperlink(self.link); GameTooltip:Show() end end); row:SetScript("OnLeave",function(self) self:SetBackdropColor(unpack(C.button)); GameTooltip:Hide() end); row:Hide(); itemUI.linkRows[i]=row
@@ -2609,7 +4627,12 @@ local function BuildItem()
   iconFrame:EnableMouse(true)
   iconFrame:SetScript("OnEnter",function() local link=ItemLink(itemUI.selected); if link then GameTooltip:SetOwner(iconFrame,"ANCHOR_RIGHT"); GameTooltip:SetHyperlink(link); GameTooltip:Show() end end)
   iconFrame:SetScript("OnLeave",function() GameTooltip:Hide() end)
-  iconFrame:SetScript("OnMouseUp",function(_,button) local link=ItemLink(itemUI.selected); if button=="LeftButton" and IsShiftKeyDown() and link then if HandleModifiedItemClick then HandleModifiedItemClick(link) elseif ChatEdit_InsertLink then ChatEdit_InsertLink(link) end end end)
+  iconFrame:SetScript("OnMouseUp",function(_,button)
+    local link=ItemLink(itemUI.selected)
+    if button=="LeftButton" and IsShiftKeyDown() and link then
+      Platform.InsertItemLink(link)
+    end
+  end)
 
   local equipNames={INVTYPE_HEAD="Head",INVTYPE_NECK="Neck",INVTYPE_SHOULDER="Shoulders",INVTYPE_BODY="Shirt",INVTYPE_CHEST="Chest",INVTYPE_ROBE="Robe",INVTYPE_WAIST="Waist",INVTYPE_LEGS="Legs",INVTYPE_FEET="Feet",INVTYPE_WRIST="Wrist",INVTYPE_HAND="Hands",INVTYPE_FINGER="Finger",INVTYPE_TRINKET="Trinket",INVTYPE_CLOAK="Back",INVTYPE_WEAPON="One-hand weapon",INVTYPE_SHIELD="Shield",INVTYPE_2HWEAPON="Two-hand weapon",INVTYPE_WEAPONMAINHAND="Main-hand weapon",INVTYPE_WEAPONOFFHAND="Off-hand weapon",INVTYPE_HOLDABLE="Held in off-hand",INVTYPE_RANGED="Ranged",INVTYPE_THROWN="Thrown",INVTYPE_RANGEDRIGHT="Ranged",INVTYPE_TABARD="Tabard",INVTYPE_BAG="Bag"}
   local visibleEquipLocs={INVTYPE_HEAD=true,INVTYPE_SHOULDER=true,INVTYPE_BODY=true,INVTYPE_CHEST=true,INVTYPE_ROBE=true,INVTYPE_WAIST=true,INVTYPE_LEGS=true,INVTYPE_FEET=true,INVTYPE_WRIST=true,INVTYPE_HAND=true,INVTYPE_CLOAK=true,INVTYPE_WEAPON=true,INVTYPE_SHIELD=true,INVTYPE_2HWEAPON=true,INVTYPE_WEAPONMAINHAND=true,INVTYPE_WEAPONOFFHAND=true,INVTYPE_HOLDABLE=true,INVTYPE_RANGED=true,INVTYPE_THROWN=true,INVTYPE_RANGEDRIGHT=true,INVTYPE_TABARD=true}
@@ -4699,10 +6722,146 @@ events:SetScript("OnEvent",function(_,event,arg1)
       local success=tostring(f.result):upper()=="SUCCESS"; characterUI.Log("Save Target",tostring(f.result).." — "..tostring(f.player)..": "..tostring(f.reason)); SetStatus((success and "Target saved: " or "Target save failed: ")..tostring(f.player).." — "..tostring(f.reason),not success)
     elseif kind=="CHARACTER_ERROR" then
       characterUI.Log("Character","ERROR — "..tostring(f.reason)); SetStatus(f.reason or "Character inspection failed",true)
+    elseif kind=="NPC_SEARCH_BEGIN" then
+      Platform.NPCUI.searchQuery=f.query or Platform.NPCUI.searchQuery or ""
+      Platform.NPCUI.searchResults={}
+      Platform.NPCUI.spawns={}
+      Platform.NPCUI.spawnTotal=0
+      Platform.NPCUI.selectedSearch=nil
+      Platform.NPCUI.selectedSpawn=nil
+      Platform.NPCUI.searchLoading=true
+      Platform.NPCUI.spawnsLoading=false
+      Platform.NPCUI.view="SEARCH"
+      if Platform.NPCUI.Render then Platform.NPCUI.Render() end
+
+    elseif kind=="NPC_SEARCH_RESULT" then
+      table.insert(Platform.NPCUI.searchResults,f)
+      if Platform.NPCUI.Render then Platform.NPCUI.Render() end
+
+    elseif kind=="NPC_SEARCH_END" then
+      Platform.NPCUI.searchLoading=false
+
+      local results=Platform.NPCUI.searchResults or {}
+      local query=tostring(Platform.NPCUI.searchQuery or "")
+      query=query:gsub("^%s+",""):gsub("%s+$","")
+
+      local autoResult=nil
+
+      -- A unique search result is unambiguous.
+      if #results==1 then
+        autoResult=results[1]
+
+      -- If several partial matches were returned, auto-select only when
+      -- exactly one result is an exact Entry ID or exact creature name.
+      elseif #results>1 and query~="" then
+        local exactResult=nil
+        local exactCount=0
+        local numericQuery=query:match("^%d+$") and tonumber(query) or nil
+        local lowerQuery=string.lower(query)
+
+        for _,result in ipairs(results) do
+          local exact=false
+
+          if numericQuery then
+            exact=tonumber(result.entry)==numericQuery
+          else
+            exact=string.lower(tostring(result.name or ""))==lowerQuery
+          end
+
+          if exact then
+            exactResult=result
+            exactCount=exactCount+1
+          end
+        end
+
+        if exactCount==1 then
+          autoResult=exactResult
+        end
+      end
+
+      if autoResult and Platform.NPCUI.SelectSearchResult then
+        SetStatus(
+          string.format(
+            "Selected %s [Entry %s] automatically — loading database spawns.",
+            tostring(autoResult.name or "NPC"),
+            tostring(autoResult.entry or "?")
+          )
+        )
+
+        Platform.NPCUI.SelectSearchResult(autoResult)
+
+      else
+        if Platform.NPCUI.Render then
+          Platform.NPCUI.Render()
+        end
+
+        SetStatus(
+          string.format(
+            "NPC search completed — %d result%s%s",
+            tonumber(f.count) or #results,
+            (tonumber(f.count) or #results)==1 and "" or "s",
+            #results>1 and "; select the intended creature." or "."
+          )
+        )
+      end
+
+    elseif kind=="NPC_SPAWNS_BEGIN" then
+      Platform.NPCUI.spawns={}
+      Platform.NPCUI.spawnTotal=tonumber(f.total) or 0
+      Platform.NPCUI.selectedSpawn=nil
+      Platform.NPCUI.spawnsLoading=true
+      Platform.NPCUI.view="SEARCH"
+
+      if not Platform.NPCUI.selectedSearch
+        or tonumber(Platform.NPCUI.selectedSearch.entry)~=tonumber(f.entry)
+      then
+        Platform.NPCUI.selectedSearch={
+          entry=f.entry,
+          name=f.name,
+          spawns=f.total
+        }
+      end
+
+      if Platform.NPCUI.Render then Platform.NPCUI.Render() end
+
+    elseif kind=="NPC_SPAWN" then
+      table.insert(Platform.NPCUI.spawns,f)
+      if Platform.NPCUI.Render then Platform.NPCUI.Render() end
+
+    elseif kind=="NPC_SPAWNS_END" then
+      Platform.NPCUI.spawnsLoading=false
+
+      -- Server order is authoritative: same-map spawns first and then
+      -- nearest distance. Preselect the first row but never teleport
+      -- until the user explicitly presses Go to Spawn.
+      Platform.NPCUI.selectedSpawn=Platform.NPCUI.spawns[1]
+
+      if Platform.NPCUI.Render then Platform.NPCUI.Render() end
+
+      SetStatus(
+        string.format(
+          "Found %d of %d database spawn%s for %s.",
+          tonumber(f.count) or #(Platform.NPCUI.spawns or {}),
+          tonumber(Platform.NPCUI.spawnTotal) or #(Platform.NPCUI.spawns or {}),
+          (tonumber(Platform.NPCUI.spawnTotal) or #(Platform.NPCUI.spawns or {}))==1 and "" or "s",
+          tostring(
+            Platform.NPCUI.selectedSearch
+            and Platform.NPCUI.selectedSearch.name
+            or "NPC"
+          )
+        )
+      )
+
     elseif kind=="NPC_BEGIN" then
       local selected=TargetCreatureEntry()
       Platform.NPCUI.ignoreStream=not selected or tonumber(selected)~=tonumber(f.entry)
-      if not Platform.NPCUI.ignoreStream then Platform.NPCUI.captureEntry=tonumber(f.entry); Platform.NPCUI.server={begin=f,quests={},loot={},story={}}; SetStatus("Receiving NPC data for "..tostring(f.name).."...") end
+      if not Platform.NPCUI.ignoreStream then
+        Platform.NPCUI.captureEntry=tonumber(f.entry)
+        Platform.NPCUI.server={begin=f,quests={},loot={},lootReferences={},story={}}
+        Platform.NPCUI.lootLinkRetry=0
+        Platform.NPCUI.lootLinkRetryPending=false
+        SetStatus("Receiving NPC data for "..tostring(f.name).."...")
+      end
     elseif kind=="NPC_OVERVIEW" then
       if not Platform.NPCUI.ignoreStream then Platform.NPCUI.server.overview=f end
     elseif kind=="NPC_STATE" then
@@ -4714,7 +6873,19 @@ events:SetScript("OnEvent",function(_,event,arg1)
     elseif kind=="NPC_QUEST" then
       if not Platform.NPCUI.ignoreStream then table.insert(Platform.NPCUI.server.quests,f) end
     elseif kind=="NPC_LOOT" then
-      if not Platform.NPCUI.ignoreStream then table.insert(Platform.NPCUI.server.loot,f) end
+      if not Platform.NPCUI.ignoreStream then
+        table.insert(Platform.NPCUI.server.loot,f)
+      end
+    elseif kind=="NPC_LOOT_REFERENCE" then
+      if not Platform.NPCUI.ignoreStream then
+        Platform.NPCUI.server.lootReferences=
+          Platform.NPCUI.server.lootReferences or {}
+
+        table.insert(
+          Platform.NPCUI.server.lootReferences,
+          f
+        )
+      end
     elseif kind=="NPC_STORY" then
       if not Platform.NPCUI.ignoreStream then table.insert(Platform.NPCUI.server.story,f) end
     elseif kind=="NPC_STORY_END" then
@@ -4726,7 +6897,10 @@ events:SetScript("OnEvent",function(_,event,arg1)
       end
       Platform.NPCUI.ignoreStream=false
     elseif kind=="NPC_ERROR" then
-      SetStatus(f.reason or "NPC inspection failed",true)
+      Platform.NPCUI.searchLoading=false
+      Platform.NPCUI.spawnsLoading=false
+      if Platform.NPCUI.Render then Platform.NPCUI.Render() end
+      SetStatus(f.reason or "NPC operation failed",true)
     elseif kind=="ITEM_BEGIN" then
       if tonumber(f.id)==tonumber(Platform.ItemUI.captureId) then
         Platform.ItemUI.server={begin=f,crafts={},reagents={},recipes={},sources={},uses={},requirements={},access=nil,preview=nil}; Platform.ItemUI.loading=true
@@ -4766,9 +6940,44 @@ events:SetScript("OnEvent",function(_,event,arg1)
     elseif kind=="ERROR" then
       SetStatus(f.reason or "AzerCore Ops server-module error",true)
     elseif kind=="QUEST_SEARCH" then
-      if #questUI.results<50 then table.insert(questUI.results,f) end; RenderQuest(); SetStatus(#questUI.results.." quest match(es) with faction data")
+      if #questUI.results<50 then
+        table.insert(questUI.results,f)
+      end
+
+      RenderQuest()
+
+      local mode=questUI.pendingSearchMode or questUI.searchMode or "QUEST"
+
+      if mode=="ITEM" then
+        SetStatus(#questUI.results.." quest(s) matched the required item")
+      else
+        SetStatus(#questUI.results.." quest match(es)")
+      end
+
     elseif kind=="QUEST_SEARCH_END" then
-      if #questUI.results==0 then SetStatus("No matching quests found.",true) else SetStatus(#questUI.results.." quest result(s); select one for details") end
+      local mode=questUI.pendingSearchMode or questUI.searchMode or "QUEST"
+
+      if #questUI.results==0 then
+        if mode=="ITEM" then
+          SetStatus("No quests requiring that item were found.",true)
+        else
+          SetStatus("No matching quests found.",true)
+        end
+      else
+        if mode=="ITEM" then
+          SetStatus(
+            #questUI.results..
+            " item-related quest result(s); select one for details"
+          )
+        else
+          SetStatus(
+            #questUI.results..
+            " quest result(s); select one for details"
+          )
+        end
+      end
+
+      questUI.pendingSearchMode=nil
     elseif kind=="QUEST_INFO" then
       questUI.info=f; questUI.chain={}; questUI.selectedId=tonumber(f.id) or questUI.selectedId
       if f.player and f.player~="" then
@@ -4781,7 +6990,7 @@ events:SetScript("OnEvent",function(_,event,arg1)
         if questUI.lockedLabel then questUI.lockedLabel:SetText(string.format("|cffffd100LOCKED|r  %s\n|cffaaaaaaQuest ID: %d|r",f.title,tonumber(f.id))) end
         UpdateLockedQuestHistory()
       end
-      if f.title and questSearchBox and questUI.activeWorkspace=="DATABASE" then questSearchBox:SetText(f.title) end
+      if f.title and questSearchBox and questUI.activeWorkspace=="DATABASE" and (questSearchBox:GetText() or "")=="" then questSearchBox:SetText(f.title) end
       if #questUI.results==0 and f.id then table.insert(questUI.results,{id=f.id,title=f.title,faction=f.faction,eligibility=f.eligibility,min=f.min}) end
       RenderQuest(); SetStatus("Loaded quest "..(f.id or "?").." compatibility for "..(f.player or questUI.contextName or "current context"))
       if shareFrame and shareFrame:IsShown() and shareFrame.RefreshLive then shareFrame:RefreshLive() end

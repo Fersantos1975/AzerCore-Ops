@@ -10,6 +10,9 @@
 #include "Utilities/AzerCoreOpsText.h"
 #include "Util.h"
 
+#include <algorithm>
+#include <cctype>
+#include <limits>
 #include <cstdlib>
 #include <functional>
 #include <set>
@@ -200,26 +203,181 @@ bool QuestInspector::Search(ChatHandler* handler, Tail search)
     if (search.empty())
         return false;
 
-    std::wstring needle;
-    if (!Utf8toWStr(search, needle))
+    std::string query(search.data(), search.size());
+
+    while (!query.empty() && std::isspace(static_cast<unsigned char>(query.front())))
+        query.erase(query.begin());
+
+    while (!query.empty() && std::isspace(static_cast<unsigned char>(query.back())))
+        query.pop_back();
+
+    if (query.empty())
         return false;
-    wstrToLower(needle);
+
+    enum class SearchMode
+    {
+        Quest,
+        Item
+    };
+
+    SearchMode mode = SearchMode::Quest;
+
+    auto stripPrefix = [&](std::string const& wanted) -> bool
+    {
+        if (query.size() < wanted.size())
+            return false;
+
+        std::string prefix = query.substr(0, wanted.size());
+
+        std::transform(
+            prefix.begin(),
+            prefix.end(),
+            prefix.begin(),
+            [](unsigned char c)
+            {
+                return static_cast<char>(std::tolower(c));
+            });
+
+        if (prefix != wanted)
+            return false;
+
+        query.erase(0, wanted.size());
+
+        while (!query.empty() && std::isspace(static_cast<unsigned char>(query.front())))
+            query.erase(query.begin());
+
+        while (!query.empty() && std::isspace(static_cast<unsigned char>(query.back())))
+            query.pop_back();
+
+        return true;
+    };
+
+    if (stripPrefix("item:"))
+        mode = SearchMode::Item;
+    else
+        stripPrefix("quest:");
+
+    if (query.empty())
+        return false;
+
+    uint32 exactId = 0;
+    bool hasExactId = false;
+
+    {
+        char* parseEnd = nullptr;
+        unsigned long parsed = std::strtoul(query.c_str(), &parseEnd, 10);
+
+        if (parseEnd &&
+            *parseEnd == '\0' &&
+            parsed > 0 &&
+            parsed <= std::numeric_limits<uint32>::max())
+        {
+            exactId = static_cast<uint32>(parsed);
+            hasExactId = true;
+        }
+    }
+
+    std::wstring needle;
+
+    if (!hasExactId)
+    {
+        if (!Utf8toWStr(query, needle))
+            return false;
+
+        wstrToLower(needle);
+    }
 
     Player* player = handler->getSelectedPlayerOrSelf();
     uint32 count = 0;
+
     for (auto const& pair : sObjectMgr->GetQuestTemplates())
     {
         Quest const* quest = pair.second;
-        if (!quest || !Utf8FitTo(quest->GetTitle(), needle))
+        if (!quest)
             continue;
 
+        std::string matchKind;
+        uint32 matchId = 0;
+        std::string matchName;
+        uint32 matchCount = 0;
+
+        if (mode == SearchMode::Quest)
+        {
+            if (hasExactId)
+            {
+                if (quest->GetQuestId() != exactId)
+                    continue;
+
+                matchKind = "QUEST_ID";
+            }
+            else
+            {
+                if (!Utf8FitTo(quest->GetTitle(), needle))
+                    continue;
+
+                matchKind = "TITLE";
+            }
+        }
+        else
+        {
+            for (uint8 i = 0; i < QUEST_ITEM_OBJECTIVES_COUNT; ++i)
+            {
+                uint32 itemId = quest->RequiredItemId[i];
+                if (!itemId)
+                    continue;
+
+                std::string itemName = ItemName(itemId);
+                bool matched = false;
+
+                if (hasExactId)
+                {
+                    matched = itemId == exactId;
+                }
+                else
+                {
+                    matched =
+                        !itemName.empty() &&
+                        Utf8FitTo(itemName, needle);
+                }
+
+                if (!matched)
+                    continue;
+
+                matchKind = "REQUIRED_ITEM";
+                matchId = itemId;
+                matchName = itemName;
+                matchCount = quest->RequiredItemCount[i];
+                break;
+            }
+
+            if (matchKind.empty())
+                continue;
+        }
+
         std::string reason;
-        std::string eligibility = QuestEligibility(player, quest, reason);
-        Protocol::SendQuestSearch(handler, quest->GetQuestId(), quest->GetTitle(), QuestFaction(quest), eligibility,
-            QuestStatusName(player, quest), quest->GetMinLevel(), quest->GetQuestLevel(), QuestTypeName(quest), player->GetName());
+        std::string eligibility =
+            QuestEligibility(player, quest, reason);
+
+        Protocol::SendQuestSearch(
+            handler,
+            quest->GetQuestId(),
+            quest->GetTitle(),
+            QuestFaction(quest),
+            eligibility,
+            QuestStatusName(player, quest),
+            quest->GetMinLevel(),
+            quest->GetQuestLevel(),
+            QuestTypeName(quest),
+            player->GetName(),
+            matchKind,
+            matchId,
+            matchName,
+            matchCount);
+
         if (++count >= 12)
             break;
     }
+
     Protocol::SendQuestSearchEnd(handler, count);
     return true;
 }

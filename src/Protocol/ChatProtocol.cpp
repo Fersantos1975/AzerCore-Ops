@@ -50,7 +50,24 @@ void SendUnbindBegin(ChatHandler* handler, std::string const& operation, std::st
 void SendUnbindResult(ChatHandler* handler, std::string const& operation, std::uint32_t mapId, std::uint32_t difficulty, std::uint32_t instanceId, std::string const& result, std::string const& reason) { handler->PSendSysMessage("AZERCORE_OPS|UNBIND_RESULT|operation={}|map={}|difficulty={}|instance={}|result={}|reason={}", Clean(operation), mapId, difficulty, instanceId, result, Clean(reason)); }
 void SendUnbindEnd(ChatHandler* handler, std::string const& operation, std::uint32_t succeeded, std::uint32_t failed) { handler->PSendSysMessage("AZERCORE_OPS|UNBIND_END|operation={}|succeeded={}|failed={}", Clean(operation), succeeded, failed); }
 void SendQuestError(ChatHandler* handler, std::string const& reason) { handler->PSendSysMessage("AZERCORE_OPS|QUEST_ERROR|reason={}", Clean(reason)); }
-void SendQuestSearch(ChatHandler* handler, std::uint32_t id, std::string const& title, std::string const& faction, std::string const& eligibility, std::string const& status, std::int32_t minLevel, std::int32_t level, std::string const& type, std::string const& player) { handler->PSendSysMessage("AZERCORE_OPS|QUEST_SEARCH|id={}|title={}|faction={}|eligibility={}|status={}|min={}|level={}|type={}|player={}", id, Clean(title), faction, eligibility, status, minLevel, level, type, Clean(player)); }
+void SendQuestSearch(ChatHandler* handler, std::uint32_t id, std::string const& title, std::string const& faction, std::string const& eligibility, std::string const& status, std::int32_t minLevel, std::int32_t level, std::string const& type, std::string const& player, std::string const& matchKind, std::uint32_t matchId, std::string const& matchName, std::uint32_t matchCount)
+{
+    handler->PSendSysMessage(
+        "AZERCORE_OPS|QUEST_SEARCH|id={}|title={}|faction={}|eligibility={}|status={}|min={}|level={}|type={}|player={}|matchkind={}|matchid={}|matchname={}|matchcount={}",
+        id,
+        Clean(title),
+        faction,
+        eligibility,
+        status,
+        minLevel,
+        level,
+        type,
+        Clean(player),
+        Clean(matchKind),
+        matchId,
+        Clean(matchName),
+        matchCount);
+}
 void SendQuestSearchEnd(ChatHandler* handler, std::uint32_t count) { handler->PSendSysMessage("AZERCORE_OPS|QUEST_SEARCH_END|count={}", count); }
 void SendQuestInfo(ChatHandler* handler, std::uint32_t id, std::string const& title, std::string const& faction, std::int32_t minLevel, std::int32_t level, std::string const& type, bool repeatable, std::string const& status, std::string const& eligibility, std::string const& reason, std::string const& items, std::string const& reputation, std::string const& player, std::string const& starters, std::string const& enders)
 {
@@ -76,13 +93,70 @@ void SendCharacterRaidEnd(ChatHandler* handler, std::string const& player, std::
 void SendCharacterEnd(ChatHandler* handler, std::string const& player) { handler->PSendSysMessage("AZERCORE_OPS|CHARACTER_END|player={}", Clean(player)); }
 void SendCharacterSaveResult(ChatHandler* handler, std::string const& player, std::string const& result, std::string const& reason) { handler->PSendSysMessage("AZERCORE_OPS|CHARACTER_SAVE_RESULT|player={}|result={}|reason={}", Clean(player), result, Clean(reason)); }
 void SendNPCError(ChatHandler* handler, std::string const& reason) { handler->PSendSysMessage("AZERCORE_OPS|NPC_ERROR|reason={}", Clean(reason)); }
+void SendNPCSearchBegin(ChatHandler* handler, std::string const& query) { handler->PSendSysMessage("AZERCORE_OPS|NPC_SEARCH_BEGIN|query={}", Clean(query)); }
+void SendNPCSearchResult(ChatHandler* handler, std::uint32_t entry, std::string const& name, std::uint32_t minLevel, std::uint32_t maxLevel, std::uint32_t rank, std::uint32_t type, std::uint32_t spawns) { handler->PSendSysMessage("AZERCORE_OPS|NPC_SEARCH_RESULT|entry={}|name={}|min={}|max={}|rank={}|type={}|spawns={}", entry, Clean(name), minLevel, maxLevel, rank, type, spawns); }
+void SendNPCSearchEnd(ChatHandler* handler, std::uint32_t count) { handler->PSendSysMessage("AZERCORE_OPS|NPC_SEARCH_END|count={}", count); }
+void SendNPCSpawnsBegin(ChatHandler* handler, std::uint32_t entry, std::string const& name, std::uint32_t total) { handler->PSendSysMessage("AZERCORE_OPS|NPC_SPAWNS_BEGIN|entry={}|name={}|total={}", entry, Clean(name), total); }
+void SendNPCSpawn(ChatHandler* handler, std::uint32_t entry, std::uint32_t guid, std::uint32_t map, float x, float y, float z, float orientation, std::uint32_t spawnMask, std::uint32_t phaseMask, bool sameMap, float distance, std::string const& status, bool gridLoaded, std::uint32_t respawnSeconds)
+{
+    handler->PSendSysMessage(
+        "AZERCORE_OPS|NPC_SPAWN|entry={}|guid={}|map={}|x={:.3f}|y={:.3f}|z={:.3f}|o={:.3f}|spawnmask={}|phasemask={}|samemap={}|distance={:.2f}|status={}|gridloaded={}|respawn={}",
+        entry,
+        guid,
+        map,
+        x,
+        y,
+        z,
+        orientation,
+        spawnMask,
+        phaseMask,
+        sameMap ? 1 : 0,
+        distance,
+        Clean(status),
+        gridLoaded ? 1 : 0,
+        respawnSeconds);
+}
+void SendNPCSpawnsEnd(ChatHandler* handler, std::uint32_t entry, std::uint32_t count) { handler->PSendSysMessage("AZERCORE_OPS|NPC_SPAWNS_END|entry={}|count={}", entry, count); }
 void SendNPCBegin(ChatHandler* handler, std::string const& name, std::uint32_t entry, std::string const& guid, std::string const& player) { handler->PSendSysMessage("AZERCORE_OPS|NPC_BEGIN|name={}|entry={}|guid={}|player={}", Clean(name), entry, Clean(guid), Clean(player)); }
 void SendNPCOverview(ChatHandler* handler, std::uint32_t level, std::uint32_t minLevel, std::uint32_t maxLevel, std::uint32_t rank, std::uint32_t type, std::uint32_t family, std::uint32_t faction, std::uint32_t npcFlags) { handler->PSendSysMessage("AZERCORE_OPS|NPC_OVERVIEW|level={}|min={}|max={}|rank={}|type={}|family={}|faction={}|npcflags={}", level, minLevel, maxLevel, rank, type, family, faction, npcFlags); }
 void SendNPCState(ChatHandler* handler, bool alive, bool combat, std::uint32_t health, std::uint32_t maxHealth, std::uint32_t powerType, std::uint32_t power, std::uint32_t maxPower) { handler->PSendSysMessage("AZERCORE_OPS|NPC_STATE|alive={}|combat={}|health={}|maxhealth={}|powertype={}|power={}|maxpower={}", alive ? 1 : 0, combat ? 1 : 0, health, maxHealth, powerType, power, maxPower); }
 void SendNPCLocation(ChatHandler* handler, std::uint32_t map, std::uint32_t zone, std::uint32_t area, std::uint32_t instance, std::uint32_t phase, float x, float y, float z, float orientation) { handler->PSendSysMessage("AZERCORE_OPS|NPC_LOCATION|map={}|zone={}|area={}|instance={}|phase={}|x={:.2f}|y={:.2f}|z={:.2f}|o={:.2f}", map, zone, area, instance, phase, x, y, z, orientation); }
 void SendNPCTechnical(ChatHandler* handler, std::uint32_t unitFlags, std::uint32_t dynamicFlags, std::uint32_t loot, std::uint32_t pickpocket, std::uint32_t skin, std::uint32_t minGold, std::uint32_t maxGold, std::string const& ai, std::uint32_t script) { handler->PSendSysMessage("AZERCORE_OPS|NPC_TECHNICAL|unitflags={}|dynamicflags={}|loot={}|pickpocket={}|skin={}|mingold={}|maxgold={}|ai={}|script={}", unitFlags, dynamicFlags, loot, pickpocket, skin, minGold, maxGold, Clean(ai), script); }
 void SendNPCQuest(ChatHandler* handler, std::string const& relation, std::uint32_t id, std::string const& title, std::string const& status, std::string const& eligibility, std::string const& reason, std::int32_t minLevel, std::int32_t level, std::string const& type, bool repeatable) { handler->PSendSysMessage("AZERCORE_OPS|NPC_QUEST|relation={}|id={}|title={}|status={}|eligibility={}|reason={}|min={}|level={}|type={}|repeatable={}", relation, id, Clean(title), status, eligibility, Clean(reason), minLevel, level, Clean(type), repeatable ? 1 : 0); }
-void SendNPCLoot(ChatHandler* handler, std::uint32_t id, std::string const& name, std::uint32_t quality, float chance, std::uint32_t minimum, std::uint32_t maximum, bool questRequired) { handler->PSendSysMessage("AZERCORE_OPS|NPC_LOOT|id={}|name={}|quality={}|chance={:.2f}|min={}|max={}|quest={}", id, Clean(name), quality, chance, minimum, maximum, questRequired ? 1 : 0); }
+void SendNPCLoot(ChatHandler* handler, std::uint32_t id, std::string const& name, std::uint32_t quality, float chance, std::uint32_t minimum, std::uint32_t maximum, bool questRequired, std::string const& source, std::uint32_t tableId, std::uint32_t lootMode, std::uint32_t groupId)
+{
+    handler->PSendSysMessage(
+        "AZERCORE_OPS|NPC_LOOT|source={}|table={}|id={}|name={}|quality={}|chance={:.4f}|min={}|max={}|quest={}|lootmode={}|group={}",
+        Clean(source),
+        tableId,
+        id,
+        Clean(name),
+        quality,
+        chance,
+        minimum,
+        maximum,
+        questRequired ? 1 : 0,
+        lootMode,
+        groupId);
+}
+
+void SendNPCLootReference(ChatHandler* handler, std::string const& source, std::uint32_t tableId, std::uint32_t referenceId, float chance, std::uint32_t minimum, std::uint32_t maximum, std::uint32_t lootMode, std::uint32_t groupId, std::uint32_t rows, std::uint32_t directRows, std::uint32_t nestedRows, std::string const& comment)
+{
+    handler->PSendSysMessage(
+        "AZERCORE_OPS|NPC_LOOT_REFERENCE|source={}|table={}|reference={}|chance={:.4f}|min={}|max={}|lootmode={}|group={}|rows={}|directrows={}|nestedrows={}|comment={}",
+        Clean(source),
+        tableId,
+        referenceId,
+        chance,
+        minimum,
+        maximum,
+        lootMode,
+        groupId,
+        rows,
+        directRows,
+        nestedRows,
+        Clean(comment));
+}
 std::uint32_t SendNPCStory(ChatHandler* handler, std::string const& category, std::uint32_t sourceId, std::string const& title, std::string const& value)
 {
     std::string story = Clean(value);

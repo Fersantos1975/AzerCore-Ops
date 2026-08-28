@@ -47,6 +47,8 @@ public:
         };
         static ChatCommandTable npcTable =
         {
+            { "search", AzerCoreOps::NPCInspector::Search, rbac::RBAC_PERM_COMMAND_LOOKUP_CREATURE, Console::No },
+            { "spawns", AzerCoreOps::NPCInspector::Spawns, rbac::RBAC_PERM_COMMAND_LOOKUP_CREATURE, Console::No },
             { "inspect", AzerCoreOps::NPCInspector::Inspect, rbac::RBAC_PERM_COMMAND_LOOKUP_QUEST, Console::No },
         };
         static ChatCommandTable itemTable =
