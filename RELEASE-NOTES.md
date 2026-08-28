@@ -1,96 +1,106 @@
-# AzerCore Ops 0.6.2
+# AzerCore Ops 0.7.0
 
-AzerCore Ops 0.6.2 is a validation and hardening release focused on encounter-attempt tracking and the Item Inspector.
-
-The platform continues to consist of both the AzerothCore server module and the matching World of Warcraft 3.3.5a client addon.
+AzerCore Ops 0.7.0 expands the platform with authoritative NPC inspection and comprehensive Quest intelligence for the AzerothCore server module and matching World of Warcraft 3.3.5a client addon.
 
 ## Highlights
 
-- Correct `FAIL -> IN_PROGRESS` pull accounting for encounter history
-- Automatic exact-ID Item Inspector workflow
-- Item mutation refresh after Add Item and Remove Item
-- Hardened Item UI state and delayed-cache refresh handling
-- Server-resolved mount and companion display metadata
-- WoW 3.3.5 creature-cache priming for fully textured 3D previews
-- Legacy PvP honor requirements presented as informational rather than false usability failures
-- Friendly Armor and resistance stat names
-- Correct equal-chance creature-loot reporting
-- GameObject direct and reference-loot source reporting
-- Wrapped, dynamically sized Item Source rows
+- Authoritative NPC search by name or exact Entry ID
+- Database world-spawn discovery and nearest-spawn navigation
+- Live NPC state, grid activity, and respawn reporting
+- Automatic target-aware NPC inspection
+- Expanded NPC Story, Quest, Service, Combat, Loot, and Technical intelligence
+- Recursive loot references, grouped loot, pickpocket, and skinning information
+- Quest search by ID, title, partial title, and required item
+- Player-specific quest eligibility and blocker explanations
+- Ordered quest-chain analysis with progression summaries
+- Target Player Quest Log inspection and group quest auditing
+- Safer request tracking and stale-response rejection
+- Clear actions for resetting NPC and Quest workspaces
 
-## Encounter tracking
+## NPC Inspector
 
-AzerCore Ops now treats:
+NPC search now returns authoritative creature templates and their database world spawns. Spawn results include map, coordinates, orientation, SpawnMask, PhaseMask, same-map distance, grid activity, and available runtime state.
 
-`FAIL -> IN_PROGRESS`
+Runtime spawn states include:
 
-as a valid new pull. Attempts increment immediately and the history records `PULL #N` rather than a generic informational transition.
+- `ALIVE`
+- `DEAD`
+- `RESPAWNING`
+- `NOT_PRESENT`
+- `NOT_LOADED`
+- `MAP_NOT_ACTIVE`
 
-This complements the existing handling for:
+Same-map spawns are listed first and ordered by distance. Selecting a spawn never teleports automatically; Go to Spawn remains an explicit operation, with Emergency Return available for safe navigation.
 
-- `NOT_STARTED -> IN_PROGRESS`
-- `IN_PROGRESS -> FAIL`
-- `IN_PROGRESS -> NOT_STARTED`
-- `FAIL -> NOT_STARTED`
-- `IN_PROGRESS -> DONE`
+NPC inspection now follows selected creatures automatically. Changing the target or opening an Action Bar view loads current server data when required, while duplicate requests and late responses for an earlier target are rejected.
 
-The validated Saurfang sequence completed with:
+The NPC workspace includes Story, Quests, Services, Spawn, Location, Combat, Loot, and Technical views. Loot intelligence covers direct creature drops, recursive reference pools, grouped and equal-remainder loot, pickpocket tables, and skinning tables.
 
-`Attempts 4 | Wipes 3 | Kills 1`
+A Clear action resets search, spawn, selection, and loaded inspection state without moving or modifying the selected creature.
 
-and zero suspicious transitions.
+## Quest Inspector
 
-## Item Inspector
+Quest search supports exact Quest IDs, full or partial titles, and required-item relationships. Selected quests report authoritative metadata, player-specific eligibility, current status, blocker explanations, starters, enders, required items, and ordered chain progression.
 
-Exact item IDs can now flow directly into the selected Item Action Bar workspace without a redundant Inspect Item operation. Name searches remain deliberate.
+Target Player analysis supports online selected players and provides:
 
-The Item Inspector also refreshes authoritative server data after item mutations, preserving the active view while ownership-dependent requirements update.
+- Current quest eligibility and blocker reasoning
+- Ordered chain status in the selected player context
+- Complete active Quest Log inspection
+- Safe handling of empty logs, target changes, missing targets, and invalid targets
+- Refresh, copy, share, and export reporting
 
-Requirements now distinguish legacy `RequiredHonorRank` from requirements actually enforced by AzerothCore 3.3.5.
+Group Analysis compares the selected quest across party or raid members and reports pass, warning, or failure results with the status and reason for each player.
 
-Sources now report:
+Existing Add Quest, Complete Quest, Reward Quest, and Remove Quest operations remain server-authorized GM actions.
 
-- Creature drops with truthful equal-chance group details
-- GameObject direct loot
-- GameObject reference loot
-- Existing vendor and quest-reward sources
+## Reliability and protocol
 
-Source rows wrap long detail text and size themselves dynamically.
+NPC and Quest streams use structured, bounded protocol records. The addon tracks the requested Entry ID, Quest ID, player, and active workspace so unrelated or late responses cannot overwrite current results.
 
-## 3D mount and companion previews
-
-Mount and companion preview metadata is resolved from AzerothCore creature data.
-
-For WoW 3.3.5 clients that do not yet know the referenced creature entry, the server sends the normal creature-query response before the AzerCore Ops preview record. This primes the client creature cache so `DressUpModel:SetCreature()` can render the correct display and textures.
-
-The final Swift Alliance Steed test rendered the complete textured mount without hard-coded item IDs, creature IDs, display IDs, or model paths in production code.
+Protocol compatibility remains `v1`. The server module and client addon must use matching release versions.
 
 ## Validation
 
-The 0.6.2 regression pass covered:
+The 0.7.0 regression pass covered:
 
-- Encounter pull/wipe/kill accounting
-- Exact-ID and name-based Item workflows
-- Client-cache retries
-- Add/remove ownership refresh
-- Armor and resistance stats
-- Profession, reputation, unique-item, faction/race/class, and legacy honor requirements
-- Creature equal-chance loot
-- GameObject loot
-- Server-backed mount preview
-- Final BugGrabber review
+- NPC search by exact ID and name
+- Multiple-result and zero-result NPC searches
+- Database world spawns and nearest-distance ordering
+- ALIVE, NOT_PRESENT, NOT_LOADED, and MAP_NOT_ACTIVE states
+- Loaded and inactive grid reporting
+- Explicit spawn navigation and Emergency Return
+- Live NPC Overview, Story, Quests, Services, Spawn, Location, Combat, Loot, and Technical views
+- Direct, grouped, referenced, pickpocket, and skinning loot
+- Quest search by ID, title, partial title, and item
+- Zero-result Quest searches
+- Quest eligibility, blocker explanations, and ordered chains
+- Target changes, missing targets, empty and populated Quest Logs
+- Party and raid Quest group analysis
+- Automatic NPC inspection, duplicate-request suppression, and stale-response rejection
+- NPC and Quest copy, share, export, history, and activity reporting
+
+The completed regression pass produced no reported AzerCore Ops Lua runtime errors.
+
+## Known limitations
+
+- The NPC Spawn report currently repeats live Location fields rather than exposing additional spawn-specific runtime fields.
+- Creature templates using gossip menu ID 0 can expose generic database conversation options that are not necessarily available on that NPC.
+- Target Quest Log reports do not yet include objective-level progress.
+- Some Quest scaling and status labels remain presentation improvements for a future release.
+- Courier remains under construction and is not included as an active release feature.
 
 ## Versions
 
-- Server module: 0.6.2
-- Client addon: 0.6.2
+- Server module: 0.7.0
+- Client addon: 0.7.0
 - Protocol: v1
-- Release tag: 0.6.2
+- Release tag: 0.7.0
 
 ## Installation
 
-Install the repository as `mod-azercore-ops` in the AzerothCore modules directory and rebuild the core.
+Install the repository as `mod-azercore-ops` inside the AzerothCore modules directory and rebuild the core.
 
-Copy `addon/AzerCoreOps` into the WoW client's `Interface/AddOns` directory.
+Copy the ready-to-install `addon/AzerCoreOps` directory into the WoW client `Interface/AddOns` directory.
 
-The addon and server module should use matching release versions.
+The addon and running server module must use matching release versions.

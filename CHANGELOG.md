@@ -1,5 +1,56 @@
 # Changelog
 
+## 0.7.0 — NPC and Quest Intelligence
+
+### Added
+
+- Added authoritative NPC search by creature name or exact Entry ID.
+- Added world-spawn discovery with map, coordinates, orientation, SpawnMask, PhaseMask, and distance ordering.
+- Added live spawn states including ALIVE, DEAD, RESPAWNING, NOT_PRESENT, NOT_LOADED, and MAP_NOT_ACTIVE.
+- Added grid activity and remaining respawn-time reporting for NPC spawns.
+- Added automatic inspection when the selected creature changes or an NPC Action Bar view requires current runtime data.
+- Added an NPC workspace Clear action that safely removes search, selection, spawn, and inspection state.
+- Added expanded NPC Story, Quest, Service, Spawn, Location, Combat, Loot, and Technical reporting.
+- Added recursive creature loot-reference reporting, grouped loot interpretation, pickpocket loot, and skinning loot.
+- Added Quest search by exact ID, title, and required item.
+- Added player-specific quest eligibility, blocker explanations, chain ordering, and progression summaries.
+- Added Target Player quest analysis, complete target Quest Log inspection, and group quest auditing.
+
+### Changed
+
+- NPC search results now distinguish database spawn definitions from loaded runtime creatures.
+- NPC spawn results are ordered with same-map spawns first and then by nearest distance.
+- NPC reports now retain the selected search creature name and Entry ID even without a live target.
+- Quest and NPC workspaces now reject stale or unrelated streamed responses.
+- Quest reports now provide AVAILABLE, BLOCKED, ACTIVE, COMPLETE, REWARDED, and FAILED context where applicable.
+- Protocol transport was expanded with bounded and structured NPC and Quest records while remaining on protocol v1.
+
+### Fixed
+
+- Prevented NPC Action Bar views from displaying stale data belonging to a previously selected creature.
+- Prevented repeated automatic inspection requests while the matching request is already loading.
+- Corrected NPC spawn-state presentation so runtime state appears on the visible spawn cards and exported reports.
+- Corrected selected NPC report headers that previously displayed Entry unknown during database searches.
+- Preserved safe explicit navigation: selecting a spawn does not teleport until Go to Spawn is pressed.
+- Improved Quest target handling for target changes, empty Quest Logs, missing targets, and offline or invalid selections.
+
+### Validation
+
+- Completed NPC regression coverage for exact-ID, name, multiple-result, zero-result, world-spawn, live-state, navigation, Story, Quest, Service, Combat, Location, Technical, and Loot workflows.
+- Validated ALIVE, NOT_PRESENT, NOT_LOADED, MAP_NOT_ACTIVE, grid-loaded, and grid-inactive spawn reporting.
+- Validated direct creature loot, recursive reference pools, grouped and equal-remainder loot, pickpocket tables, and skinning tables.
+- Completed Quest regression coverage for ID, title, partial-title, item, zero-result, chain, eligibility, target, Quest Log, and group-analysis workflows.
+- Validated automatic NPC target changes, forced refresh, duplicate-request suppression, stale-response rejection, and workspace clearing.
+- Completed the regression pass without reported AzerCore Ops Lua runtime errors.
+
+### Known limitations
+
+- The NPC Spawn report currently repeats live Location fields rather than exposing additional spawn-specific runtime fields.
+- Creature templates using gossip menu ID 0 can expose generic database conversation options that are not necessarily available on that NPC.
+- Target Quest Log reports do not yet include objective-level progress.
+- Some Quest status and scaling labels remain presentation improvements for a future release.
+- Courier remains under construction and is not included as an active release feature.
+
 ## 0.6.2 — Validation and Item Hardening
 
 ### Changed
