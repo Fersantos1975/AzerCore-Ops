@@ -4554,17 +4554,92 @@ local function BuildTeleport()
   local work=CreateFrame("Frame",nil,body); work:SetPoint("TOPLEFT",120,-88); work:SetPoint("BOTTOMRIGHT",-8,8); Backdrop(work,C.bg); local wt=Section(work,"DESTINATIONS",C.inspect); wt:SetPoint("TOPLEFT",10,-10)
   local regionButton=Button(work,"Select region v",120,24,nil,"Choose a continent, instance group, battleground group, or server catalogue"); regionButton:SetPoint("TOPLEFT",10,-32)
   local zoneButton=Button(work,"Select zone v",138,24,nil,"Choose a zone or instance"); zoneButton:SetPoint("LEFT",regionButton,"RIGHT",6,0)
-  local destinationButton=Button(work,"Select destination v",158,24,nil,"Choose a named destination"); destinationButton:SetPoint("LEFT",zoneButton,"RIGHT",6,0)
+  local destinationButton=Button(work,"Select destination v",158,24,nil,"Choose a named destination and teleport immediately"); destinationButton:SetPoint("LEFT",zoneButton,"RIGHT",6,0); Platform:RegisterRoleButton(destinationButton,"GM_REQUIRED")
   local menu=CreateFrame("Frame",nil,work); menu:SetWidth(210); menu:SetHeight(280); menu:SetPoint("TOPLEFT",regionButton,"BOTTOMLEFT",0,-2); menu:SetFrameStrata("FULLSCREEN_DIALOG"); menu:SetFrameLevel(260); Backdrop(menu,C.panel); menu:Hide(); ui.menu=menu
   local text=work:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); text:SetPoint("TOPLEFT",10,-72); text:SetPoint("BOTTOMRIGHT",-10,10); text:SetJustifyH("LEFT"); text:SetJustifyV("TOP"); text:SetTextColor(unpack(C.white)); ui.text=text
   menu:ClearAllPoints(); menu:SetPoint("TOPLEFT",regionButton,"BOTTOMLEFT",0,-2); menu:EnableMouseWheel(true)
-  local menuButtons={}; for i=1,10 do local b=Button(menu,"",200,22,nil); b:SetPoint("TOPLEFT",5,-5-(i-1)*24); b:Hide(); menuButtons[i]=b end
-  local menuPage=menu:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); menuPage:SetPoint("BOTTOM",0,7); menuPage:SetTextColor(unpack(C.muted))
+  local menuButtons={}
+
+  for i=1,10 do
+    local b=Button(menu,"",200,22,nil)
+    b:SetPoint("TOPLEFT",5,-5-(i-1)*24)
+    b:SetText("")
+    b:SetBackdropColor(.14,.16,.20,1)
+    b:SetBackdropBorderColor(.55,.58,.65,1)
+
+    local rowLabel=menu:CreateFontString(nil,"OVERLAY","GameFontNormalSmall")
+    rowLabel:SetAllPoints(b)
+    rowLabel:SetJustifyH("CENTER")
+    rowLabel:SetJustifyV("MIDDLE")
+    rowLabel:SetTextColor(1,.82,0,1)
+    rowLabel:SetShadowColor(0,0,0,1)
+    rowLabel:SetShadowOffset(1,-1)
+    b.menuLabel=rowLabel
+
+    b:SetScript("OnEnter",function(self)
+      self:SetBackdropColor(.18,.32,.42,1)
+      self:SetBackdropBorderColor(unpack(C.gold))
+
+      if self.menuLabel then
+        self.menuLabel:SetTextColor(1,1,1,1)
+      end
+    end)
+
+    b:SetScript("OnLeave",function(self)
+      self:SetBackdropColor(.14,.16,.20,1)
+      self:SetBackdropBorderColor(.55,.58,.65,1)
+
+      if self.menuLabel then
+        self.menuLabel:SetTextColor(1,.82,0,1)
+      end
+
+      GameTooltip:Hide()
+    end)
+
+    b:Hide()
+    menuButtons[i]=b
+  end
+
+  local menuPage=menu:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall")
+  menuPage:SetPoint("BOTTOM",0,7)
+  menuPage:SetTextColor(1,1,1,1)
+  menuPage:SetPoint("BOTTOM",0,7)
+  menuPage:SetTextColor(1,1,1,1)
   local menuEntries,menuSelect,menuOffset={},{},0
   local function RenderMenu()
-    local maxOffset=math.max(0,#menuEntries-#menuButtons); menuOffset=math.max(0,math.min(menuOffset,maxOffset))
-    for i,b in ipairs(menuButtons) do local entry=menuEntries[menuOffset+i]; if entry then b:SetText(entry.label); b:SetScript("OnClick",function() menu:Hide(); menuSelect(entry) end); b:Show() else b:Hide() end end
-    menuPage:SetText(#menuEntries>#menuButtons and string.format("%d-%d of %d  •  mouse wheel",menuOffset+1,math.min(menuOffset+#menuButtons,#menuEntries),#menuEntries) or tostring(#menuEntries).." entries")
+    local maxOffset=math.max(0,#menuEntries-#menuButtons)
+    menuOffset=math.max(0,math.min(menuOffset,maxOffset))
+
+    for i,b in ipairs(menuButtons) do
+      local entry=menuEntries[menuOffset+i]
+
+      if entry then
+        b:SetText("")
+        b.menuLabel:SetText(tostring(entry.label or ""))
+        b.menuLabel:SetTextColor(1,.82,0,1)
+
+        b:SetScript("OnClick",function()
+          menu:Hide()
+          menuSelect(entry)
+        end)
+
+        b:Show()
+      else
+        b.menuLabel:SetText("")
+        b:Hide()
+      end
+    end
+
+    menuPage:SetText(
+      #menuEntries>#menuButtons
+        and string.format(
+          "%d-%d of %d  •  mouse wheel",
+          menuOffset+1,
+          math.min(menuOffset+#menuButtons,#menuEntries),
+          #menuEntries
+        )
+        or tostring(#menuEntries).." entries"
+    )
   end
   local function ShowMenu(anchor,entries,onSelect)
     if #entries==0 then SetStatus("No entries are available for this selection.",true); return end
@@ -4597,13 +4672,76 @@ local function BuildTeleport()
     local entries={}; for _,zone in ipairs(ui.selectedRegion.zones or {}) do table.insert(entries,{label=zone.name,data=zone}) end
     ShowMenu(zoneButton,entries,function(e) ui.selectedZone=e.data; ui.selected=nil; zoneButton:SetText(e.label.." v"); destinationButton:SetText("Select destination v"); ui.Render() end)
   end)
+  local function TeleportToSelectedDestination()
+    local d=ui.selected
+
+    if not d then
+      SetStatus("Select a destination first.",true)
+      return
+    end
+
+    local map=tonumber(d.map)
+    local x=tonumber(d.x)
+    local y=tonumber(d.y)
+    local z=tonumber(d.z)
+    local o=tonumber(d.o) or 0
+
+    if not map or not x or not y or not z then
+      SetStatus("Selected destination has incomplete coordinates.",true)
+      return
+    end
+
+    SendCommand(string.format(CMD.movementGo,map,x,y,z,o))
+
+    SetStatus(
+      "Teleporting to "..tostring(d.name or "selected destination")..
+      ". Emergency Return is available after a successful teleport."
+    )
+  end
+
   destinationButton:SetScript("OnClick",function()
     local entries={}
-    if ui.view=="MY_LOCATIONS" then for _,destination in ipairs(ui.saved or {}) do table.insert(entries,{label=destination.name,data=destination}) end
-    elseif ui.selectedZone then for _,destination in ipairs(ui.selectedZone.destinations or {}) do table.insert(entries,{label=destination.name,data=destination}) end
-    else SetStatus("Select a region and zone first.",true); return end
+
+    if ui.view=="MY_LOCATIONS" then
+      for _,destination in ipairs(ui.saved or {}) do
+        table.insert(entries,{label=destination.name,data=destination})
+      end
+    elseif ui.selectedZone then
+      for _,destination in ipairs(ui.selectedZone.destinations or {}) do
+        table.insert(entries,{label=destination.name,data=destination})
+      end
+    else
+      SetStatus("Select a region and zone first.",true)
+      return
+    end
+
     ShowMenu(destinationButton,entries,function(e)
-      local destination=e.data; ui.selected={id=destination.id,name=destination.name,map=tonumber(destination.map),x=tonumber(destination.x),y=tonumber(destination.y),z=tonumber(destination.z),o=tonumber(destination.o) or 0,region=ui.selectedRegion and ui.selectedRegion.name or destination.region or "My Locations",zone=ui.selectedZone and ui.selectedZone.name or destination.zone or "Personal",source=destination.source or (ui.selectedRegion and ui.selectedRegion.source) or "AzerothAdmin"}; destinationButton:SetText(e.label.." v"); ui.Render()
+      local destination=e.data
+
+      ui.selected={
+        id=destination.id,
+        name=destination.name,
+        map=tonumber(destination.map),
+        x=tonumber(destination.x),
+        y=tonumber(destination.y),
+        z=tonumber(destination.z),
+        o=tonumber(destination.o) or 0,
+        region=ui.selectedRegion
+          and ui.selectedRegion.name
+          or destination.region
+          or "My Locations",
+        zone=ui.selectedZone
+          and ui.selectedZone.name
+          or destination.zone
+          or "Personal",
+        source=destination.source
+          or (ui.selectedRegion and ui.selectedRegion.source)
+          or "AzerothAdmin"
+      }
+
+      destinationButton:SetText(e.label.." v")
+      ui.Render()
+      TeleportToSelectedDestination()
     end)
   end)
   StaticPopupDialogs["AZERCORE_OPS_SAVE_LOCATION"]={text="Save current location\nDetected zone: %s\n\nEnter a personal name:",button1=SAVE,button2=CANCEL,hasEditBox=1,maxLetters=60,timeout=0,whileDead=1,hideOnEscape=1,OnShow=function(self) self.editBox:SetText((GetSubZoneText and GetSubZoneText()~="" and GetSubZoneText()) or (GetZoneText and GetZoneText()) or "Saved Location"); self.editBox:HighlightText() end,OnAccept=function(self) local c=ui.current; local name=self.editBox:GetText(); if c and name and name~="" then local saved={name=name,category="My Locations",region="My Locations",map=tonumber(c.map),x=tonumber(c.x),y=tonumber(c.y),z=tonumber(c.z),o=tonumber(c.o),zone=(GetZoneText and GetZoneText()) or tostring(c.zone or "Personal"),area=c.area,source="Personal location"}; table.insert(ui.saved,saved); ui.view="MY_LOCATIONS"; ui.selected=saved; regionButton:SetText("My Locations"); zoneButton:SetText(saved.zone or "Personal"); destinationButton:SetText(name.." v"); ui.Render(); SetStatus("Saved personal location "..name) end end}
@@ -4622,21 +4760,91 @@ local function BuildItem()
   local h=Label(header,"Item Inspector","GameFontNormalLarge"); h:SetPoint("TOPLEFT",12,-8)
   local sub=header:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); sub:SetPoint("TOPLEFT",12,-31); sub:SetText("Item search, wearable preview, properties and controlled inventory operations")
 
-  local operations=CreateFrame("Frame",nil,p); operations:SetPoint("TOPLEFT",10,-70); operations:SetPoint("BOTTOMLEFT",10,36); operations:SetWidth(148); Backdrop(operations,C.panel)
-  local opTitle=Section(operations,"OPERATIONS",C.gold); opTitle:SetPoint("TOPLEFT",10,-10)
-  local nameLabel=Section(operations,"ITEM NAME OR ID",C.gold); nameLabel:SetPoint("TOPLEFT",10,-34)
-  local titleBox=Edit(operations,128,false); titleBox:SetPoint("TOPLEFT",10,-51); titleBox.azerCoreOpsExpected="item"; titleBox.azerCoreOpsPlain=true
-  local lookupButton=Button(operations,"Search",82,24,function()
-    local s=NonEmpty(titleBox,"an item name or ID"); if not s then return end
+  local searchPanel=CreateFrame("Frame",nil,p)
+  searchPanel:SetPoint("TOPLEFT",10,-70)
+  searchPanel:SetPoint("TOPRIGHT",-10,-70)
+  searchPanel:SetHeight(44)
+  Backdrop(searchPanel,C.bg)
+
+  local searchTitle=Section(searchPanel,"ITEM SEARCH",C.gold)
+  searchTitle:SetPoint("LEFT",10,0)
+
+  local titleBox=Edit(searchPanel,100,false)
+  titleBox:ClearAllPoints()
+  titleBox:SetPoint("LEFT",105,0)
+  titleBox:SetPoint("RIGHT",-178,0)
+  titleBox:SetMaxLetters(80)
+  titleBox.azerCoreOpsExpected="item"
+  titleBox.azerCoreOpsPlain=true
+
+  local function SearchItem()
+    local s=NonEmpty(titleBox,"an item name or ID")
+    if not s then return end
+
     local directId=tonumber(s)
-    if directId and directId>0 then itemIdBox:SetText(directId); itemUI.Select(directId); SetStatus("Inspecting item ID "..directId)
-    else itemIdBox:SetText(""); itemUI.selected=nil; itemUI.view="OVERVIEW"; itemUI.Render(); BeginLookup("item",string.format(CMD.itemLookup,s)) end
-  end,"Search by item name or inspect an exact item ID"); lookupButton:SetPoint("TOPLEFT",10,-80)
-  local clearButton=Button(operations,"Clear",42,24,function() if itemUI.Clear then itemUI.Clear() end end,"Clear the item search and selected item"); clearButton:SetPoint("LEFT",lookupButton,"RIGHT",4,0)
-  local idLabel=Section(operations,"ITEM ID",C.gold); idLabel:SetPoint("TOPLEFT",10,-116)
-  itemIdBox=Edit(operations,76,true); itemIdBox:SetPoint("TOPLEFT",10,-133); itemIdBox.azerCoreOpsExpected="item"
-  local quantityLabel=Section(operations,"QTY",C.gold); quantityLabel:SetPoint("TOPLEFT",94,-116)
-  local count=Edit(operations,44,true); count:SetPoint("TOPLEFT",94,-133); count:SetText("1")
+
+    if directId and directId>0 then
+      itemIdBox:SetText(directId)
+      itemUI.Select(directId)
+      SetStatus("Inspecting item ID "..directId)
+    else
+      itemIdBox:SetText("")
+      itemUI.selected=nil
+      itemUI.view="OVERVIEW"
+      itemUI.Render()
+      BeginLookup("item",string.format(CMD.itemLookup,s))
+    end
+  end
+
+  local lookupButton=Button(
+    searchPanel,
+    "Search",
+    76,
+    22,
+    SearchItem,
+    "Search by item name or inspect an exact item ID"
+  )
+  lookupButton:SetPoint("RIGHT",-92,0)
+
+  local clearButton=Button(
+    searchPanel,
+    "Clear",
+    76,
+    22,
+    function() if itemUI.Clear then itemUI.Clear() end end,
+    "Clear the item search and selected item"
+  )
+  clearButton:SetPoint("RIGHT",-10,0)
+
+  titleBox:SetScript("OnEnterPressed",function(self)
+    self:ClearFocus()
+    SearchItem()
+  end)
+
+  titleBox:SetScript("OnEscapePressed",function(self)
+    self:ClearFocus()
+  end)
+
+  local operations=CreateFrame("Frame",nil,p)
+  operations:SetPoint("TOPLEFT",10,-122)
+  operations:SetPoint("BOTTOMLEFT",10,36)
+  operations:SetWidth(148)
+  Backdrop(operations,C.panel)
+
+  local opTitle=Section(operations,"OPERATIONS",C.gold)
+  opTitle:SetPoint("TOPLEFT",10,-10)
+
+  local idLabel=Section(operations,"ITEM ID",C.gold)
+  idLabel:SetPoint("TOPLEFT",10,-34)
+  itemIdBox=Edit(operations,76,true)
+  itemIdBox:SetPoint("TOPLEFT",10,-51)
+  itemIdBox.azerCoreOpsExpected="item"
+
+  local quantityLabel=Section(operations,"QTY",C.gold)
+  quantityLabel:SetPoint("TOPLEFT",94,-34)
+  local count=Edit(operations,44,true)
+  count:SetPoint("TOPLEFT",94,-51)
+  count:SetText("1")
 
   local function RefreshItemAfterMutation(id)
     id=tonumber(id)
@@ -4659,16 +4867,16 @@ local function BuildItem()
       SendCommand(string.format(CMD.itemAdd,id,n))
       RefreshItemAfterMutation(id)
     end
-  end,"Add the selected quantity to your inventory"); addItem:SetPoint("TOPLEFT",10,-164); Platform:RegisterRoleButton(addItem,"GM_REQUIRED")
+  end,"Add the selected quantity to your inventory"); addItem:SetPoint("TOPLEFT",10,-82); Platform:RegisterRoleButton(addItem,"GM_REQUIRED")
 
   local removeItem=Button(operations,"Remove Item",128,24,function()
     local id=PositiveId(itemIdBox,"item"); local n=PositiveId(count,"quantity")
     if id and n then
       Confirm(string.format(CMD.itemRemove,id,n),nil,function() RefreshItemAfterMutation(id) end)
     end
-  end,"Remove the selected quantity from your inventory"); removeItem:SetPoint("TOPLEFT",10,-195); Platform:RegisterRoleButton(removeItem,"GM_REQUIRED")
+  end,"Remove the selected quantity from your inventory"); removeItem:SetPoint("TOPLEFT",10,-113); Platform:RegisterRoleButton(removeItem,"GM_REQUIRED")
 
-  local body=CreateFrame("Frame",nil,p); body:SetPoint("TOPLEFT",166,-70); body:SetPoint("BOTTOMRIGHT",-10,36); Backdrop(body,C.panel)
+  local body=CreateFrame("Frame",nil,p); body:SetPoint("TOPLEFT",166,-122); body:SetPoint("BOTTOMRIGHT",-10,36); Backdrop(body,C.panel)
   local identity=CreateFrame("Frame",nil,body); identity:SetPoint("TOPLEFT",8,-8); identity:SetPoint("TOPRIGHT",-8,-8); identity:SetHeight(82); Backdrop(identity,C.bg)
   local identityTitle=Section(identity,"SELECTED ITEM",C.inspect); identityTitle:SetPoint("TOPLEFT",10,-8)
   local iconFrame=CreateFrame("Frame",nil,identity); iconFrame:SetPoint("TOPLEFT",10,-27); iconFrame:SetWidth(44); iconFrame:SetHeight(44); Backdrop(iconFrame,C.panel)
@@ -6648,7 +6856,7 @@ end
 local function BuildUI()
   main=CreateFrame("Frame","AZERCORE_OPS_MainFrame",UIParent); main:SetWidth(980); main:SetHeight(650); main:SetClampedToScreen(true); main:SetFrameStrata("DIALOG"); Backdrop(main); RestorePoint(main,"main","CENTER",0,0); Movable(main,"main")
   local logo=main:CreateTexture(nil,"ARTWORK"); logo:SetTexture("Interface\\AddOns\\AzerCoreOps\\Media\\azercoreops-icon.tga"); logo:SetWidth(30); logo:SetHeight(30); logo:SetPoint("TOPLEFT",12,-7)
-  local title=Label(main,"AzerCore Ops  |cffaaaaaa"..ADDON_VERSION.."|r"); title:SetPoint("TOPLEFT",50,-15)
+  local title=Label(main,"AzerCore Ops  |cffaaaaaa".."0.7.0b".."|r"); title:SetPoint("TOPLEFT",50,-15)
   compatUI.workspaceModeText=main:CreateFontString(nil,"OVERLAY","GameFontNormalSmall"); compatUI.workspaceModeText:SetPoint("TOPRIGHT",-104,-16); compatUI.workspaceModeText:SetJustifyH("RIGHT")
   Button(main,"?",22,20,OpenOptions,"Open AzerCoreOps options"):SetPoint("TOPRIGHT",-66,-10)
   Button(main,"_",22,20,HideMain,"Minimize to floating button"):SetPoint("TOPRIGHT",-38,-10)
@@ -6729,7 +6937,7 @@ end
 local events=CreateFrame("Frame"); events:RegisterEvent("ADDON_LOADED"); events:RegisterEvent("PLAYER_ENTERING_WORLD"); events:RegisterEvent("CHAT_MSG_SYSTEM"); events:RegisterEvent("UPDATE_INSTANCE_INFO"); events:RegisterEvent("PLAYER_TARGET_CHANGED"); events:RegisterEvent("PARTY_MEMBERS_CHANGED"); events:RegisterEvent("RAID_ROSTER_UPDATE"); events:RegisterEvent("INSPECT_TALENT_READY")
 local compatibilityRequested=false
 events:SetScript("OnEvent",function(_,event,arg1)
-  if event=="ADDON_LOADED" then if arg1~=ADDON then return end; AzerCoreOpsDB=AzerCoreOpsDB or {}; Settings(); BuildOptions(); BuildUI(); Print("v"..ADDON_VERSION.." loaded. Type /azercoreops help")
+  if event=="ADDON_LOADED" then if arg1~=ADDON then return end; AzerCoreOpsDB=AzerCoreOpsDB or {}; Settings(); BuildOptions(); BuildUI(); Print("v".."0.7.0b".." loaded. Type /azercoreops help")
   elseif event=="PLAYER_ENTERING_WORLD" and not compatibilityRequested then compatibilityRequested=true; SendChatMessage(CMD.version,"SAY")
   elseif event=="UPDATE_INSTANCE_INFO" and activeTab=="Instances" and instanceUI.bindPage and instanceUI.bindPage:IsShown() then RefreshMyInstances()
   elseif event=="INSPECT_TALENT_READY" then
