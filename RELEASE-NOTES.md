@@ -1,90 +1,74 @@
-# AzerCore Ops 0.7.0
+# AzerCore Ops 0.7.1
 
-AzerCore Ops 0.7.0 expands the platform with authoritative NPC inspection and comprehensive Quest intelligence for the AzerothCore server module and matching World of Warcraft 3.3.5a client addon.
+AzerCore Ops 0.7.1 improves Item, Movement, and NPC workflows in the AzerothCore server module and matching World of Warcraft 3.3.5a client addon.
 
 ## Highlights
 
-- Authoritative NPC search by name or exact Entry ID
-- Database world-spawn discovery and nearest-spawn navigation
-- Live NPC state, grid activity, and respawn reporting
-- Automatic target-aware NPC inspection
-- Expanded NPC Story, Quest, Service, Combat, Loot, and Technical intelligence
-- Recursive loot references, grouped loot, pickpocket, and skinning information
-- Quest search by ID, title, partial title, and required item
-- Player-specific quest eligibility and blocker explanations
-- Ordered quest-chain analysis with progression summaries
-- Target Player Quest Log inspection and group quest auditing
-- Safer request tracking and stale-response rejection
-- Clear actions for resetting NPC and Quest workspaces
+- NPC-style horizontal Item Search layout
+- Immediate Movement teleport when selecting a destination
+- Brighter Movement region, zone, and destination menus
+- Authoritative live NPC Spawn diagnostics
+- Go to NPC with Emergency Return support
+- Automatic NPC target-name insertion into search
+- Honest database-spawn selection without misleading client targeting
+
+## Item Inspector
+
+Item Search now follows the established NPC Search layout, with a full-width search field and separate Search and Clear controls.
+
+Controlled Add Item and Remove Item operations remain in the Operations panel with Item ID and quantity fields. Input rendering uses the shared complete-border style validated on the WoW 3.3.5a client.
+
+## Movement
+
+Selecting a final Movement destination now teleports immediately through the existing server-authorized movement backend. A successful teleport records the previous location for Emergency Return.
+
+Region, zone, and destination menu entries use brighter labels for improved readability while retaining the existing catalogue hierarchy.
 
 ## NPC Inspector
 
-NPC search now returns authoritative creature templates and their database world spawns. Spawn results include map, coordinates, orientation, SpawnMask, PhaseMask, same-map distance, grid activity, and available runtime state.
+The Spawn view is now distinct from Location and reports authoritative live creature-spawn data:
 
-Runtime spawn states include:
+- Spawn ID
+- Database-backed or runtime/summoned source
+- Home position and orientation
+- Current distance from home
+- Respawn and corpse delays
+- Movement type
+- Wander distance
 
-- `ALIVE`
-- `DEAD`
-- `RESPAWNING`
-- `NOT_PRESENT`
-- `NOT_LOADED`
-- `MAP_NOT_ACTIVE`
+Go to NPC teleports the GM near the currently selected live creature and preserves an Emergency Return point. Arrival is offset slightly behind the creature to avoid placing the player inside its model.
 
-Same-map spawns are listed first and ordered by distance. Selecting a spawn never teleports automatically; Go to Spawn remains an explicit operation, with Emergency Return available for safe navigation.
+When a creature is targeted, its name is inserted automatically into NPC Search. Active manual edits are preserved, and the search remains deliberate until Search is pressed.
 
-NPC inspection now follows selected creatures automatically. Changing the target or opening an Action Bar view loads current server data when required, while duplicate requests and late responses for an earlier target are rejected.
+Database world-spawn rows now select only the intended database record. WoW 3.3.5 cannot reliably target an arbitrary Spawn ID when several nearby creatures share the same name, so the addon no longer claims that a row click changes the visible client target.
 
-The NPC workspace includes Story, Quests, Services, Spawn, Location, Combat, Loot, and Technical views. Loot intelligence covers direct creature drops, recursive reference pools, grouped and equal-remainder loot, pickpocket tables, and skinning tables.
+## Reliability
 
-A Clear action resets search, spawn, selection, and loaded inspection state without moving or modifying the selected creature.
+The removed same-name targeting experiment no longer invokes protected targeting actions and cannot trigger Blizzard blocked-action warnings.
 
-## Quest Inspector
-
-Quest search supports exact Quest IDs, full or partial titles, and required-item relationships. Selected quests report authoritative metadata, player-specific eligibility, current status, blocker explanations, starters, enders, required items, and ordered chain progression.
-
-Target Player analysis supports online selected players and provides:
-
-- Current quest eligibility and blocker reasoning
-- Ordered chain status in the selected player context
-- Complete active Quest Log inspection
-- Safe handling of empty logs, target changes, missing targets, and invalid targets
-- Refresh, copy, share, and export reporting
-
-Group Analysis compares the selected quest across party or raid members and reports pass, warning, or failure results with the status and reason for each player.
-
-Existing Add Quest, Complete Quest, Reward Quest, and Remove Quest operations remain server-authorized GM actions.
-
-## Reliability and protocol
-
-NPC and Quest streams use structured, bounded protocol records. The addon tracks the requested Entry ID, Quest ID, player, and active workspace so unrelated or late responses cannot overwrite current results.
-
-Protocol compatibility remains `v1`. The server module and client addon must use matching release versions.
+NPC Spawn data continues to use structured protocol v1 records and participates in the existing request, target, and stale-response protections.
 
 ## Validation
 
-The 0.7.0 regression pass covered:
+The 0.7.1 regression pass covered:
 
-- NPC search by exact ID and name
-- Multiple-result and zero-result NPC searches
-- Database world spawns and nearest-distance ordering
-- ALIVE, NOT_PRESENT, NOT_LOADED, and MAP_NOT_ACTIVE states
-- Loaded and inactive grid reporting
-- Explicit spawn navigation and Emergency Return
-- Live NPC Overview, Story, Quests, Services, Spawn, Location, Combat, Loot, and Technical views
-- Direct, grouped, referenced, pickpocket, and skinning loot
-- Quest search by ID, title, partial title, and item
-- Zero-result Quest searches
-- Quest eligibility, blocker explanations, and ordered chains
-- Target changes, missing targets, empty and populated Quest Logs
-- Party and raid Quest group analysis
-- Automatic NPC inspection, duplicate-request suppression, and stale-response rejection
-- NPC and Quest copy, share, export, history, and activity reporting
-
-The completed regression pass produced no reported AzerCore Ops Lua runtime errors.
+- Item Search layout and input rendering
+- Exact-ID and name-based Item workflows
+- Movement destination selection and automatic teleport
+- Emergency Return after destination and NPC navigation
+- Go to NPC positioning
+- Live NPC Spawn ID and database-source reporting
+- Home position, delay, movement, and wander fields
+- Database-spawn row selection without client-target changes
+- Automatic target-name insertion into NPC Search
+- Protection of actively edited search text
+- Addon and module compatibility
+- Clean committed server build
+- Final BugGrabber review
 
 ## Known limitations
 
-- The NPC Spawn report currently repeats live Location fields rather than exposing additional spawn-specific runtime fields.
+- WoW 3.3.5 cannot reliably target one exact Spawn ID among multiple nearby creatures with the same name. Select the database row, use Go to Spawn, and then target the nearby creature normally.
 - Creature templates using gossip menu ID 0 can expose generic database conversation options that are not necessarily available on that NPC.
 - Target Quest Log reports do not yet include objective-level progress.
 - Some Quest scaling and status labels remain presentation improvements for a future release.
@@ -92,10 +76,10 @@ The completed regression pass produced no reported AzerCore Ops Lua runtime erro
 
 ## Versions
 
-- Server module: 0.7.0
-- Client addon: 0.7.0
+- Server module: 0.7.1
+- Client addon: 0.7.1
 - Protocol: v1
-- Release tag: 0.7.0
+- Release tag: 0.7.1
 
 ## Installation
 

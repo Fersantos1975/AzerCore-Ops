@@ -2,7 +2,7 @@
 ## Title: |cffffd100AzerCore Ops|r
 ## Notes: Operations and gameplay companion for AzerothCore players, administrators, and Game Masters.
 ## Author: Fersantos
-## Version: 0.7.0k
+## Version: 0.7.1
 ## SavedVariablesPerCharacter: AzerCoreOpsDB
 
 DesignSystem.lua

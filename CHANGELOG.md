@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.7.1 — Navigation and Spawn Diagnostics
+
+### Added
+
+- Added authoritative live NPC Spawn information: Spawn ID, database/runtime source, home position, distance from home, respawn delay, corpse delay, movement type, and wander distance.
+- Added Go to NPC navigation through the existing Movement backend, arriving near the live target while preserving an Emergency Return point.
+- Added automatic NPC target-name insertion into NPC Search without overwriting a search field that is actively being edited.
+
+### Changed
+
+- Aligned Item Search with the NPC Search layout and retained controlled Add Item and Remove Item operations in the Operations panel.
+- Streamlined Movement destination selection so choosing a destination teleports immediately and records the Emergency Return point.
+- Increased Movement menu-label visibility and preserved clear region, zone, and destination selection states.
+- Made NPC world-spawn row clicks select database records only; they no longer claim to change the visible WoW target.
+
+### Fixed
+
+- Removed unreliable same-name NPC targeting that always selected the nearest matching creature instead of the chosen Spawn ID.
+- Removed the protected targeting path that could trigger Blizzard blocked-action warnings.
+- Separated live NPC Location information from authoritative Spawn information.
+
+### Validation
+
+- Validated Item Search layout and input rendering in the WoW 3.3.5a client.
+- Validated automatic Movement teleport and Emergency Return.
+- Validated Go to NPC arrival and return behavior.
+- Validated Spawn Information against live database-backed NPCs.
+- Validated database-spawn row selection without unintended target changes.
+- Validated automatic target-name insertion and manual-edit protection.
+- Completed configure, build, install, compatibility, clean-build, and BugGrabber regression checks.
+
 ## 0.7.0 — NPC and Quest Intelligence
 
 ### Added
