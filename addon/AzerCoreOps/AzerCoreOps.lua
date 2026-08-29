@@ -1131,6 +1131,11 @@ local function BuildNPC()
   local opTitle=Section(operations,"OPERATIONS",C.gold); opTitle:SetPoint("TOPLEFT",10,-10)
   local opDefs={
     {"Inspect NPC",function() Platform.NPCUI.autoInspect=true; Platform.NPCUI.activeOperation="Inspect NPC"; Platform.NPCUI.Inspect(false) end,"Inspect the selected creature and resume automatic target inspection"},
+    {"Go to NPC",function()
+      Platform.NPCUI.autoInspect=true
+      Platform.NPCUI.activeOperation="Go to NPC"
+      if Platform.NPCUI.GoToNPC then Platform.NPCUI.GoToNPC() end
+    end,"Teleport near the selected live NPC while preserving an Emergency Return point","GM_REQUIRED"},
     {"Go to Spawn",function()
       Platform.NPCUI.autoInspect=true
       Platform.NPCUI.activeOperation="Go to Spawn"
@@ -1632,7 +1637,7 @@ local function BuildNPC()
   end
 
   local function Report(formatted)
-    local s=Platform.NPCUI.server or {}; local o=s.overview or {}; local st=s.state or {}; local l=s.location or {}; local t=s.technical or {}
+    local s=Platform.NPCUI.server or {}; local o=s.overview or {}; local st=s.state or {}; local l=s.location or {}; local t=s.technical or {}; local sp=s.spawn or {}
     local reportName=s.begin and s.begin.name or UnitName("target") or "No NPC"
     local reportEntry=s.begin and s.begin.entry or "?"
 
@@ -1832,7 +1837,54 @@ local function BuildNPC()
       end
 
     elseif Platform.NPCUI.view=="SERVICES" then table.insert(lines,ServicesText(o.npcflags))
-    elseif Platform.NPCUI.view=="LOCATION" or Platform.NPCUI.view=="SPAWN" then table.insert(lines,string.format("Map %s  Zone %s  Area %s\nInstance %s  Phase %s\nPosition %s, %s, %s  Orientation %s",l.map or "?",l.zone or "?",l.area or "?",l.instance or "?",l.phase or "?",l.x or "?",l.y or "?",l.z or "?",l.o or "?"))
+    elseif Platform.NPCUI.view=="LOCATION" then
+      table.insert(lines,string.format(
+        "Map %s  Zone %s  Area %s\nInstance %s  Phase %s\nPosition %s, %s, %s  Orientation %s",
+        l.map or "?",
+        l.zone or "?",
+        l.area or "?",
+        l.instance or "?",
+        l.phase or "?",
+        l.x or "?",
+        l.y or "?",
+        l.z or "?",
+        l.o or "?"
+      ))
+    elseif Platform.NPCUI.view=="SPAWN" then
+      local movementNames={
+        ["0"]="Idle",
+        ["1"]="Random",
+        ["2"]="Waypoint"
+      }
+      local movementType=tostring(sp.movement or "?")
+      local movementName=movementNames[movementType] or "Other"
+      local databaseSource=sp.dbspawn=="1" and "Database creature spawn" or "Runtime or summoned creature"
+      local distanceText="Unknown"
+      local currentX,currentY,currentZ=tonumber(l.x),tonumber(l.y),tonumber(l.z)
+      local homeX,homeY,homeZ=tonumber(sp.homex),tonumber(sp.homey),tonumber(sp.homez)
+
+      if currentX and currentY and currentZ and homeX and homeY and homeZ then
+        local dx=currentX-homeX
+        local dy=currentY-homeY
+        local dz=currentZ-homeZ
+        distanceText=string.format("%.2f yd",math.sqrt(dx*dx+dy*dy+dz*dz))
+      end
+
+      table.insert(lines,string.format(
+        "Spawn ID: %s\nSource: %s\nHome position: %s, %s, %s  Orientation %s\nCurrent distance from home: %s\nRespawn delay: %s seconds\nCorpse delay: %s seconds\nMovement: %s (type %s)\nWander distance: %s yd",
+        sp.spawnid or "?",
+        databaseSource,
+        sp.homex or "?",
+        sp.homey or "?",
+        sp.homez or "?",
+        sp.homeo or "?",
+        distanceText,
+        sp.respawndelay or "?",
+        sp.corpsedelay or "?",
+        movementName,
+        movementType,
+        sp.wander or "?"
+      ))
     elseif Platform.NPCUI.view=="COMBAT" then table.insert(lines,string.format("Alive: %s\nIn combat: %s\nHealth: %s / %s\nPower: %s / %s (type %s)",st.alive=="1" and "Yes" or "No",st.combat=="1" and "Yes" or "No",st.health or "?",st.maxhealth or "?",st.power or "?",st.maxpower or "?",st.powertype or "?"))
     elseif Platform.NPCUI.view=="LOOT" then
       local loot=s.loot or {}
@@ -2849,6 +2901,60 @@ local function BuildNPC()
     Platform.NPCUI.view="SEARCH"
 
     Platform.NPCUI.LoadSpawns(tonumber(result.entry))
+  end
+
+  Platform.NPCUI.GoToNPC=function()
+    local entry,err=TargetCreatureEntry()
+
+    if not entry then
+      SetStatus(err or "Select a live creature first.",true)
+      return
+    end
+
+    local server=Platform.NPCUI.server or {}
+    local begin=server.begin or {}
+    local location=server.location or {}
+
+    if tonumber(begin.entry)~=tonumber(entry) then
+      if Platform.NPCUI.Inspect then Platform.NPCUI.Inspect(true,true) end
+      SetStatus("Refreshing the selected NPC. Press Go to NPC again when inspection completes.",true)
+      return
+    end
+
+    local map=tonumber(location.map)
+    local x=tonumber(location.x)
+    local y=tonumber(location.y)
+    local z=tonumber(location.z)
+    local o=tonumber(location.o)
+
+    if not map or not x or not y or not z or not o then
+      if Platform.NPCUI.Inspect then Platform.NPCUI.Inspect(true,true) end
+      SetStatus("NPC location is not loaded yet. Press Go to NPC again after inspection completes.",true)
+      return
+    end
+
+    -- Arrive slightly behind the NPC instead of inside its model.
+    local arrivalDistance=2.5
+    local destinationX=x-math.cos(o)*arrivalDistance
+    local destinationY=y-math.sin(o)*arrivalDistance
+
+    SendCommand(
+      string.format(
+        CMD.movementGo,
+        map,
+        destinationX,
+        destinationY,
+        z,
+        o
+      )
+    )
+
+    SetStatus(
+      string.format(
+        "Going to %s. Emergency Return is available after a successful teleport.",
+        tostring(begin.name or UnitName("target") or "selected NPC")
+      )
+    )
   end
 
   Platform.NPCUI.GoToSpawn=function()
@@ -6856,7 +6962,7 @@ end
 local function BuildUI()
   main=CreateFrame("Frame","AZERCORE_OPS_MainFrame",UIParent); main:SetWidth(980); main:SetHeight(650); main:SetClampedToScreen(true); main:SetFrameStrata("DIALOG"); Backdrop(main); RestorePoint(main,"main","CENTER",0,0); Movable(main,"main")
   local logo=main:CreateTexture(nil,"ARTWORK"); logo:SetTexture("Interface\\AddOns\\AzerCoreOps\\Media\\azercoreops-icon.tga"); logo:SetWidth(30); logo:SetHeight(30); logo:SetPoint("TOPLEFT",12,-7)
-  local title=Label(main,"AzerCore Ops  |cffaaaaaa".."0.7.0b".."|r"); title:SetPoint("TOPLEFT",50,-15)
+  local title=Label(main,"AzerCore Ops  |cffaaaaaa".."0.7.0k".."|r"); title:SetPoint("TOPLEFT",50,-15)
   compatUI.workspaceModeText=main:CreateFontString(nil,"OVERLAY","GameFontNormalSmall"); compatUI.workspaceModeText:SetPoint("TOPRIGHT",-104,-16); compatUI.workspaceModeText:SetJustifyH("RIGHT")
   Button(main,"?",22,20,OpenOptions,"Open AzerCoreOps options"):SetPoint("TOPRIGHT",-66,-10)
   Button(main,"_",22,20,HideMain,"Minimize to floating button"):SetPoint("TOPRIGHT",-38,-10)
@@ -6937,7 +7043,7 @@ end
 local events=CreateFrame("Frame"); events:RegisterEvent("ADDON_LOADED"); events:RegisterEvent("PLAYER_ENTERING_WORLD"); events:RegisterEvent("CHAT_MSG_SYSTEM"); events:RegisterEvent("UPDATE_INSTANCE_INFO"); events:RegisterEvent("PLAYER_TARGET_CHANGED"); events:RegisterEvent("PARTY_MEMBERS_CHANGED"); events:RegisterEvent("RAID_ROSTER_UPDATE"); events:RegisterEvent("INSPECT_TALENT_READY")
 local compatibilityRequested=false
 events:SetScript("OnEvent",function(_,event,arg1)
-  if event=="ADDON_LOADED" then if arg1~=ADDON then return end; AzerCoreOpsDB=AzerCoreOpsDB or {}; Settings(); BuildOptions(); BuildUI(); Print("v".."0.7.0b".." loaded. Type /azercoreops help")
+  if event=="ADDON_LOADED" then if arg1~=ADDON then return end; AzerCoreOpsDB=AzerCoreOpsDB or {}; Settings(); BuildOptions(); BuildUI(); Print("v".."0.7.0k".." loaded. Type /azercoreops help")
   elseif event=="PLAYER_ENTERING_WORLD" and not compatibilityRequested then compatibilityRequested=true; SendChatMessage(CMD.version,"SAY")
   elseif event=="UPDATE_INSTANCE_INFO" and activeTab=="Instances" and instanceUI.bindPage and instanceUI.bindPage:IsShown() then RefreshMyInstances()
   elseif event=="INSPECT_TALENT_READY" then
@@ -6953,6 +7059,16 @@ events:SetScript("OnEvent",function(_,event,arg1)
     Platform.NPCUI.server={quests={},loot={},story={}}; Platform.NPCUI.captureEntry=nil; Platform.NPCUI.ignoreStream=false
     Platform.NPCUI.requestEntry=nil; Platform.NPCUI.inspectionLoading=false
     if Platform.NPCUI.Update then Platform.NPCUI.Update() end
+    local targetEntry=TargetCreatureEntry()
+    local npcSearchBox=Platform.NPCUI.searchBox
+
+    if targetEntry and npcSearchBox and not npcSearchBox:HasFocus() then
+      local targetName=UnitName("target")
+
+      if targetName and targetName~="" then
+        npcSearchBox:SetText(targetName)
+      end
+    end
     if activeTab=="NPC" and Platform.NPCUI.autoInspect and Platform.NPCUI.Inspect then
       After(.35,function() if activeTab=="NPC" and Platform.NPCUI.autoInspect then Platform.NPCUI.Inspect(true) end end)
     end
@@ -7184,6 +7300,10 @@ events:SetScript("OnEvent",function(_,event,arg1)
       if not Platform.NPCUI.ignoreStream then Platform.NPCUI.server.state=f end
     elseif kind=="NPC_LOCATION" then
       if not Platform.NPCUI.ignoreStream then Platform.NPCUI.server.location=f end
+    elseif kind=="NPC_SPAWN_INFO" then
+      if not Platform.NPCUI.ignoreStream then
+        Platform.NPCUI.server.spawn=f
+      end
     elseif kind=="NPC_TECHNICAL" then
       if not Platform.NPCUI.ignoreStream then Platform.NPCUI.server.technical=f end
     elseif kind=="NPC_QUEST" then

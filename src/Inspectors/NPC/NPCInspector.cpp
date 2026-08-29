@@ -2,6 +2,7 @@
 
 #include "Chat.h"
 #include "Creature.h"
+#include "CreatureData.h"
 #include "DatabaseEnv.h"
 #include "GameTime.h"
 #include "Map.h"
@@ -385,6 +386,23 @@ bool NPCInspector::Inspect(ChatHandler* handler)
     Protocol::SendNPCOverview(handler, creature->GetLevel(), data ? data->minlevel : creature->GetLevel(), data ? data->maxlevel : creature->GetLevel(), data ? data->rank : 0, data ? data->type : 0, data ? data->family : 0, data ? data->faction : 0, data ? data->npcflag : 0);
     Protocol::SendNPCState(handler, creature->IsAlive(), creature->IsInCombat(), creature->GetHealth(), creature->GetMaxHealth(), creature->getPowerType(), creature->GetPower(creature->getPowerType()), creature->GetMaxPower(creature->getPowerType()));
     Protocol::SendNPCLocation(handler, creature->GetMapId(), creature->GetZoneId(), creature->GetAreaId(), creature->GetInstanceId(), creature->GetPhaseMask(), creature->GetPositionX(), creature->GetPositionY(), creature->GetPositionZ(), creature->GetOrientation());
+
+    ObjectGuid::LowType const spawnId = creature->GetSpawnId();
+    CreatureData const* spawnData = spawnId ? sObjectMgr->GetCreatureData(spawnId) : nullptr;
+    Position const& home = creature->GetHomePosition();
+
+    Protocol::SendNPCSpawnInfo(
+        handler,
+        static_cast<std::uint64_t>(spawnId),
+        spawnData != nullptr,
+        home.GetPositionX(),
+        home.GetPositionY(),
+        home.GetPositionZ(),
+        home.GetOrientation(),
+        creature->GetRespawnDelay(),
+        creature->GetCorpseDelay(),
+        static_cast<std::uint32_t>(creature->GetDefaultMovementType()),
+        spawnData ? spawnData->wander_distance : 0.0f);
     if (data)
         Protocol::SendNPCTechnical(handler, data->unit_flags, data->dynamicflags, data->lootid, data->pickpocketLootId, data->SkinLootId, data->mingold, data->maxgold, data->AIName, data->ScriptID);
 
