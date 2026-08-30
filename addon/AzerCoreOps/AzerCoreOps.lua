@@ -1,6 +1,6 @@
 local ADDON = ...
 
--- AzerCore Ops Platform 0.7.1
+-- AzerCore Ops Platform 0.7.1a
 -- Target: WoW 3.3.5a / AzerothCore. All server commands live here so that
 -- branch-specific command names can be changed without touching the UI.
 local CMD = {
@@ -39,6 +39,7 @@ local CMD = {
 
 local DS = AzerCoreOpsDesign
 local Platform = AzerCoreOpsPlatform
+Platform.AddonBuild="0.7.1a"
 local C = {
   bg=DS.Colors.Background,
   panel=DS.Colors.Surface,
@@ -129,7 +130,7 @@ local TESTED_PLAYERBOTS="ba46fcdecde3"
 instanceUI.CaptureDiagnosticEvidence=function()
   local source=compatUI.data or {}
   local evidence={
-    addon=ADDON_VERSION,
+    addon=Platform.AddonBuild or ADDON_VERSION,
     module=source.module or "unknown",
     protocol=source.protocol or PROTOCOL_VERSION,
     capschema=source.capschema or "unknown",
@@ -6703,7 +6704,7 @@ local function BuildOptions()
   end
   local pc,pScroll,pHorizontal,pUpdateHorizontal=ScrollContent(p,"AZERCORE_OPS_OptionsScroll",505)
   local title=pc:CreateFontString(nil,"ARTWORK","GameFontNormalLarge"); title:SetPoint("TOPLEFT",16,-16); title:SetText("AzerCore Ops")
-  local version=pc:CreateFontString(nil,"ARTWORK","GameFontHighlightSmall"); version:SetPoint("LEFT",title,"RIGHT",8,0); version:SetText(ADDON_VERSION)
+  local version=pc:CreateFontString(nil,"ARTWORK","GameFontHighlightSmall"); version:SetPoint("LEFT",title,"RIGHT",8,0); version:SetText(Platform.AddonBuild or ADDON_VERSION)
   local note=pc:CreateFontString(nil,"ARTWORK","GameFontHighlightSmall"); note:SetPoint("TOPLEFT",title,"BOTTOMLEFT",0,-8); note:SetText("Settings are saved separately for each character.")
   local controls={}
   local function Check(parent,store,name,label,key,y,tip)
@@ -6999,7 +7000,7 @@ end
 local function BuildUI()
   main=CreateFrame("Frame","AZERCORE_OPS_MainFrame",UIParent); main:SetWidth(980); main:SetHeight(650); main:SetClampedToScreen(true); main:SetFrameStrata("DIALOG"); Backdrop(main); RestorePoint(main,"main","CENTER",0,0); Movable(main,"main")
   local logo=main:CreateTexture(nil,"ARTWORK"); logo:SetTexture("Interface\\AddOns\\AzerCoreOps\\Media\\azercoreops-icon.tga"); logo:SetWidth(30); logo:SetHeight(30); logo:SetPoint("TOPLEFT",12,-7)
-  local title=Label(main,"AzerCore Ops  |cffaaaaaa".."0.7.1".."|r"); title:SetPoint("TOPLEFT",50,-15)
+  local title=Label(main,"AzerCore Ops  |cffaaaaaa"..(Platform.AddonBuild or ADDON_VERSION).."|r"); title:SetPoint("TOPLEFT",50,-15)
   compatUI.workspaceModeText=main:CreateFontString(nil,"OVERLAY","GameFontNormalSmall"); compatUI.workspaceModeText:SetPoint("TOPRIGHT",-104,-16); compatUI.workspaceModeText:SetJustifyH("RIGHT")
   Button(main,"?",22,20,OpenOptions,"Open AzerCoreOps options"):SetPoint("TOPRIGHT",-66,-10)
   Button(main,"_",22,20,HideMain,"Minimize to floating button"):SetPoint("TOPRIGHT",-38,-10)
@@ -7080,7 +7081,7 @@ end
 local events=CreateFrame("Frame"); events:RegisterEvent("ADDON_LOADED"); events:RegisterEvent("PLAYER_ENTERING_WORLD"); events:RegisterEvent("CHAT_MSG_SYSTEM"); events:RegisterEvent("UPDATE_INSTANCE_INFO"); events:RegisterEvent("PLAYER_TARGET_CHANGED"); events:RegisterEvent("PARTY_MEMBERS_CHANGED"); events:RegisterEvent("RAID_ROSTER_UPDATE"); events:RegisterEvent("INSPECT_TALENT_READY")
 local compatibilityRequested=false
 events:SetScript("OnEvent",function(_,event,arg1)
-  if event=="ADDON_LOADED" then if arg1~=ADDON then return end; AzerCoreOpsDB=AzerCoreOpsDB or {}; Settings(); BuildOptions(); BuildUI(); Print("v".."0.7.1".." loaded. Type /azercoreops help")
+  if event=="ADDON_LOADED" then if arg1~=ADDON then return end; AzerCoreOpsDB=AzerCoreOpsDB or {}; Settings(); BuildOptions(); BuildUI(); Print("v"..(Platform.AddonBuild or ADDON_VERSION).." loaded. Type /azercoreops help")
   elseif event=="PLAYER_ENTERING_WORLD" and not compatibilityRequested then compatibilityRequested=true; SendChatMessage(CMD.version,"SAY")
   elseif event=="UPDATE_INSTANCE_INFO" and activeTab=="Instances" and instanceUI.bindPage and instanceUI.bindPage:IsShown() then RefreshMyInstances()
   elseif event=="INSPECT_TALENT_READY" then
