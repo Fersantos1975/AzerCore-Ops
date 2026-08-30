@@ -8,5 +8,6 @@
 DesignSystem.lua
 UIFoundation.lua
 PlatformFramework.lua
+IssueReportFramework.lua
 TeleportCatalog.lua
 AzerCoreOps.lua
