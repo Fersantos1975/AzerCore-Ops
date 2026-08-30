@@ -1,6 +1,6 @@
 local ADDON = ...
 
--- AzerCore Ops Platform 0.7.1a
+-- AzerCore Ops Platform 0.7.1b
 -- Target: WoW 3.3.5a / AzerothCore. All server commands live here so that
 -- branch-specific command names can be changed without touching the UI.
 local CMD = {
@@ -39,7 +39,7 @@ local CMD = {
 
 local DS = AzerCoreOpsDesign
 local Platform = AzerCoreOpsPlatform
-Platform.AddonBuild="0.7.1a"
+Platform.AddonBuild="0.7.1b"
 local C = {
   bg=DS.Colors.Background,
   panel=DS.Colors.Surface,
@@ -6221,6 +6221,57 @@ local function BuildInstances()
   end
   diagnosticOlder=Button(diagnosticControls,"< Older",72,22,function() LoadDiagnosticHistory(1) end,"Open an older saved diagnostic scan"); diagnosticOlder:SetPoint("TOPLEFT",12,-249)
   diagnosticNewer=Button(diagnosticControls,"Newer >",72,22,function() LoadDiagnosticHistory(-1) end,"Open a newer saved diagnostic scan"); diagnosticNewer:SetPoint("TOPLEFT",90,-249)
+
+  instanceUI.issueBeforeButton=Button(
+    diagnosticControls,"Mark Before",72,22,function()
+      local ready,reason=AzerCoreOpsIssueReport.CanCapture(
+        instanceUI.diagnostics)
+      if not ready then SetStatus(reason,true); return end
+      AzerCoreOpsDB.issueReportEvidence=
+        AzerCoreOpsDB.issueReportEvidence or {}
+      AzerCoreOpsDB.issueReportEvidence.before=
+        AzerCoreOpsIssueReport.Capture(
+          instanceUI.diagnostics,instanceUI.encounterHistory)
+      SetStatus("Before evidence captured at "..
+        tostring(AzerCoreOpsDB.issueReportEvidence.before.captured)..".")
+    end,
+    "Preserve the completed scan as the state before reproduction")
+  instanceUI.issueBeforeButton:SetPoint("TOPLEFT",12,-285)
+
+  instanceUI.issueAfterButton=Button(
+    diagnosticControls,"Mark After",72,22,function()
+      local ready,reason=AzerCoreOpsIssueReport.CanCapture(
+        instanceUI.diagnostics)
+      if not ready then SetStatus(reason,true); return end
+      AzerCoreOpsDB.issueReportEvidence=
+        AzerCoreOpsDB.issueReportEvidence or {}
+      AzerCoreOpsDB.issueReportEvidence.after=
+        AzerCoreOpsIssueReport.Capture(
+          instanceUI.diagnostics,instanceUI.encounterHistory)
+      SetStatus("After evidence captured at "..
+        tostring(AzerCoreOpsDB.issueReportEvidence.after.captured)..".")
+    end,
+    "Preserve the completed scan as the state after reproduction")
+  instanceUI.issueAfterButton:SetPoint("TOPLEFT",90,-285)
+
+  instanceUI.issueCompareButton=Button(
+    diagnosticControls,"Compare Evidence",156,24,function()
+      AzerCoreOpsDB.issueReportEvidence=
+        AzerCoreOpsDB.issueReportEvidence or {}
+      if not AzerCoreOpsDB.issueReportEvidence.before
+        or not AzerCoreOpsDB.issueReportEvidence.after
+      then
+        SetStatus("Capture both Before and After evidence first.",true)
+        return
+      end
+      ShowSelectableReport(
+        "Before/After diagnostic evidence",
+        AzerCoreOpsIssueReport.ComparisonText(
+          AzerCoreOpsDB.issueReportEvidence.before,
+          AzerCoreOpsDB.issueReportEvidence.after))
+    end,
+    "Compare the preserved read-only diagnostic snapshots")
+  instanceUI.issueCompareButton:SetPoint("TOPLEFT",12,-317)
 
   local diagnosticPanel=CreateFrame("Frame",nil,diagnosticPage); diagnosticPanel:SetPoint("TOPLEFT",200,-5); diagnosticPanel:SetPoint("BOTTOMRIGHT",-12,10); Backdrop(diagnosticPanel,C.panel)
   local diagnosticTitle=Section(diagnosticPanel,"LIVE ENCOUNTER EVIDENCE",C.gold); diagnosticTitle:SetPoint("TOPLEFT",10,-10)

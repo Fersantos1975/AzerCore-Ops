@@ -86,6 +86,60 @@ function Report.Compare(before, after)
   return result
 end
 
+function Report.CanCapture(diagnostics)
+  if type(diagnostics)~="table" then
+    return false,"Run a diagnostic scan first."
+  end
+  if diagnostics.loading then
+    return false,"Wait for the diagnostic scan to finish."
+  end
+  if diagnostics.error then
+    return false,"The diagnostic scan failed: "..tostring(diagnostics.error)
+  end
+  if not diagnostics.header or not diagnostics.summary
+    or not diagnostics.generatedAt
+  then
+    return false,"A completed diagnostic scan is required."
+  end
+  return true
+end
+
+function Report.ComparisonText(before, after)
+  local lines={"AzerCore Ops — Before/After Evidence"}
+  table.insert(lines,"")
+  table.insert(lines,"Before captured: "..tostring(
+    before and before.captured or "not captured"))
+  table.insert(lines,"After captured: "..tostring(
+    after and after.captured or "not captured"))
+  table.insert(lines,"")
+
+  if not before or not after then
+    table.insert(lines,
+      "Both Before and After snapshots are required before comparison.")
+    return table.concat(lines,"\n")
+  end
+
+  local changes=Report.Compare(before,after)
+  table.insert(lines,"Detected changes: "..tostring(#changes))
+  table.insert(lines,"")
+
+  if #changes==0 then
+    table.insert(lines,"No diagnostic state changes were detected.")
+  else
+    for _,change in ipairs(changes) do
+      local old=change.before or {}
+      local new=change.after or {}
+      table.insert(lines,string.format(
+        "[%s] %s: %s -> %s",
+        tostring(change.kind),tostring(change.key),
+        tostring(old.actual or "not present"),
+        tostring(new.actual or "not present")))
+    end
+  end
+
+  return table.concat(lines,"\n")
+end
+
 function Report.Readiness(draft, before, after)
   draft=draft or {}
   local missing={}
