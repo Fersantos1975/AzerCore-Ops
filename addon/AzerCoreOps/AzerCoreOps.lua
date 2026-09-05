@@ -1,6 +1,6 @@
 local ADDON = ...
 
--- AzerCore Ops Platform 0.7.1b
+-- AzerCore Ops Platform 0.7.1c
 -- Target: WoW 3.3.5a / AzerothCore. All server commands live here so that
 -- branch-specific command names can be changed without touching the UI.
 local CMD = {
@@ -39,7 +39,7 @@ local CMD = {
 
 local DS = AzerCoreOpsDesign
 local Platform = AzerCoreOpsPlatform
-Platform.AddonBuild="0.7.1b"
+Platform.AddonBuild="0.7.1d"
 local C = {
   bg=DS.Colors.Background,
   panel=DS.Colors.Surface,
@@ -5890,7 +5890,9 @@ ShowSelectableReport=function(title, report, actionLabel, actionFn)
   exportFrame.title:SetText(title or "AzerCoreOps report")
   if actionLabel and actionFn then
     exportActionButton:SetText(actionLabel)
-    exportActionButton:SetScript("OnClick",actionFn)
+    exportActionButton:SetScript("OnClick",function()
+      actionFn(exportEdit and exportEdit:GetText() or "")
+    end)
     exportActionButton:Show()
   else
     exportActionButton:Hide()
@@ -6272,6 +6274,32 @@ local function BuildInstances()
     end,
     "Compare the preserved read-only diagnostic snapshots")
   instanceUI.issueCompareButton:SetPoint("TOPLEFT",12,-317)
+
+  instanceUI.issueBuildButton=Button(
+    diagnosticControls,"Build Issue Report",156,24,function()
+      local evidence=AzerCoreOpsDB.issueReportEvidence or {}
+      AzerCoreOpsIssueReport.OpenDraft(
+        evidence.before,evidence.after,
+        Platform.AddonBuild or ADDON_VERSION,
+        ShowSelectableReport,SetStatus)
+    end,
+    "Build and review a privacy-conscious AzerothCore issue draft")
+  instanceUI.issueBuildButton:SetPoint("TOPLEFT",12,-349)
+
+  instanceUI.issueNewDraftButton=Button(
+    diagnosticControls,"New Issue Draft",156,24,function()
+      local evidence=AzerCoreOpsDB.issueReportEvidence or {}
+      local ready,reason=AzerCoreOpsIssueReport.NewDraft(
+        evidence.before,evidence.after,
+        Platform.AddonBuild or ADDON_VERSION)
+      if not ready then SetStatus(reason,true); return end
+      AzerCoreOpsIssueReport.OpenDraft(
+        evidence.before,evidence.after,
+        Platform.AddonBuild or ADDON_VERSION,
+        ShowSelectableReport,SetStatus)
+    end,
+    "Deliberately replace the saved draft and bind it to current evidence")
+  instanceUI.issueNewDraftButton:SetPoint("TOPLEFT",12,-381)
 
   local diagnosticPanel=CreateFrame("Frame",nil,diagnosticPage); diagnosticPanel:SetPoint("TOPLEFT",200,-5); diagnosticPanel:SetPoint("BOTTOMRIGHT",-12,10); Backdrop(diagnosticPanel,C.panel)
   local diagnosticTitle=Section(diagnosticPanel,"LIVE ENCOUNTER EVIDENCE",C.gold); diagnosticTitle:SetPoint("TOPLEFT",10,-10)

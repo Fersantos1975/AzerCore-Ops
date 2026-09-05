@@ -140,6 +140,183 @@ function Report.ComparisonText(before, after)
   return table.concat(lines,"\n")
 end
 
+local function SnapshotIdentity(snapshot)
+  local diagnostics=snapshot and snapshot.diagnostics or {}
+  local evidence=diagnostics.evidence or {}
+  local header=diagnostics.header or {}
+  return table.concat({
+    tostring(snapshot and snapshot.captured or ""),
+    tostring(diagnostics.generatedAt or ""),
+    tostring(header.map or ""),
+    tostring(header.instance or ""),
+    tostring(header.difficulty or ""),
+    tostring(evidence.addon or ""),
+    tostring(evidence.core or ""),
+  },"|")
+end
+
+local function CapturedAddonBuild(before, after)
+  local snapshot=after or before
+  local diagnostics=snapshot and snapshot.diagnostics or {}
+  local evidence=diagnostics.evidence or {}
+  return Trim(evidence.addon)
+end
+
+function Report.EvidenceFingerprint(before, after)
+  return SnapshotIdentity(before).."=>"..SnapshotIdentity(after)
+end
+
+function Report.Template(before, after, activeBuild)
+  local report=Report.Compose({
+    current="[Describe what currently happens.]",
+    expected="[Describe what should happen instead.]",
+    source="[Provide the relevant source file, script, or database evidence.]",
+    steps="[List the exact reproduction steps in order.]",
+    notes="None provided.",
+    operatingSystem="[Provide the server operating system and version.]",
+    customChanges="[List enabled modules and disclose relevant custom changes.]",
+  },before,after)
+
+  local capturedBuild=CapturedAddonBuild(before,after)
+  activeBuild=Trim(activeBuild)
+  if capturedBuild~="" and activeBuild~=""
+    and capturedBuild~=activeBuild
+  then
+    report=string.format(
+      "> **Historical evidence:** captured with AzerCore Ops `%s`; current addon build is `%s`.\n\n%s",
+      Safe(capturedBuild),Safe(activeBuild),report)
+  end
+
+  return report
+end
+
+function Report.ReviewText(text)
+  text=tostring(text or "")
+  local issues={}
+  local headings={
+    "### Current Behaviour",
+    "### Expected Behaviour",
+    "### Source",
+    "### Steps to reproduce the problem",
+    "### Extra Notes",
+    "### AC rev. hash/commit",
+    "### Operating system",
+    "### Custom changes or Modules",
+  }
+  local instructions={
+    {
+      "[Describe what currently happens.]",
+      "Complete Current Behaviour.",
+    },
+    {
+      "[Describe what should happen instead.]",
+      "Complete Expected Behaviour.",
+    },
+    {
+      "[Provide the relevant source file, script, or database evidence.]",
+      "Complete Source.",
+    },
+    {
+      "[List the exact reproduction steps in order.]",
+      "Complete Steps to reproduce.",
+    },
+    {
+      "[Provide the server operating system and version.]",
+      "Complete Operating system.",
+    },
+    {
+      "[List enabled modules and disclose relevant custom changes.]",
+      "Complete Custom changes or Modules.",
+    },
+  }
+
+  for _,heading in ipairs(headings) do
+    if not text:find(heading,1,true) then
+      table.insert(issues,"Missing heading: "..heading)
+    end
+  end
+
+  for _,instruction in ipairs(instructions) do
+    if text:find(instruction[1],1,true) then
+      table.insert(issues,instruction[2])
+    end
+  end
+
+  if text:find("%d+%.%d+%.%d+%.%d+") then
+    table.insert(issues,"Review or remove the detected IPv4 address.")
+  end
+  if text:find("[A-Za-z]:\\") or text:find("/home/",1,true) then
+    table.insert(issues,"Review or remove the detected local path.")
+  end
+  if text:find("unknown",1,true) then
+    table.insert(issues,"Replace or explain remaining unknown values.")
+  end
+
+  return #issues==0 and "READY_FOR_REVIEW" or "DRAFT",issues
+end
+
+function Report.NewDraft(before, after, activeBuild)
+  if not before and not after then
+    return false,"Capture Before or After evidence before starting a draft."
+  end
+
+  AzerCoreOpsDB.issueReportDraftFingerprint=
+    Report.EvidenceFingerprint(before,after)
+  AzerCoreOpsDB.issueReportDraftText=
+    Report.Template(before,after,activeBuild)
+  return true
+end
+
+function Report.OpenDraft(
+  before, after, activeBuild, showReport, setStatus
+)
+  if not before and not after then
+    setStatus("Capture Before or After evidence before building a report.",true)
+    return
+  end
+
+  local fingerprint=Report.EvidenceFingerprint(before,after)
+  if AzerCoreOpsDB.issueReportDraftText
+    and not AzerCoreOpsDB.issueReportDraftFingerprint
+  then
+    setStatus(
+      "Existing draft predates evidence tracking. Click New Issue Draft to bind a fresh draft to this evidence.",
+      true)
+    return
+  end
+
+  if AzerCoreOpsDB.issueReportDraftText
+    and AzerCoreOpsDB.issueReportDraftFingerprint~=fingerprint
+  then
+    setStatus(
+      "Saved draft belongs to different evidence. Click New Issue Draft to replace it deliberately.",
+      true)
+    return
+  end
+
+  if not AzerCoreOpsDB.issueReportDraftText then
+    local ready,reason=Report.NewDraft(before,after,activeBuild)
+    if not ready then setStatus(reason,true); return end
+  end
+
+  showReport(
+    "AzerothCore upstream issue draft",
+    AzerCoreOpsDB.issueReportDraftText,
+    "Review Draft",
+    function(editedText)
+      AzerCoreOpsDB.issueReportDraftText=tostring(editedText or "")
+      local state,issues=Report.ReviewText(
+        AzerCoreOpsDB.issueReportDraftText)
+      if state=="READY_FOR_REVIEW" then
+        setStatus(
+          "Issue draft saved and ready for human review before submission.")
+      else
+        setStatus(
+          "Issue draft saved — "..table.concat(issues," "),true)
+      end
+    end)
+end
+
 function Report.Readiness(draft, before, after)
   draft=draft or {}
   local missing={}
