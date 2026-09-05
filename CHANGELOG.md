@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.7.2 — Evidence-Driven Issue Reporting
+
+### Added
+
+- Added completed diagnostic snapshot capture for before-and-after reproduction evidence.
+- Added deterministic comparison of preserved diagnostic findings.
+- Added editable, privacy-conscious AzerothCore upstream issue drafts.
+- Added historical addon-build identification for older captured evidence.
+- Added evidence fingerprints that prevent saved drafts from attaching to unrelated diagnostics.
+- Added named readiness feedback for incomplete issue-report sections.
+- Added a deliberate New Issue Draft workflow.
+- Added Lua 5.1 syntax and regression validation to project preflight and GitHub Actions.
+
+### Safety
+
+- Issue reports remain local reviewable drafts and are never submitted automatically.
+- Local filesystem paths and IPv4 addresses are detected for review.
+- Diagnostic capture and report generation do not modify database or encounter state.
+
+### Validation
+
+- Passed 12 Lua 5.1 issue-report framework regression tests.
+- Passed addon syntax, TOC load-order, whitespace, and project preflight checks.
+- Completed AzerothCore configure and worldserver build validation.
+- Validated capture, comparison, draft review, historical labeling, and persistence in game.
+
+
 ## 0.7.1 — Navigation and Spawn Diagnostics
 
 ### Added
