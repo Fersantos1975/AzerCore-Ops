@@ -1,6 +1,6 @@
-# AzerCore Ops 0.7.1
+# AzerCore Ops 0.7.2
 
-AzerCore Ops 0.7.1 improves Item, Movement, and NPC workflows in the AzerothCore server module and matching World of Warcraft 3.3.5a client addon.
+AzerCore Ops 0.7.2 adds evidence-driven diagnostic capture and a safe upstream issue-report workflow while retaining the Item, Movement, NPC, Quest, Character, and Instance Access capabilities of previous releases.
 
 ## Highlights
 
@@ -11,6 +11,21 @@ AzerCore Ops 0.7.1 improves Item, Movement, and NPC workflows in the AzerothCore
 - Go to NPC with Emergency Return support
 - Automatic NPC target-name insertion into search
 - Honest database-spawn selection without misleading client targeting
+
+## Evidence-driven issue reporting
+
+- Capture completed diagnostics as Before and After evidence.
+- Preserve snapshots as deep copies in per-character SavedVariables.
+- Compare diagnostic findings without modifying encounter state.
+- Generate editable AzerothCore issue drafts.
+- Warn when evidence was captured by an older addon build.
+- Bind saved drafts to evidence fingerprints to prevent accidental mixing.
+- Detect unfinished sections, local paths, IPv4 addresses, and unexplained unknown values.
+- Require deliberate human review and submission.
+
+## Validation and automation
+
+The project preflight validates Lua 5.1 syntax and runs 12 issue-report framework regression tests. GitHub Actions executes the same validation for pull requests.
 
 ## Item Inspector
 
@@ -50,7 +65,7 @@ NPC Spawn data continues to use structured protocol v1 records and participates 
 
 ## Validation
 
-The 0.7.1 regression pass covered:
+The 0.7.2 regression pass covered:
 
 - Item Search layout and input rendering
 - Exact-ID and name-based Item workflows
@@ -76,10 +91,10 @@ The 0.7.1 regression pass covered:
 
 ## Versions
 
-- Server module: 0.7.1
-- Client addon: 0.7.1
+- Server module: 0.7.2
+- Client addon: 0.7.2
 - Protocol: v1
-- Release tag: 0.7.1
+- Release tag: 0.7.2
 
 ## Installation
 
