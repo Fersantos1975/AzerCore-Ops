@@ -19,10 +19,41 @@ check_file src/Inspectors/Quest/QuestInspector.cpp
 check_file src/Inspectors/Character/CharacterInspector.cpp
 check_file addon/AzerCoreOps/AzerCoreOps.lua
 check_file addon/AzerCoreOps/AzerCoreOps.toc
+check_file addon/AzerCoreOps/IssueReportFramework.lua
+check_file tests/test_issue_report_framework.lua
 
 if grep -q '#include "Chat.h"' "$ROOT/src/mod_azercore_ops.cpp"; then ok 'AzerothCore command API header'; else bad 'Chat.h missing from command registration'; fi
 if grep -q 'Optional<uint8>' "$ROOT/src/Inspectors/Instance/InstanceInspector.h" && ! grep -q 'Acore::ChatCommands::Optional<uint8>' "$ROOT/src/Inspectors/Instance/InstanceInspector.h"; then ok 'Optional command argument matches AzerothCore API'; else bad 'Optional<uint8> command argument does not match AzerothCore API'; fi
 if grep -q 'AZERCORE_OPS_CAPABILITIES' "$ROOT/src/azercoreops_build_info.h.in"; then ok 'capability metadata'; else bad 'capability metadata missing'; fi
+
+framework_line="$(grep -nFx 'IssueReportFramework.lua' "$ROOT/addon/AzerCoreOps/AzerCoreOps.toc" | cut -d: -f1 || true)"
+addon_line="$(grep -nFx 'AzerCoreOps.lua' "$ROOT/addon/AzerCoreOps/AzerCoreOps.toc" | cut -d: -f1 || true)"
+if [[ -n "$framework_line" && -n "$addon_line" && "$framework_line" -lt "$addon_line" ]]; then
+  ok 'issue report framework TOC load order'
+else
+  bad 'IssueReportFramework.lua must load before AzerCoreOps.lua'
+fi
+
+if command -v luac5.1 >/dev/null 2>&1; then
+  if luac5.1 -p     "$ROOT/addon/AzerCoreOps/IssueReportFramework.lua"     "$ROOT/addon/AzerCoreOps/AzerCoreOps.lua"
+  then
+    ok 'Lua 5.1 syntax'
+  else
+    bad 'Lua 5.1 syntax validation failed'
+  fi
+else
+  bad 'luac5.1 is required for addon syntax validation'
+fi
+
+if command -v lua5.1 >/dev/null 2>&1; then
+  if (cd "$ROOT" && lua5.1 tests/test_issue_report_framework.lua); then
+    ok 'issue report framework regression tests'
+  else
+    bad 'issue report framework regression tests failed'
+  fi
+else
+  bad 'lua5.1 is required for addon regression tests'
+fi
 
 printf '\n'
 if [[ $fail -eq 0 ]]; then
