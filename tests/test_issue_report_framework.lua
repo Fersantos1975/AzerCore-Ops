@@ -264,6 +264,76 @@ No relevant custom changes.
   Equal(#issues,0,"completed review issues")
 end)
 
+Test("Review allows unknown in legitimate prose",function()
+  local text=[[
+### Current Behaviour
+The root cause is currently unknown, but the encounter state changes unexpectedly.
+
+### Expected Behaviour
+The encounter state should remain stable.
+
+### Source
+Verified in the instance diagnostic profile.
+
+### Steps to reproduce the problem
+1. Enter the instance.
+2. Run the diagnostic scan.
+
+### Extra Notes
+None provided.
+
+### AC rev. hash/commit
+`abcdef123456`
+
+### Operating system
+Debian GNU/Linux.
+
+### Custom changes or Modules
+No relevant custom changes.
+]]
+
+  local state,issues=Report.ReviewText(text)
+  Equal(state,"READY_FOR_REVIEW","legitimate unknown prose rejected")
+  Equal(#issues,0,"legitimate unknown prose produced review issues")
+end)
+
+Test("Review rejects generated unknown metadata",function()
+  local text=[[
+### Current Behaviour
+The encounter state changes unexpectedly.
+
+### Expected Behaviour
+The encounter state should remain stable.
+
+### Source
+Verified in the instance diagnostic profile.
+
+### Steps to reproduce the problem
+1. Enter the instance.
+2. Run the diagnostic scan.
+
+### Extra Notes
+None provided.
+
+### AC rev. hash/commit
+`unknown`
+
+### Operating system
+Debian GNU/Linux.
+
+### Custom changes or Modules
+No relevant custom changes.
+]]
+
+  local state,issues=Report.ReviewText(text)
+  Equal(state,"DRAFT","generated unknown metadata accepted")
+  Equal(#issues,1,"generated unknown metadata issue count")
+  Equal(
+    issues[1],
+    "Replace or explain remaining unknown values.",
+    "generated unknown metadata warning")
+end)
+
 Test("Draft is bound to its evidence fingerprint",function()
   AzerCoreOpsDB={}
   local before=Report.Capture(Diagnostics(),{})

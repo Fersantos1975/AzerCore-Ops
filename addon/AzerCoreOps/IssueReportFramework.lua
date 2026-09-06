@@ -323,7 +323,35 @@ function Report.ReviewText(text)
   if text:find("[A-Za-z]:\\") or text:find("/home/",1,true) then
     table.insert(issues,"Review or remove the detected local path.")
   end
-  if text:find("unknown",1,true) then
+  local unresolvedGeneratedValues={
+    "Evidence captured: `unknown`",
+    "Instance script: `unknown`",
+    "AzerCore Ops addon `unknown`",
+    "module `unknown`",
+    "module commit `unknown`",
+    "build `unknown`",
+    "Core workspace: `unknown`",
+    "core date: `unknown`",
+    "AzerCore Ops workspace: `unknown`",
+    "Playerbots commit: `unknown`",
+    "Playerbots workspace: `unknown`",
+  }
+
+  local unresolved=false
+  for _,marker in ipairs(unresolvedGeneratedValues) do
+    if text:find(marker,1,true) then
+      unresolved=true
+      break
+    end
+  end
+
+  if not unresolved
+    and text:find("### AC rev%. hash/commit%s+`unknown`")
+  then
+    unresolved=true
+  end
+
+  if unresolved then
     table.insert(issues,"Replace or explain remaining unknown values.")
   end
 
