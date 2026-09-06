@@ -30,14 +30,15 @@ local function Test(name,fn)
   end
 end
 
-local function Diagnostics(addonBuild,actual)
+local function Diagnostics(addonBuild,actual,instanceId,difficulty,mapId)
   return {
     loading=false,
+    requestId=101,
     header={
       name="Icecrown Citadel",
-      map=631,
-      instance=1,
-      difficulty=0,
+      map=mapId or 631,
+      instance=instanceId or 1,
+      difficulty=difficulty or 0,
       script="instance_icecrown_citadel",
     },
     summary={passed=1,warnings=0,failures=0},
@@ -68,6 +69,23 @@ local function Diagnostics(addonBuild,actual)
   }
 end
 
+local function History(instanceId,difficulty,mapId)
+  return {
+    loading=false,
+    requestId=202,
+    header={
+      name="Icecrown Citadel",
+      map=mapId or 631,
+      instance=instanceId or 1,
+      difficulty=difficulty or 0,
+    },
+    summary={count=1,anomalies=0},
+    generatedAt="2026-09-05 11:00:01",
+    entries={},
+    stats={},
+  }
+end
+
 Test("Capture makes a deep copy",function()
   local source=Diagnostics()
   local snapshot=Report.Capture(source,{})
@@ -95,7 +113,7 @@ Test("MarkBefore clears stale After evidence",function()
   }
 
   local ready,snapshot=Report.MarkBefore(
-    evidence,Diagnostics("0.7.1d","NOT_STARTED"),{})
+    evidence,Diagnostics("0.7.1d","NOT_STARTED"),History())
 
   Equal(ready,true,"Before capture rejected")
   if evidence.before~=snapshot then
@@ -106,7 +124,7 @@ end)
 
 Test("MarkAfter requires Before evidence",function()
   local evidence={}
-  local ready,reason=Report.MarkAfter(evidence,Diagnostics(),{})
+  local ready,reason=Report.MarkAfter(evidence,Diagnostics(),History())
 
   Equal(ready,false,"After capture accepted without Before")
   Contains(reason,"Before","missing-Before rejection reason")
@@ -115,11 +133,11 @@ end)
 
 Test("MarkAfter captures evidence after Before",function()
   local evidence={}
-  local ready=Report.MarkBefore(evidence,Diagnostics(),{})
+  local ready=Report.MarkBefore(evidence,Diagnostics(),History())
   Equal(ready,true,"Before capture rejected")
 
   local afterReady,snapshot=Report.MarkAfter(
-    evidence,Diagnostics("0.7.1d","FAIL"),{})
+    evidence,Diagnostics("0.7.1d","FAIL"),History())
 
   Equal(afterReady,true,"After capture rejected")
   if evidence.after~=snapshot then
@@ -127,6 +145,84 @@ Test("MarkAfter captures evidence after Before",function()
   end
   Equal(snapshot.diagnostics.findings[1].actual,"FAIL",
     "After snapshot content")
+end)
+
+Test("CanCaptureContext rejects scan/history instance mismatch",function()
+  local ready,reason=Report.CanCaptureContext(Diagnostics(),History(2))
+  Equal(ready,false,"mismatched scan/history context accepted")
+  Contains(reason,"instance","scan/history mismatch reason")
+end)
+
+Test("MarkAfter rejects a different instance",function()
+  local evidence={}
+  local ready=Report.MarkBefore(evidence,Diagnostics(),History())
+  Equal(ready,true,"Before capture rejected")
+  local afterReady,reason=Report.MarkAfter(
+    evidence,Diagnostics(nil,nil,2),History(2))
+  Equal(afterReady,false,"different instance accepted")
+  Contains(reason,"instance ID changed","instance mismatch reason")
+  Equal(evidence.after,nil,"mismatched After evidence was stored")
+end)
+
+Test("MarkAfter rejects a different map",function()
+  local evidence={}
+  local ready=Report.MarkBefore(evidence,Diagnostics(),History())
+  Equal(ready,true,"Before capture rejected")
+  local afterReady,reason=Report.MarkAfter(
+    evidence,Diagnostics(nil,nil,1,0,632),History(1,0,632))
+  Equal(afterReady,false,"different map accepted")
+  Contains(reason,"map changed","map mismatch reason")
+end)
+
+Test("MarkAfter rejects a different difficulty",function()
+  local evidence={}
+  local ready=Report.MarkBefore(evidence,Diagnostics(),History())
+  Equal(ready,true,"Before capture rejected")
+  local afterReady,reason=Report.MarkAfter(
+    evidence,Diagnostics(nil,nil,1,1),History(1,1))
+  Equal(afterReady,false,"different difficulty accepted")
+  Contains(reason,"difficulty changed","difficulty mismatch reason")
+end)
+
+Test("Evidence session stores correlated request IDs",function()
+  local evidence={}
+  local ready,snapshot=Report.MarkBefore(evidence,Diagnostics(),History())
+  Equal(ready,true,"Before capture rejected")
+  Equal(snapshot.schema,2,"evidence schema")
+  Equal(snapshot.session.map,631,"session map")
+  Equal(snapshot.session.instance,1,"session instance")
+  Equal(snapshot.session.difficulty,0,"session difficulty")
+  Equal(snapshot.session.diagnosticRequestId,101,"diagnostic request ID")
+  Equal(snapshot.session.historyRequestId,202,"history request ID")
+end)
+
+Test("MarkAfter scopes encounter history after Before",function()
+  local evidence={}
+  local beforeHistory=History()
+  beforeHistory.entries={
+    {seq=10,class="INFO",event="STATE"},
+  }
+  local ready=Report.MarkBefore(evidence,Diagnostics(),beforeHistory)
+  Equal(ready,true,"Before capture rejected")
+
+  local afterHistory=History()
+  afterHistory.requestId=203
+  afterHistory.entries={
+    {seq=9,class="INFO",event="STATE"},
+    {seq=10,class="INFO",event="STATE"},
+    {seq=11,class="SUSPICIOUS",event="STATE"},
+    {seq=12,class="INFO",event="PULL"},
+  }
+  local afterReady,snapshot=Report.MarkAfter(
+    evidence,Diagnostics("0.7.1d","FAIL"),afterHistory)
+  Equal(afterReady,true,"After capture rejected")
+  Equal(#snapshot.encounterHistory.entries,4,"full history was not preserved")
+  Equal(snapshot.historyWindow.startSequence,10,"history window start")
+  Equal(snapshot.historyWindow.endSequence,12,"history window end")
+  Equal(snapshot.historyWindow.count,2,"history window count")
+  Equal(snapshot.historyWindow.anomalies,1,"history window anomaly count")
+  Equal(tonumber(snapshot.historyWindow.entries[1].seq),11,"first scoped sequence")
+  Equal(tonumber(snapshot.historyWindow.entries[2].seq),12,"second scoped sequence")
 end)
 
 Test("Compare detects changed findings",function()

@@ -149,10 +149,40 @@ function Report.Copy(value)
   return Copy(value)
 end
 
+local function HistorySequence(entry)
+  return tonumber(entry and (entry.seq or entry.sequence)) or 0
+end
+
+local function LastHistorySequence(encounterHistory)
+  local last=0
+  for _,entry in ipairs(encounterHistory and encounterHistory.entries or {}) do
+    last=math.max(last,HistorySequence(entry))
+  end
+  return last
+end
+
+local function SessionIdentity(diagnostics, encounterHistory)
+  diagnostics=diagnostics or {}
+  encounterHistory=encounterHistory or {}
+  local diagnosticHeader=diagnostics.header or {}
+  return {
+    schema=1,
+    map=diagnosticHeader.map,
+    instance=diagnosticHeader.instance,
+    difficulty=diagnosticHeader.difficulty,
+    diagnosticRequestId=diagnostics.requestId,
+    historyRequestId=encounterHistory.requestId,
+    diagnosticGeneratedAt=diagnostics.generatedAt,
+    historyGeneratedAt=encounterHistory.generatedAt,
+    historyLastSequence=LastHistorySequence(encounterHistory),
+  }
+end
+
 function Report.Capture(diagnostics, encounterHistory)
   local snapshot={
-    schema=1,
+    schema=2,
     captured=date("%Y-%m-%d %H:%M:%S"),
+    session=SessionIdentity(diagnostics,encounterHistory),
     diagnostics=Copy(diagnostics or {}),
     encounterHistory=Copy(encounterHistory or {}),
   }
@@ -218,12 +248,98 @@ function Report.CanCapture(diagnostics)
   return true
 end
 
+local function IdentityValueEqual(left,right)
+  return tostring(left or "")==tostring(right or "")
+end
+
+local function SnapshotSession(snapshot)
+  if type(snapshot)~="table" then return {} end
+  if type(snapshot.session)=="table" then return snapshot.session end
+  return SessionIdentity(snapshot.diagnostics or {},snapshot.encounterHistory or {})
+end
+
+function Report.CanCaptureContext(diagnostics, encounterHistory)
+  local ready,reason=Report.CanCapture(diagnostics)
+  if not ready then return false,reason end
+
+  if type(encounterHistory)~="table" then
+    return false,"Refresh encounter history before capturing evidence."
+  end
+  if encounterHistory.loading then
+    return false,"Wait for encounter history to finish refreshing."
+  end
+  if encounterHistory.error then
+    return false,"Encounter history failed: "..tostring(encounterHistory.error)
+  end
+  if not encounterHistory.header or not encounterHistory.summary
+    or not encounterHistory.generatedAt
+  then
+    return false,"Fresh encounter history is required for evidence capture."
+  end
+  if not diagnostics.requestId or not encounterHistory.requestId then
+    return false,"Fresh diagnostic and history request IDs are required."
+  end
+
+  local diagnosticHeader=diagnostics.header or {}
+  local historyHeader=encounterHistory.header or {}
+  for _,field in ipairs({"map","instance","difficulty"}) do
+    if not IdentityValueEqual(diagnosticHeader[field],historyHeader[field]) then
+      return false,"Diagnostic scan and encounter history describe different "..
+        field.." values."
+    end
+  end
+
+  return true
+end
+
+function Report.HistoryWindow(before, after)
+  local previous=SnapshotSession(before)
+  local startSequence=tonumber(previous.historyLastSequence) or
+    LastHistorySequence(before and before.encounterHistory or {})
+  local history=after and after.encounterHistory or {}
+  local window={
+    schema=1,
+    startSequence=startSequence,
+    endSequence=LastHistorySequence(history),
+    entries={},
+    count=0,
+    anomalies=0,
+  }
+
+  for _,entry in ipairs(history.entries or {}) do
+    if HistorySequence(entry)>startSequence then
+      local copy=Copy(entry)
+      table.insert(window.entries,copy)
+      if tostring(copy.classification or copy.class)=="SUSPICIOUS" then
+        window.anomalies=window.anomalies+1
+      end
+    end
+  end
+  window.count=#window.entries
+  return window
+end
+
+function Report.ValidateSameSession(before, diagnostics)
+  local previous=SnapshotSession(before)
+  local current=SessionIdentity(diagnostics,{})
+  local labels={map="map",instance="instance ID",difficulty="difficulty"}
+  for _,field in ipairs({"map","instance","difficulty"}) do
+    if not IdentityValueEqual(previous[field],current[field]) then
+      return false,string.format(
+        "After evidence does not match Before: %s changed from %s to %s.",
+        labels[field],tostring(previous[field] or "unknown"),
+        tostring(current[field] or "unknown"))
+    end
+  end
+  return true
+end
+
 function Report.MarkBefore(evidence, diagnostics, encounterHistory)
   if type(evidence)~="table" then
     return false,"Evidence storage is unavailable."
   end
 
-  local ready,reason=Report.CanCapture(diagnostics)
+  local ready,reason=Report.CanCaptureContext(diagnostics,encounterHistory)
   if not ready then return false,reason end
 
   evidence.before=Report.Capture(diagnostics,encounterHistory)
@@ -240,10 +356,17 @@ function Report.MarkAfter(evidence, diagnostics, encounterHistory)
     return false,"Capture Before evidence first."
   end
 
-  local ready,reason=Report.CanCapture(diagnostics)
+  local ready,reason=Report.CanCaptureContext(diagnostics,encounterHistory)
   if not ready then return false,reason end
 
-  evidence.after=Report.Capture(diagnostics,encounterHistory)
+  ready,reason=Report.ValidateSameSession(evidence.before,diagnostics)
+  if not ready then return false,reason end
+
+  local snapshot=Report.Capture(diagnostics,encounterHistory)
+  snapshot.historyWindow=Report.HistoryWindow(evidence.before,snapshot)
+  snapshot.session.historyStartSequence=snapshot.historyWindow.startSequence
+  snapshot.session.historyEndSequence=snapshot.historyWindow.endSequence
+  evidence.after=snapshot
   return true,evidence.after
 end
 
@@ -264,6 +387,11 @@ function Report.ComparisonText(before, after)
 
   local changes=Report.Compare(before,after)
   table.insert(lines,"Detected changes: "..tostring(#changes))
+  local historyWindow=after.historyWindow or Report.HistoryWindow(before,after)
+  table.insert(lines,string.format(
+    "Encounter transitions during run: %d (%d suspicious)",
+    tonumber(historyWindow.count) or 0,
+    tonumber(historyWindow.anomalies) or 0))
   table.insert(lines,"")
 
   if #changes==0 then

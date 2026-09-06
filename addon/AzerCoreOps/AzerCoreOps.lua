@@ -1,6 +1,6 @@
 local ADDON = ...
 
--- AzerCore Ops Platform 0.7.3
+-- AzerCore Ops Platform 0.7.4-dev
 -- Target: WoW 3.3.5a / AzerothCore. All server commands live here so that
 -- branch-specific command names can be changed without touching the UI.
 local CMD = {
@@ -39,7 +39,7 @@ local CMD = {
 
 local DS = AzerCoreOpsDesign
 local Platform = AzerCoreOpsPlatform
-Platform.AddonBuild="0.7.3"
+Platform.AddonBuild="0.7.4-dev"
 local C = {
   bg=DS.Colors.Background,
   panel=DS.Colors.Surface,
@@ -105,6 +105,12 @@ local instanceUI={my={},target={},captureUntil=0,myRows={},targetRows={},myOffse
   targetIdentityName=nil,targetIdentityMeta=nil}
 instanceUI.diagnostics={findings={},recoveries={},loading=false,header=nil,summary=nil,error=nil,generatedAt=nil,historyIndex=0,mode="SCAN"}
 instanceUI.encounterHistory={entries={},stats={},loading=false,header=nil,summary=nil,error=nil,generatedAt=nil}
+instanceUI.requestGeneration=0
+instanceUI.pendingDiagnosticRequest=nil
+instanceUI.pendingDiagnosticPurpose=nil
+instanceUI.pendingHistoryRequest=nil
+instanceUI.pendingHistoryPurpose=nil
+instanceUI.captureFlow=nil
 local auditUI={search={},members={},searchRows={},memberRows={},filterButtons={},filtered={},mapBox=nil,diffBox=nil,summary=nil,scroll=nil,scrollChild=nil,horizontal=nil,filter="ALL",lastMap=nil,lastDifficulty=nil,reportEdit=nil,
   searchOffset=0,selectedMap=nil,selectedName=nil,selectedType=nil,selectedMaxPlayers=nil,difficulty=0,difficultyLabel="Normal",lockedText=nil,difficultyButton=nil,difficultyMenu=nil,historyIndex=0,searchBox=nil,
   referenceId=0,expectedMembers=0,display={},groupVerdict="NOT AUDITED",groupReason="Run Group Audit",generatedAt=nil,stale=false}
@@ -122,7 +128,7 @@ local defaults={
   rememberAuditFilter=true,autoReaudit=false,confirmResetSelected=true,
   warnNoTarget=true,compactAuditRows=false,auditFontSize=10,shiftClickInsert=true,
 }
-local ADDON_VERSION="0.7.3"
+local ADDON_VERSION="0.7.4-dev"
 local PROTOCOL_VERSION="1"
 local TESTED_CORE="190184a04539"
 local TESTED_PLAYERBOTS="ba46fcdecde3"
@@ -6188,19 +6194,124 @@ local function BuildInstances()
   local diagnosticControls=CreateFrame("Frame",nil,diagnosticPage); diagnosticControls:SetPoint("TOPLEFT",12,-5); diagnosticControls:SetPoint("BOTTOMLEFT",12,10); diagnosticControls:SetWidth(180); Backdrop(diagnosticControls,C.panel)
   local diagnosticHeading=Section(diagnosticControls,"ENCOUNTER SCAN",C.gold); diagnosticHeading:SetPoint("TOPLEFT",10,-10)
   local diagnosticHelp=diagnosticControls:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); diagnosticHelp:SetPoint("TOPLEFT",10,-39); diagnosticHelp:SetPoint("TOPRIGHT",-10,-39); diagnosticHelp:SetJustifyH("LEFT"); diagnosticHelp:SetJustifyV("TOP"); diagnosticHelp:SetWordWrap(true); diagnosticHelp:SetTextColor(unpack(C.white)); diagnosticHelp:SetText("Enter the affected dungeon or raid. Target the boss or event NPC for extra evidence, then run the scan.\n\nThis workspace never changes encounter state, doors, creatures or lockouts.")
-  diagnosticScan=Button(diagnosticControls,"Scan Current Instance",156,28,function()
-    instanceUI.diagnostics={findings={},recoveries={},loading=true,header=nil,summary=nil,error=nil,generatedAt=nil,historyIndex=0,mode="SCAN",evidence=instanceUI.CaptureDiagnosticEvidence()}
+  local function NextInstanceRequestId()
+    local nextId=(tonumber(instanceUI.requestGeneration) or 0)+1
+    if nextId>2147483000 then nextId=1 end
+    instanceUI.requestGeneration=nextId
+    return nextId
+  end
+
+  function instanceUI.SetEvidenceCaptureBusy(busy)
+    local controls={diagnosticScan,diagnosticHistoryButton,diagnosticClear,
+      instanceUI.issueBeforeButton,instanceUI.issueAfterButton}
+    for _,control in ipairs(controls) do
+      if control then
+        if busy then control:Disable() else control:Enable() end
+        control:SetAlpha(busy and 0.55 or 1)
+      end
+    end
+  end
+
+  function instanceUI.BeginDiagnosticRequest(purpose)
+    if instanceUI.pendingDiagnosticRequest then
+      return false,"A diagnostic scan is already in progress."
+    end
+    local requestId=NextInstanceRequestId()
+    instanceUI.pendingDiagnosticRequest=requestId
+    instanceUI.pendingDiagnosticPurpose=purpose or "MANUAL"
+    instanceUI.diagnostics={findings={},recoveries={},loading=true,header=nil,
+      summary=nil,error=nil,generatedAt=nil,historyIndex=0,mode="SCAN",
+      requestId=requestId,purpose=instanceUI.pendingDiagnosticPurpose,
+      evidence=instanceUI.CaptureDiagnosticEvidence()}
     if diagnosticScroll then diagnosticScroll:SetVerticalScroll(0) end
     if instanceUI.RenderDiagnostics then instanceUI.RenderDiagnostics() end
-    SendCommand(CMD.instanceDiagnose); SetStatus("Collecting live encounter evidence...")
+    SendCommand(CMD.instanceDiagnose.." "..tostring(requestId))
+    return true,requestId
+  end
+
+  function instanceUI.BeginHistoryRequest(purpose)
+    if instanceUI.pendingHistoryRequest then
+      return false,"Encounter history is already being refreshed."
+    end
+    local requestId=NextInstanceRequestId()
+    instanceUI.pendingHistoryRequest=requestId
+    instanceUI.pendingHistoryPurpose=purpose or "MANUAL"
+    instanceUI.diagnostics.mode="HISTORY"
+    instanceUI.encounterHistory={entries={},stats={},loading=true,header=nil,
+      summary=nil,error=nil,generatedAt=nil,requestId=requestId,
+      purpose=instanceUI.pendingHistoryPurpose}
+    if diagnosticScroll then diagnosticScroll:SetVerticalScroll(0) end
+    if instanceUI.RenderDiagnostics then instanceUI.RenderDiagnostics() end
+    SendCommand(CMD.instanceHistory.." "..tostring(requestId))
+    return true,requestId
+  end
+
+  function instanceUI.FailEvidenceCapture(reason)
+    instanceUI.captureFlow=nil
+    instanceUI.SetEvidenceCaptureBusy(false)
+    instanceUI.diagnostics.mode="SCAN"
+    if instanceUI.RenderDiagnostics then instanceUI.RenderDiagnostics() end
+    SetStatus("Evidence capture failed: "..tostring(reason or "unknown error"),true)
+  end
+
+  function instanceUI.CompleteEvidenceCapture()
+    local flow=instanceUI.captureFlow
+    if not flow then return end
+    AzerCoreOpsDB.issueReportEvidence=AzerCoreOpsDB.issueReportEvidence or {}
+    local evidence=AzerCoreOpsDB.issueReportEvidence
+    local hadAfter=evidence.after~=nil
+    local ready,result
+    if flow.kind=="BEFORE" then
+      ready,result=AzerCoreOpsIssueReport.MarkBefore(
+        evidence,instanceUI.diagnostics,instanceUI.encounterHistory)
+    else
+      ready,result=AzerCoreOpsIssueReport.MarkAfter(
+        evidence,instanceUI.diagnostics,instanceUI.encounterHistory)
+    end
+    if not ready then instanceUI.FailEvidenceCapture(result); return end
+    instanceUI.captureFlow=nil
+    instanceUI.SetEvidenceCaptureBusy(false)
+    instanceUI.diagnostics.mode="SCAN"
+    if instanceUI.RenderDiagnostics then instanceUI.RenderDiagnostics() end
+    local label=flow.kind=="BEFORE" and "Before" or "After"
+    local message=label.." evidence captured from fresh scan "..
+      tostring(result.diagnostics and result.diagnostics.requestId or "?")..
+      " at "..tostring(result.captured).."."
+    if flow.kind=="BEFORE" and hadAfter then
+      message=message.." Previous After evidence cleared."
+    end
+    SetStatus(message)
+  end
+
+  function instanceUI.BeginEvidenceCapture(kind)
+    if instanceUI.captureFlow then
+      SetStatus("An evidence capture is already in progress.",true)
+      return
+    end
+    AzerCoreOpsDB.issueReportEvidence=AzerCoreOpsDB.issueReportEvidence or {}
+    if kind=="AFTER" and not AzerCoreOpsDB.issueReportEvidence.before then
+      SetStatus("Capture Before evidence first.",true)
+      return
+    end
+    instanceUI.captureFlow={kind=kind,stage="SCAN"}
+    instanceUI.SetEvidenceCaptureBusy(true)
+    local ready,result=instanceUI.BeginDiagnosticRequest("CAPTURE_"..kind)
+    if not ready then instanceUI.FailEvidenceCapture(result); return end
+    instanceUI.captureFlow.diagnosticRequest=result
+    SetStatus("Refreshing live diagnostics for "..
+      (kind=="BEFORE" and "Before" or "After").." evidence...")
+  end
+
+  diagnosticScan=Button(diagnosticControls,"Scan Current Instance",156,28,function()
+    local ready,result=instanceUI.BeginDiagnosticRequest("MANUAL")
+    if not ready then SetStatus(result,true); return end
+    SetStatus("Collecting live encounter evidence (scan "..tostring(result)..")...")
   end,"Run a read-only server scan of the current instance"); diagnosticScan:SetPoint("TOPLEFT",12,-145)
 
   diagnosticHistoryButton=Button(diagnosticControls,"Encounter History",156,28,function()
-    instanceUI.diagnostics.mode="HISTORY"
-    instanceUI.encounterHistory={entries={},stats={},loading=true,header=nil,summary=nil,error=nil,generatedAt=nil}
-    if diagnosticScroll then diagnosticScroll:SetVerticalScroll(0) end
-    if instanceUI.RenderDiagnostics then instanceUI.RenderDiagnostics() end
-    SendCommand(CMD.instanceHistory); SetStatus("Loading server encounter-state history...")
+    local ready,result=instanceUI.BeginHistoryRequest("MANUAL")
+    if not ready then SetStatus(result,true); return end
+    SetStatus("Loading server encounter-state history (request "..tostring(result)..")...")
   end,"Show server-captured encounter state transitions for the current live instance"); diagnosticHistoryButton:SetPoint("TOPLEFT",12,-181)
 
   diagnosticClear=Button(diagnosticControls,"Clear",72,22,function()
@@ -6226,35 +6337,16 @@ local function BuildInstances()
 
   instanceUI.issueBeforeButton=Button(
     diagnosticControls,"Mark Before",72,22,function()
-      AzerCoreOpsDB.issueReportEvidence=
-        AzerCoreOpsDB.issueReportEvidence or {}
-      local evidence=AzerCoreOpsDB.issueReportEvidence
-      local hadAfter=evidence.after~=nil
-      local ready,result=AzerCoreOpsIssueReport.MarkBefore(
-        evidence,instanceUI.diagnostics,instanceUI.encounterHistory)
-      if not ready then SetStatus(result,true); return end
-      local message="Before evidence captured at "..
-        tostring(result.captured).."."
-      if hadAfter then
-        message=message.." Previous After evidence cleared."
-      end
-      SetStatus(message)
+      instanceUI.BeginEvidenceCapture("BEFORE")
     end,
-    "Preserve the completed scan as the state before reproduction")
+    "Run a fresh scan and history refresh, then preserve Before evidence")
   instanceUI.issueBeforeButton:SetPoint("TOPLEFT",12,-285)
 
   instanceUI.issueAfterButton=Button(
     diagnosticControls,"Mark After",72,22,function()
-      AzerCoreOpsDB.issueReportEvidence=
-        AzerCoreOpsDB.issueReportEvidence or {}
-      local evidence=AzerCoreOpsDB.issueReportEvidence
-      local ready,result=AzerCoreOpsIssueReport.MarkAfter(
-        evidence,instanceUI.diagnostics,instanceUI.encounterHistory)
-      if not ready then SetStatus(result,true); return end
-      SetStatus("After evidence captured at "..
-        tostring(result.captured)..".")
+      instanceUI.BeginEvidenceCapture("AFTER")
     end,
-    "Preserve the completed scan as the state after reproduction")
+    "Run a fresh scan and history refresh, then preserve After evidence")
   instanceUI.issueAfterButton:SetPoint("TOPLEFT",90,-285)
 
   instanceUI.issueCompareButton=Button(
@@ -6929,7 +7021,7 @@ local function BuildDashboard()
   Button(quick,"Inspect Quest",150,30,function() SelectTab("Quest") end,"Open quest search and chain analysis"):SetPoint("TOPLEFT",174,-42)
   Button(quick,"Check Compatibility",150,30,function() RequestCompatibility(); OpenOptions() end,"Query the running AzerCoreOps module"):SetPoint("TOPLEFT",336,-42)
   Button(quick,"Information & Credits",170,30,function() SelectTab("Information") end,"View project links, credits, and acknowledgements"):SetPoint("TOPLEFT",498,-42)
-  local note=quick:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); note:SetPoint("TOPLEFT",12,-92); note:SetPoint("BOTTOMRIGHT",-12,12); note:SetJustifyH("LEFT"); note:SetJustifyV("TOP"); note:SetWordWrap(true); note:SetTextColor(unpack(C.white)); note:SetText("Release: v0.7.3\n\nAzerCore Ops 0.7.3 polishes upstream issue reporting with safer Before/After evidence lifecycle handling, clearer severity-aware comparisons, stronger saved-draft evidence binding with legacy migration, and more precise privacy validation for unknown values, IPv4 addresses, and local paths. Courier remains under construction and is not included as an active release feature.")
+  local note=quick:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); note:SetPoint("TOPLEFT",12,-92); note:SetPoint("BOTTOMRIGHT",-12,12); note:SetJustifyH("LEFT"); note:SetJustifyV("TOP"); note:SetWordWrap(true); note:SetTextColor(unpack(C.white)); note:SetText("Development: v0.7.4-dev\n\nAzerCore Ops 0.7.4-dev introduces deeper instance intelligence with encounter-history context, profile-backed diagnostics, richer instance findings, and correlated Before/After evidence for upstream issue reports. Courier remains under construction and is not included as an active feature.")
 end
 
 
@@ -7579,45 +7671,145 @@ events:SetScript("OnEvent",function(_,event,arg1)
       if questUI.targetLogLoading then questUI.targetLogLoading=false; questUI.targetLogError=f.reason or "Quest-log inspection failed"; RenderQuest() end
       SetStatus(f.reason or "Quest module error",true)
     elseif kind=="ENCOUNTER_DIAG_BEGIN" then
-      instanceUI.diagnostics={findings={},recoveries={},loading=true,header=f,summary=nil,error=nil,generatedAt=nil,historyIndex=0,mode="SCAN",evidence=instanceUI.CaptureDiagnosticEvidence()}; if instanceUI.RenderDiagnostics then instanceUI.RenderDiagnostics() end; SetStatus("Diagnosing "..tostring(f.name or "current instance").."...")
-    elseif kind=="ENCOUNTER_DIAG_FINDING" then
-      table.insert(instanceUI.diagnostics.findings,f); if instanceUI.RenderDiagnostics then instanceUI.RenderDiagnostics() end
-    elseif kind=="ENCOUNTER_DIAG_RECOVERY" then
-      instanceUI.diagnostics.recoveries=instanceUI.diagnostics.recoveries or {}; table.insert(instanceUI.diagnostics.recoveries,f); if instanceUI.RenderDiagnostics then instanceUI.RenderDiagnostics() end
-    elseif kind=="ENCOUNTER_DIAG_END" then
-      instanceUI.diagnostics.loading=false; instanceUI.diagnostics.summary={passed=tonumber(f.passed) or 0,warnings=tonumber(f.warnings) or 0,failures=tonumber(f.failures) or 0}; instanceUI.diagnostics.generatedAt=date("%Y-%m-%d %H:%M:%S")
-      AzerCoreOpsDB.diagnosticHistory=AzerCoreOpsDB.diagnosticHistory or {}; local snapshot={header=instanceUI.diagnostics.header,summary=instanceUI.diagnostics.summary,error=instanceUI.diagnostics.error,generatedAt=instanceUI.diagnostics.generatedAt,evidence=instanceUI.diagnostics.evidence,findings={},recoveries={}}
-      for _,finding in ipairs(instanceUI.diagnostics.findings or {}) do local copy={}; for key,value in pairs(finding) do copy[key]=value end; table.insert(snapshot.findings,copy) end
-      for _,recovery in ipairs(instanceUI.diagnostics.recoveries or {}) do local copy={}; for key,value in pairs(recovery) do copy[key]=value end; table.insert(snapshot.recoveries,copy) end
-      table.insert(AzerCoreOpsDB.diagnosticHistory,1,snapshot); while #AzerCoreOpsDB.diagnosticHistory>100 do table.remove(AzerCoreOpsDB.diagnosticHistory) end
-      if instanceUI.RenderDiagnostics then instanceUI.RenderDiagnostics() end; SetStatus(string.format("Encounter scan complete: %d passed, %d warnings, %d failures",instanceUI.diagnostics.summary.passed,instanceUI.diagnostics.summary.warnings,instanceUI.diagnostics.summary.failures),instanceUI.diagnostics.summary.failures>0)
-    elseif kind=="ENCOUNTER_DIAG_ERROR" then
-      instanceUI.diagnostics.loading=false; instanceUI.diagnostics.error=f.reason or "Encounter diagnostic failed"; if instanceUI.RenderDiagnostics then instanceUI.RenderDiagnostics() end; SetStatus(instanceUI.diagnostics.error,true)
-    elseif kind=="ENCOUNTER_HISTORY_BEGIN" then
-      instanceUI.diagnostics.mode="HISTORY"
-      instanceUI.encounterHistory={entries={},stats={},loading=true,header=f,summary=nil,error=nil,generatedAt=nil}
+      local requestId=tonumber(f.request) or 0
+      if requestId~=(tonumber(instanceUI.pendingDiagnosticRequest) or -1) then return end
+      local purpose=instanceUI.pendingDiagnosticPurpose or "MANUAL"
+      instanceUI.diagnostics={findings={},recoveries={},loading=true,header=f,
+        summary=nil,error=nil,generatedAt=nil,historyIndex=0,mode="SCAN",
+        requestId=requestId,purpose=purpose,evidence=instanceUI.CaptureDiagnosticEvidence()}
       if instanceUI.RenderDiagnostics then instanceUI.RenderDiagnostics() end
-      SetStatus("Receiving encounter history for "..tostring(f.name or "current instance").."...")
+      SetStatus("Diagnosing "..tostring(f.name or "current instance")..
+        " (scan "..tostring(requestId)..")...")
+    elseif kind=="ENCOUNTER_DIAG_FINDING" then
+      local requestId=tonumber(f.request) or 0
+      if requestId~=(tonumber(instanceUI.pendingDiagnosticRequest) or -1) then return end
+      table.insert(instanceUI.diagnostics.findings,f)
+      if instanceUI.RenderDiagnostics then instanceUI.RenderDiagnostics() end
+    elseif kind=="ENCOUNTER_DIAG_RECOVERY" then
+      local requestId=tonumber(f.request) or 0
+      if requestId~=(tonumber(instanceUI.pendingDiagnosticRequest) or -1) then return end
+      instanceUI.diagnostics.recoveries=instanceUI.diagnostics.recoveries or {}
+      table.insert(instanceUI.diagnostics.recoveries,f)
+      if instanceUI.RenderDiagnostics then instanceUI.RenderDiagnostics() end
+    elseif kind=="ENCOUNTER_DIAG_END" then
+      local requestId=tonumber(f.request) or 0
+      if requestId~=(tonumber(instanceUI.pendingDiagnosticRequest) or -1) then return end
+      local purpose=instanceUI.pendingDiagnosticPurpose or "MANUAL"
+      instanceUI.diagnostics.loading=false
+      instanceUI.diagnostics.summary={passed=tonumber(f.passed) or 0,
+        warnings=tonumber(f.warnings) or 0,failures=tonumber(f.failures) or 0}
+      instanceUI.diagnostics.generatedAt=date("%Y-%m-%d %H:%M:%S")
+      instanceUI.diagnostics.requestId=requestId
+      AzerCoreOpsDB.diagnosticHistory=AzerCoreOpsDB.diagnosticHistory or {}
+      local snapshot={header=instanceUI.diagnostics.header,
+        summary=instanceUI.diagnostics.summary,error=instanceUI.diagnostics.error,
+        generatedAt=instanceUI.diagnostics.generatedAt,
+        evidence=instanceUI.diagnostics.evidence,requestId=requestId,
+        purpose=purpose,findings={},recoveries={}}
+      for _,finding in ipairs(instanceUI.diagnostics.findings or {}) do
+        local copy={}; for key,value in pairs(finding) do copy[key]=value end
+        table.insert(snapshot.findings,copy)
+      end
+      for _,recovery in ipairs(instanceUI.diagnostics.recoveries or {}) do
+        local copy={}; for key,value in pairs(recovery) do copy[key]=value end
+        table.insert(snapshot.recoveries,copy)
+      end
+      table.insert(AzerCoreOpsDB.diagnosticHistory,1,snapshot)
+      while #AzerCoreOpsDB.diagnosticHistory>100 do
+        table.remove(AzerCoreOpsDB.diagnosticHistory)
+      end
+      instanceUI.pendingDiagnosticRequest=nil
+      instanceUI.pendingDiagnosticPurpose=nil
+      if instanceUI.RenderDiagnostics then instanceUI.RenderDiagnostics() end
+      if instanceUI.captureFlow and
+        tonumber(instanceUI.captureFlow.diagnosticRequest)==requestId then
+        instanceUI.captureFlow.stage="HISTORY"
+        local ready,historyRequest=instanceUI.BeginHistoryRequest(
+          "CAPTURE_"..tostring(instanceUI.captureFlow.kind))
+        if not ready then instanceUI.FailEvidenceCapture(historyRequest); return end
+        instanceUI.captureFlow.historyRequest=historyRequest
+        SetStatus("Fresh scan "..tostring(requestId)..
+          " complete; refreshing encounter history...")
+      else
+        SetStatus(string.format(
+          "Encounter scan %d complete: %d passed, %d warnings, %d failures",
+          requestId,instanceUI.diagnostics.summary.passed,
+          instanceUI.diagnostics.summary.warnings,
+          instanceUI.diagnostics.summary.failures),
+          instanceUI.diagnostics.summary.failures>0)
+      end
+    elseif kind=="ENCOUNTER_DIAG_ERROR" then
+      local requestId=tonumber(f.request) or 0
+      if requestId~=(tonumber(instanceUI.pendingDiagnosticRequest) or -1) then return end
+      instanceUI.pendingDiagnosticRequest=nil
+      instanceUI.pendingDiagnosticPurpose=nil
+      instanceUI.diagnostics.loading=false
+      instanceUI.diagnostics.error=f.reason or "Encounter diagnostic failed"
+      if instanceUI.RenderDiagnostics then instanceUI.RenderDiagnostics() end
+      if instanceUI.captureFlow and
+        tonumber(instanceUI.captureFlow.diagnosticRequest)==requestId then
+        instanceUI.FailEvidenceCapture(instanceUI.diagnostics.error)
+      else
+        SetStatus(instanceUI.diagnostics.error,true)
+      end
+    elseif kind=="ENCOUNTER_HISTORY_BEGIN" then
+      local requestId=tonumber(f.request) or 0
+      if requestId~=(tonumber(instanceUI.pendingHistoryRequest) or -1) then return end
+      local purpose=instanceUI.pendingHistoryPurpose or "MANUAL"
+      instanceUI.diagnostics.mode="HISTORY"
+      instanceUI.encounterHistory={entries={},stats={},loading=true,header=f,
+        summary=nil,error=nil,generatedAt=nil,requestId=requestId,purpose=purpose}
+      if instanceUI.RenderDiagnostics then instanceUI.RenderDiagnostics() end
+      SetStatus("Receiving encounter history for "..tostring(f.name or "current instance")..
+        " (request "..tostring(requestId)..")...")
     elseif kind=="ENCOUNTER_HISTORY_ENTRY" then
+      local requestId=tonumber(f.request) or 0
+      if requestId~=(tonumber(instanceUI.pendingHistoryRequest) or -1) then return end
       instanceUI.encounterHistory.entries=instanceUI.encounterHistory.entries or {}
       table.insert(instanceUI.encounterHistory.entries,f)
       if instanceUI.RenderDiagnostics then instanceUI.RenderDiagnostics() end
     elseif kind=="ENCOUNTER_HISTORY_STATS" then
+      local requestId=tonumber(f.request) or 0
+      if requestId~=(tonumber(instanceUI.pendingHistoryRequest) or -1) then return end
       instanceUI.encounterHistory.stats=instanceUI.encounterHistory.stats or {}
       table.insert(instanceUI.encounterHistory.stats,f)
       if instanceUI.RenderDiagnostics then instanceUI.RenderDiagnostics() end
     elseif kind=="ENCOUNTER_HISTORY_END" then
+      local requestId=tonumber(f.request) or 0
+      if requestId~=(tonumber(instanceUI.pendingHistoryRequest) or -1) then return end
       instanceUI.encounterHistory.loading=false
-      instanceUI.encounterHistory.summary={count=tonumber(f.count) or 0,anomalies=tonumber(f.anomalies) or 0}
+      instanceUI.encounterHistory.summary={count=tonumber(f.count) or 0,
+        anomalies=tonumber(f.anomalies) or 0}
       instanceUI.encounterHistory.generatedAt=date("%Y-%m-%d %H:%M:%S")
+      instanceUI.encounterHistory.requestId=requestId
+      instanceUI.pendingHistoryRequest=nil
+      instanceUI.pendingHistoryPurpose=nil
       if instanceUI.RenderDiagnostics then instanceUI.RenderDiagnostics() end
-      SetStatus(string.format("Encounter history loaded: %d signals, %d suspicious",instanceUI.encounterHistory.summary.count,instanceUI.encounterHistory.summary.anomalies),instanceUI.encounterHistory.summary.anomalies>0)
+      if instanceUI.captureFlow and
+        tonumber(instanceUI.captureFlow.historyRequest)==requestId then
+        instanceUI.CompleteEvidenceCapture()
+      else
+        SetStatus(string.format(
+          "Encounter history request %d loaded: %d signals, %d suspicious",
+          requestId,instanceUI.encounterHistory.summary.count,
+          instanceUI.encounterHistory.summary.anomalies),
+          instanceUI.encounterHistory.summary.anomalies>0)
+      end
     elseif kind=="ENCOUNTER_HISTORY_ERROR" then
+      local requestId=tonumber(f.request) or 0
+      if requestId~=(tonumber(instanceUI.pendingHistoryRequest) or -1) then return end
+      instanceUI.pendingHistoryRequest=nil
+      instanceUI.pendingHistoryPurpose=nil
       instanceUI.diagnostics.mode="HISTORY"
       instanceUI.encounterHistory.loading=false
       instanceUI.encounterHistory.error=f.reason or "Encounter history request failed"
       if instanceUI.RenderDiagnostics then instanceUI.RenderDiagnostics() end
-      SetStatus(instanceUI.encounterHistory.error,true)
+      if instanceUI.captureFlow and
+        tonumber(instanceUI.captureFlow.historyRequest)==requestId then
+        instanceUI.FailEvidenceCapture(instanceUI.encounterHistory.error)
+      else
+        SetStatus(instanceUI.encounterHistory.error,true)
+      end
     elseif kind=="BIND_BEGIN" then
       instanceUI.bindScope=f.scope or instanceUI.bindScope or "TARGET"
       instanceUI.ignoreBindStream=false

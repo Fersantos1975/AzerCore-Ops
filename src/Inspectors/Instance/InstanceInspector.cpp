@@ -24,6 +24,9 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
+#include <limits>
+#include <cstdlib>
 #include <sstream>
 #include <set>
 #include <string>
@@ -56,9 +59,18 @@ char const* GameObjectStateName(GOState state)
     return "UNKNOWN";
 }
 
+std::uint32_t ParseRequestId(Tail requestArg)
+{
+    std::string raw(requestArg);
+    if (raw.empty())
+        return 0;
+    return static_cast<std::uint32_t>(std::strtoul(raw.c_str(), nullptr, 10));
+}
+
 struct DiagnosticEmitter
 {
     ChatHandler* handler;
+    uint32 requestId{0};
     uint32 passed{0};
     uint32 warnings{0};
     uint32 failures{0};
@@ -68,7 +80,7 @@ struct DiagnosticEmitter
         if (severity == "PASS" || severity == "EXPECTED" || severity == "INFO") ++passed;
         else if (severity == "FAIL") ++failures;
         else ++warnings;
-        Protocol::SendEncounterDiagnosticFinding(handler, severity, category, subject, expected, actual, detail, recommendation);
+        Protocol::SendEncounterDiagnosticFinding(handler, requestId, severity, category, subject, expected, actual, detail, recommendation);
     }
 };
 
@@ -374,12 +386,13 @@ bool InstanceInspector::Binds(ChatHandler* handler, Tail scopeArg)
     return true;
 }
 
-bool InstanceInspector::Diagnose(ChatHandler* handler)
+bool InstanceInspector::Diagnose(ChatHandler* handler, Tail requestArg)
 {
+    std::uint32_t requestId = ParseRequestId(requestArg);
     Player* player = handler && handler->GetSession() ? handler->GetSession()->GetPlayer() : nullptr;
     if (!player || !player->GetMap() || !player->GetMap()->IsDungeon())
     {
-        Protocol::SendEncounterDiagnosticError(handler, "Enter the dungeon or raid instance that you want to diagnose");
+        Protocol::SendEncounterDiagnosticError(handler, requestId, "Enter the dungeon or raid instance that you want to diagnose");
         return true;
     }
 
@@ -388,8 +401,8 @@ bool InstanceInspector::Diagnose(ChatHandler* handler)
     MapEntry const* mapEntry = sMapStore.LookupEntry(player->GetMapId());
     std::string mapName = mapEntry ? LocalizedMapName(mapEntry, handler) : ("Map " + std::to_string(player->GetMapId()));
     std::string scriptName = map ? map->GetScriptName() : "";
-    Protocol::SendEncounterDiagnosticBegin(handler, player->GetMapId(), player->GetInstanceId(), uint32(map->GetDifficulty()), mapName, scriptName.empty() ? "None" : scriptName);
-    DiagnosticEmitter diagnostics{handler};
+    Protocol::SendEncounterDiagnosticBegin(handler, requestId, player->GetMapId(), player->GetInstanceId(), uint32(map->GetDifficulty()), mapName, scriptName.empty() ? "None" : scriptName);
+    DiagnosticEmitter diagnostics{handler, requestId};
     RecoveryContext recoveryContext;
     recoveryContext.mapId = player->GetMapId();
     recoveryContext.difficulty = uint32(map->GetDifficulty());
@@ -500,6 +513,90 @@ bool InstanceInspector::Diagnose(ChatHandler* handler)
                 : (available ? "Selectable" : "Not selectable");
             diagnostics.Finding(severity, object.category, object.name + " [" + std::to_string(object.entry) + "]", expected, actual, "The verified profile correlates this object with prerequisite encounter states", severity == "FAIL" ? "Object and progression evidence disagree; reload the grid and rescan before recovery" : "No recovery action required");
         }
+
+        for (ProfilePrerequisiteCreature const& definition : instanceProfile->prerequisiteCreatures)
+        {
+            if (!definition.difficulties.empty() &&
+                std::find(definition.difficulties.begin(), definition.difficulties.end(), recoveryContext.difficulty) == definition.difficulties.end())
+                continue;
+
+            ObjectGuid::LowType spawnId = static_cast<ObjectGuid::LowType>(definition.spawnId);
+            CreatureData const* spawnData = sObjectMgr->GetCreatureData(spawnId);
+            PrerequisiteCreatureObservation observation;
+            observation.progressionDone = encounterDone(definition.progressionState);
+            observation.spawnDefined = spawnData != nullptr;
+            observation.actualEntry = spawnData ? spawnData->id : 0;
+
+            if (spawnData)
+            {
+                float dx = spawnData->posX - definition.expectedRegion.x;
+                float dy = spawnData->posY - definition.expectedRegion.y;
+                float dz = spawnData->posZ - definition.expectedRegion.z;
+                float distance = std::sqrt(dx * dx + dy * dy + dz * dz);
+                observation.locationMatches = spawnData->mapid == player->GetMapId() &&
+                    distance <= definition.expectedRegion.radius;
+
+                if (spawnData->mapid == player->GetMapId())
+                {
+                    observation.gridLoaded = map->IsGridLoaded(spawnData->posX, spawnData->posY);
+                    auto const bounds = map->GetCreatureBySpawnIdStore().equal_range(spawnId);
+                    for (auto itr = bounds.first; itr != bounds.second; ++itr)
+                    {
+                        Creature* creature = itr->second;
+                        if (!creature)
+                            continue;
+                        observation.loaded = true;
+                        if (creature->IsAlive())
+                            observation.alive = true;
+                        else
+                            observation.dead = true;
+                    }
+
+                    time_t now = GameTime::GetGameTime().count();
+                    time_t respawnTime = map->GetCreatureRespawnTime(spawnId);
+                    if (respawnTime > now)
+                    {
+                        uint64 remaining = static_cast<uint64>(respawnTime - now);
+                        observation.respawnSeconds = remaining > std::numeric_limits<uint32>::max()
+                            ? std::numeric_limits<uint32>::max()
+                            : static_cast<uint32>(remaining);
+                    }
+                }
+            }
+
+            PrerequisiteCreatureAssessment assessment =
+                InstanceDiagnosticEngine::AssessPrerequisiteCreature(definition, observation);
+
+            std::ostringstream actual;
+            actual << assessment.status
+                   << "; expected Entry " << definition.creatureEntry
+                   << "; Spawn ID " << definition.spawnId;
+            if (spawnData)
+            {
+                actual << "; actual Entry " << spawnData->id
+                       << "; DB position " << spawnData->posX << ", "
+                       << spawnData->posY << ", " << spawnData->posZ;
+            }
+            if (observation.respawnSeconds)
+                actual << "; respawn " << observation.respawnSeconds << "s";
+
+            std::ostringstream expected;
+            expected << definition.name << " Entry " << definition.creatureEntry
+                     << ", Spawn ID " << definition.spawnId
+                     << " near " << definition.expectedRegion.x << ", "
+                     << definition.expectedRegion.y << ", " << definition.expectedRegion.z
+                     << " (radius " << definition.expectedRegion.radius << ")";
+
+            diagnostics.Finding(
+                assessment.severity,
+                "PREREQUISITE_CREATURE",
+                definition.name + " [Entry " + std::to_string(definition.creatureEntry) +
+                    "; Spawn " + std::to_string(definition.spawnId) + "]",
+                expected.str(),
+                actual.str(),
+                definition.relation + ". " + assessment.detail,
+                assessment.recommendation);
+        }
     }
 
     if (script && player->GetMapId() == MapIcecrownCitadel)
@@ -555,9 +652,9 @@ bool InstanceInspector::Diagnose(ChatHandler* handler)
 
     if (script)
         for (RecoveryGuidance const& recovery : RecoveryGuidanceEngine::Evaluate(recoveryContext))
-            Protocol::SendEncounterDiagnosticRecovery(handler, recovery.id, recovery.title, recovery.confidence, recovery.evidence, recovery.verificationCommand, recovery.actionCommands, recovery.recheckCommand, recovery.expectedResult, recovery.safety);
+            Protocol::SendEncounterDiagnosticRecovery(handler, requestId, recovery.id, recovery.title, recovery.confidence, recovery.evidence, recovery.verificationCommand, recovery.actionCommands, recovery.recheckCommand, recovery.expectedResult, recovery.safety);
 
-    Protocol::SendEncounterDiagnosticEnd(handler, diagnostics.passed, diagnostics.warnings, diagnostics.failures);
+    Protocol::SendEncounterDiagnosticEnd(handler, requestId, diagnostics.passed, diagnostics.warnings, diagnostics.failures);
     return true;
 }
 

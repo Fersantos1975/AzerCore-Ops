@@ -76,6 +76,26 @@ struct ProfileObject
     std::vector<std::uint32_t> prerequisites;
 };
 
+struct ExpectedCreatureRegion
+{
+    float x{0.0f};
+    float y{0.0f};
+    float z{0.0f};
+    float radius{0.0f};
+};
+
+struct ProfilePrerequisiteCreature
+{
+    std::string id;
+    std::string name;
+    std::uint32_t creatureEntry{0};
+    std::uint64_t spawnId{0};
+    ExpectedCreatureRegion expectedRegion;
+    std::uint32_t progressionState{0};
+    std::string relation;
+    std::vector<std::uint32_t> difficulties;
+};
+
 struct InstanceProfile
 {
     std::uint32_t mapId{0};
@@ -89,6 +109,7 @@ struct InstanceProfile
     std::vector<RuntimeStateDefinition> runtimeStates;
     std::vector<ProfileSignal> signals;
     std::vector<ProfileObject> objects;
+    std::vector<ProfilePrerequisiteCreature> prerequisiteCreatures;
 };
 
 class InstanceProfileCatalog

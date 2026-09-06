@@ -80,6 +80,12 @@ std::vector<InstanceProfile> const& InstanceProfileCatalog::All()
                 {202183, "Blood Wing sigil", "SIGIL", ProfileObjectPolicy::Observe, {8}},
                 {202181, "Frost Wing sigil", "SIGIL", ProfileObjectPolicy::Observe, {11}},
                 {202223, "Frozen Throne transporter", "TRANSPORT", ProfileObjectPolicy::OpenWhenReady, {6, 8, 11}}
+            },
+            {
+                {"icc-blood-advisor-201479", "Darkfallen Advisor", 37571, 201479, {4536.01f, 2768.77f, 351.184f, 8.0f}, 14, "This exact DB spawn feeds the Blood Prince Trash event", {0, 1, 2, 3}},
+                {"icc-blood-archmage-201482", "Darkfallen Archmage", 37664, 201482, {4512.50f, 2769.94f, 351.184f, 8.0f}, 14, "This exact DB spawn feeds the Blood Prince Trash event", {0, 1, 2, 3}},
+                {"icc-blood-knight-201646", "Darkfallen Blood Knight", 37595, 201646, {4529.09f, 2761.50f, 351.184f, 8.0f}, 14, "This exact DB spawn feeds the Blood Prince Trash event", {0, 1, 2, 3}},
+                {"icc-blood-noble-201659", "Darkfallen Noble", 37663, 201659, {4530.15f, 2776.29f, 351.184f, 8.0f}, 14, "This exact DB spawn feeds the Blood Prince Trash event", {0, 1, 2, 3}}
             }
         }
     };

@@ -96,6 +96,27 @@ EncounterAssessment InstanceDiagnosticEngine::AssessEncounter(RecoveryContext co
     }
 }
 
+PrerequisiteCreatureAssessment InstanceDiagnosticEngine::AssessPrerequisiteCreature(ProfilePrerequisiteCreature const& definition, PrerequisiteCreatureObservation const& observation)
+{
+    if (!observation.spawnDefined)
+        return {"FAIL", "MISSING", "The required DB spawn does not exist", "Restore the source-verified spawn definition; do not create a substitute with a different Spawn ID"};
+    if (observation.actualEntry != definition.creatureEntry)
+        return {"FAIL", "WRONG_SPAWN", "The required Spawn ID resolves to a different creature Entry", "Restore the source-verified Entry for this exact Spawn ID; do not substitute another creature"};
+    if (!observation.locationMatches)
+        return {"FAIL", "WRONG_LOCATION", "The exact scripted prerequisite exists outside its source-verified region", "Correct the DB spawn placement and restart/reload through normal server maintenance; do not move the live creature as a substitute"};
+    if (observation.loaded && observation.alive)
+        return {observation.progressionDone ? "INFO" : "EXPECTED", "ALIVE", observation.progressionDone ? "The prerequisite event is already complete although this spawn is alive in the loaded grid" : "This exact scripted prerequisite remains alive", observation.progressionDone ? "No progression recovery is required; inspect only if the creature should have despawned" : "Defeat this exact prerequisite through normal gameplay"};
+    if (observation.loaded && observation.dead)
+        return {"PASS", "DEAD", "The exact scripted prerequisite is dead in the loaded grid", "No action required"};
+    if (observation.respawnSeconds > 0)
+        return {observation.progressionDone ? "INFO" : "EXPECTED", "RESPAWNING", "The exact DB spawn has a future respawn timer", observation.progressionDone ? "No progression action required" : "Wait for the normal respawn or reset before judging progression"};
+    if (!observation.gridLoaded)
+        return {"INFO", "NOT_LOADED", "The exact DB spawn is correctly defined but its grid is not loaded", "Move near the expected region and rescan when live creature state is required"};
+    if (observation.progressionDone)
+        return {"PASS", "NOT_PRESENT", "The prerequisite event is complete and the exact spawn is not currently present", "No action required"};
+    return {"WARN", "NOT_PRESENT", "The expected grid is loaded but the exact DB spawn is not currently present and has no future respawn timer", "Check event, pool and condition state before changing the spawn"};
+}
+
 GateAssessment InstanceDiagnosticEngine::AssessGate(RecoveryContext const& context, ProgressionGate const& gate)
 {
     std::vector<std::uint32_t> missing;

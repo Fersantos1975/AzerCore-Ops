@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
+#include <cstdlib>
 #include <deque>
 #include <mutex>
 #include <string>
@@ -25,6 +26,14 @@ namespace
 {
 constexpr std::size_t MaxEntriesPerInstance = 64;
 constexpr std::uint64_t WipeChainWindowMs = 10000;
+
+std::uint32_t ParseRequestId(Acore::ChatCommands::Tail requestArg)
+{
+    std::string raw(requestArg);
+    if (raw.empty())
+        return 0;
+    return static_cast<std::uint32_t>(std::strtoul(raw.c_str(), nullptr, 10));
+}
 
 struct EncounterCounters
 {
@@ -455,12 +464,14 @@ public:
 };
 } // namespace
 
-bool EncounterHistory::Show(ChatHandler* handler)
+bool EncounterHistory::Show(ChatHandler* handler, Acore::ChatCommands::Tail requestArg)
 {
+    std::uint32_t requestId = ParseRequestId(requestArg);
     if (!handler || !handler->GetPlayer())
     {
         Protocol::SendEncounterHistoryError(
             handler,
+            requestId,
             "Encounter history requires an in-game player session");
         return true;
     }
@@ -474,6 +485,7 @@ bool EncounterHistory::Show(ChatHandler* handler)
     {
         Protocol::SendEncounterHistoryError(
             handler,
+            requestId,
             "Enter a dungeon or raid instance before requesting encounter history");
         return true;
     }
@@ -483,6 +495,7 @@ bool EncounterHistory::Show(ChatHandler* handler)
 
     Protocol::SendEncounterHistoryBegin(
         handler,
+        requestId,
         map->GetId(),
         map->GetInstanceId(),
         static_cast<std::uint32_t>(
@@ -501,6 +514,7 @@ bool EncounterHistory::Show(ChatHandler* handler)
 
         Protocol::SendEncounterHistoryEntry(
             handler,
+            requestId,
             entry.sequence,
             entry.timestampMs,
             entry.encounterId,
@@ -528,6 +542,7 @@ bool EncounterHistory::Show(ChatHandler* handler)
     {
         Protocol::SendEncounterHistoryStats(
             handler,
+            requestId,
             pair.first,
             ResolveEncounterName(map, pair.first),
             pair.second.attempts,
@@ -537,6 +552,7 @@ bool EncounterHistory::Show(ChatHandler* handler)
 
     Protocol::SendEncounterHistoryEnd(
         handler,
+        requestId,
         static_cast<std::uint32_t>(
             snapshot.entries.size()),
         anomalies);
