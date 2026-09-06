@@ -89,6 +89,46 @@ Test("CanCapture rejects loading diagnostics",function()
   Contains(reason,"Wait","loading rejection reason")
 end)
 
+Test("MarkBefore clears stale After evidence",function()
+  local evidence={
+    after=Report.Capture(Diagnostics("0.7.1d","FAIL"),{}),
+  }
+
+  local ready,snapshot=Report.MarkBefore(
+    evidence,Diagnostics("0.7.1d","NOT_STARTED"),{})
+
+  Equal(ready,true,"Before capture rejected")
+  if evidence.before~=snapshot then
+    error("stored Before snapshot does not match returned snapshot")
+  end
+  Equal(evidence.after,nil,"stale After evidence was retained")
+end)
+
+Test("MarkAfter requires Before evidence",function()
+  local evidence={}
+  local ready,reason=Report.MarkAfter(evidence,Diagnostics(),{})
+
+  Equal(ready,false,"After capture accepted without Before")
+  Contains(reason,"Before","missing-Before rejection reason")
+  Equal(evidence.after,nil,"After evidence was stored unexpectedly")
+end)
+
+Test("MarkAfter captures evidence after Before",function()
+  local evidence={}
+  local ready=Report.MarkBefore(evidence,Diagnostics(),{})
+  Equal(ready,true,"Before capture rejected")
+
+  local afterReady,snapshot=Report.MarkAfter(
+    evidence,Diagnostics("0.7.1d","FAIL"),{})
+
+  Equal(afterReady,true,"After capture rejected")
+  if evidence.after~=snapshot then
+    error("stored After snapshot does not match returned snapshot")
+  end
+  Equal(snapshot.diagnostics.findings[1].actual,"FAIL",
+    "After snapshot content")
+end)
+
 Test("Compare detects changed findings",function()
   local before=Report.Capture(Diagnostics("0.7.1d","FAIL"),{})
   local after=Report.Capture(Diagnostics("0.7.1d","NOT_STARTED"),{})

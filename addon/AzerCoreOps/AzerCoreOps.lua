@@ -6226,32 +6226,33 @@ local function BuildInstances()
 
   instanceUI.issueBeforeButton=Button(
     diagnosticControls,"Mark Before",72,22,function()
-      local ready,reason=AzerCoreOpsIssueReport.CanCapture(
-        instanceUI.diagnostics)
-      if not ready then SetStatus(reason,true); return end
       AzerCoreOpsDB.issueReportEvidence=
         AzerCoreOpsDB.issueReportEvidence or {}
-      AzerCoreOpsDB.issueReportEvidence.before=
-        AzerCoreOpsIssueReport.Capture(
-          instanceUI.diagnostics,instanceUI.encounterHistory)
-      SetStatus("Before evidence captured at "..
-        tostring(AzerCoreOpsDB.issueReportEvidence.before.captured)..".")
+      local evidence=AzerCoreOpsDB.issueReportEvidence
+      local hadAfter=evidence.after~=nil
+      local ready,result=AzerCoreOpsIssueReport.MarkBefore(
+        evidence,instanceUI.diagnostics,instanceUI.encounterHistory)
+      if not ready then SetStatus(result,true); return end
+      local message="Before evidence captured at "..
+        tostring(result.captured).."."
+      if hadAfter then
+        message=message.." Previous After evidence cleared."
+      end
+      SetStatus(message)
     end,
     "Preserve the completed scan as the state before reproduction")
   instanceUI.issueBeforeButton:SetPoint("TOPLEFT",12,-285)
 
   instanceUI.issueAfterButton=Button(
     diagnosticControls,"Mark After",72,22,function()
-      local ready,reason=AzerCoreOpsIssueReport.CanCapture(
-        instanceUI.diagnostics)
-      if not ready then SetStatus(reason,true); return end
       AzerCoreOpsDB.issueReportEvidence=
         AzerCoreOpsDB.issueReportEvidence or {}
-      AzerCoreOpsDB.issueReportEvidence.after=
-        AzerCoreOpsIssueReport.Capture(
-          instanceUI.diagnostics,instanceUI.encounterHistory)
+      local evidence=AzerCoreOpsDB.issueReportEvidence
+      local ready,result=AzerCoreOpsIssueReport.MarkAfter(
+        evidence,instanceUI.diagnostics,instanceUI.encounterHistory)
+      if not ready then SetStatus(result,true); return end
       SetStatus("After evidence captured at "..
-        tostring(AzerCoreOpsDB.issueReportEvidence.after.captured)..".")
+        tostring(result.captured)..".")
     end,
     "Preserve the completed scan as the state after reproduction")
   instanceUI.issueAfterButton:SetPoint("TOPLEFT",90,-285)

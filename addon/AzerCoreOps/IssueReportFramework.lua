@@ -104,6 +104,35 @@ function Report.CanCapture(diagnostics)
   return true
 end
 
+function Report.MarkBefore(evidence, diagnostics, encounterHistory)
+  if type(evidence)~="table" then
+    return false,"Evidence storage is unavailable."
+  end
+
+  local ready,reason=Report.CanCapture(diagnostics)
+  if not ready then return false,reason end
+
+  evidence.before=Report.Capture(diagnostics,encounterHistory)
+  evidence.after=nil
+  return true,evidence.before
+end
+
+function Report.MarkAfter(evidence, diagnostics, encounterHistory)
+  if type(evidence)~="table" then
+    return false,"Evidence storage is unavailable."
+  end
+
+  if not evidence.before then
+    return false,"Capture Before evidence first."
+  end
+
+  local ready,reason=Report.CanCapture(diagnostics)
+  if not ready then return false,reason end
+
+  evidence.after=Report.Capture(diagnostics,encounterHistory)
+  return true,evidence.after
+end
+
 function Report.ComparisonText(before, after)
   local lines={"AzerCore Ops — Before/After Evidence"}
   table.insert(lines,"")
