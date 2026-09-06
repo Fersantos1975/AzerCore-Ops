@@ -1,6 +1,6 @@
 local ADDON = ...
 
--- AzerCore Ops Platform 0.7.2
+-- AzerCore Ops Platform 0.7.3
 -- Target: WoW 3.3.5a / AzerothCore. All server commands live here so that
 -- branch-specific command names can be changed without touching the UI.
 local CMD = {
@@ -39,7 +39,7 @@ local CMD = {
 
 local DS = AzerCoreOpsDesign
 local Platform = AzerCoreOpsPlatform
-Platform.AddonBuild="0.7.2"
+Platform.AddonBuild="0.7.3"
 local C = {
   bg=DS.Colors.Background,
   panel=DS.Colors.Surface,
@@ -122,7 +122,7 @@ local defaults={
   rememberAuditFilter=true,autoReaudit=false,confirmResetSelected=true,
   warnNoTarget=true,compactAuditRows=false,auditFontSize=10,shiftClickInsert=true,
 }
-local ADDON_VERSION="0.7.2"
+local ADDON_VERSION="0.7.3"
 local PROTOCOL_VERSION="1"
 local TESTED_CORE="190184a04539"
 local TESTED_PLAYERBOTS="ba46fcdecde3"
@@ -6929,7 +6929,7 @@ local function BuildDashboard()
   Button(quick,"Inspect Quest",150,30,function() SelectTab("Quest") end,"Open quest search and chain analysis"):SetPoint("TOPLEFT",174,-42)
   Button(quick,"Check Compatibility",150,30,function() RequestCompatibility(); OpenOptions() end,"Query the running AzerCoreOps module"):SetPoint("TOPLEFT",336,-42)
   Button(quick,"Information & Credits",170,30,function() SelectTab("Information") end,"View project links, credits, and acknowledgements"):SetPoint("TOPLEFT",498,-42)
-  local note=quick:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); note:SetPoint("TOPLEFT",12,-92); note:SetPoint("BOTTOMRIGHT",-12,12); note:SetJustifyH("LEFT"); note:SetJustifyV("TOP"); note:SetWordWrap(true); note:SetTextColor(unpack(C.white)); note:SetText("Release: v0.7.2\n\nAzerCore Ops 0.7.2 adds before-and-after diagnostic evidence, privacy-conscious upstream issue drafts, saved-draft protection, and Lua 5.1 regression validation. Courier remains under construction and is not included as an active release feature.")
+  local note=quick:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); note:SetPoint("TOPLEFT",12,-92); note:SetPoint("BOTTOMRIGHT",-12,12); note:SetJustifyH("LEFT"); note:SetJustifyV("TOP"); note:SetWordWrap(true); note:SetTextColor(unpack(C.white)); note:SetText("Release: v0.7.3\n\nAzerCore Ops 0.7.3 polishes upstream issue reporting with safer Before/After evidence lifecycle handling, clearer severity-aware comparisons, stronger saved-draft evidence binding with legacy migration, and more precise privacy validation for unknown values, IPv4 addresses, and local paths. Courier remains under construction and is not included as an active release feature.")
 end
 
 
