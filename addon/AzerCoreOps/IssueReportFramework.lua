@@ -397,42 +397,6 @@ function Report.OpenDraft(
     end)
 end
 
-function Report.Readiness(draft, before, after)
-  draft=draft or {}
-  local missing={}
-  local snapshot=after or before
-  local diagnostics=snapshot and snapshot.diagnostics or nil
-  local evidence=diagnostics and diagnostics.evidence or nil
-
-  if not diagnostics or not diagnostics.header then
-    table.insert(missing,"A completed diagnostic snapshot")
-  end
-  if Trim(draft.current)=="" then
-    table.insert(missing,"Current Behaviour")
-  end
-  if Trim(draft.expected)=="" then
-    table.insert(missing,"Expected Behaviour")
-  end
-  if Trim(draft.source)=="" then
-    table.insert(missing,"Source")
-  end
-  if Trim(draft.steps)=="" then
-    table.insert(missing,"Steps to reproduce")
-  end
-  if not evidence or Trim(evidence.core)=="" or evidence.core=="unknown" then
-    table.insert(missing,"AzerothCore revision")
-  end
-  if Trim(draft.operatingSystem)=="" then
-    table.insert(missing,"Operating system")
-  end
-  if Trim(draft.customChanges)=="" then
-    table.insert(missing,"Custom changes or enabled modules")
-  end
-
-  local status=#missing==0 and "READY_FOR_REVIEW" or "DRAFT"
-  return status,missing
-end
-
 local function AddFindings(lines, snapshot)
   local diagnostics=snapshot and snapshot.diagnostics or nil
   if not diagnostics then return end
