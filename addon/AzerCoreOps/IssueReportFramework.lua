@@ -23,9 +23,99 @@ local function FindingKey(finding)
     tostring(finding.subject or "UNKNOWN")
 end
 
-local function Safe(value)
+local function IsIPv4(value)
+  local a,b,c,d=value:match(
+    "^(%d+)%.(%d+)%.(%d+)%.(%d+)$")
+  if not a then return false end
+
+  for _,octet in ipairs({a,b,c,d}) do
+    local number=tonumber(octet)
+    if not number or number<0 or number>255 then
+      return false
+    end
+  end
+
+  return true
+end
+
+local function IsVersionContext(text, position)
+  local before=text:sub(1,position-1):lower()
+  local tail=before:sub(math.max(1,#before-40))
+
+  if tail:match("%f[%a]version%s*[:=]?%s*$")
+    or tail:match("%f[%a]version%s+is%s*$")
+    or tail:match("%f[%a]ver%s*[:=]?%s*$")
+    or tail:match("%f[%a]ver%s+is%s*$")
+  then
+    return true
+  end
+
+  return tail:match("%f[%a]v%s*$")~=nil
+end
+
+local function FindSensitiveIPv4(text, startPosition)
+  local position=startPosition or 1
+
+  while true do
+    local first,last=text:find(
+      "%d+%.%d+%.%d+%.%d+",position)
+
+    if not first then return nil end
+
+    local candidate=text:sub(first,last)
+    local previous=first>1 and text:sub(first-1,first-1) or ""
+    local following=last<#text and text:sub(last+1,last+1) or ""
+    local beforePrevious=
+      first>2 and text:sub(first-2,first-2) or ""
+    local afterFollowing=
+      last+1<#text and text:sub(last+2,last+2) or ""
+    local extendsLeft=
+      previous=="." and beforePrevious:match("%d")~=nil
+    local extendsRight=
+      following=="." and afterFollowing:match("%d")~=nil
+    local bounded=
+      not previous:match("%d") and
+      not following:match("%d") and
+      not extendsLeft and
+      not extendsRight
+
+    if bounded and IsIPv4(candidate)
+      and not IsVersionContext(text,first)
+    then
+      return first,last
+    end
+
+    position=last+1
+  end
+end
+
+local function ContainsSensitiveIPv4(value)
   value=tostring(value or "")
-  value=value:gsub("%d+%.%d+%.%d+%.%d+","[REDACTED_IP]")
+  return FindSensitiveIPv4(value,1)~=nil
+end
+
+local function RedactIPv4(value)
+  value=tostring(value or "")
+  local result={}
+  local position=1
+
+  while true do
+    local first,last=FindSensitiveIPv4(value,position)
+    if not first then
+      table.insert(result,value:sub(position))
+      break
+    end
+
+    table.insert(result,value:sub(position,first-1))
+    table.insert(result,"[REDACTED_IP]")
+    position=last+1
+  end
+
+  return table.concat(result)
+end
+
+local function Safe(value)
+  value=RedactIPv4(value)
   value=value:gsub("[A-Za-z]:\\[^%s]+","[REDACTED_PATH]")
   value=value:gsub("/home/[^%s]+","[REDACTED_PATH]")
   return value
@@ -317,7 +407,7 @@ function Report.ReviewText(text)
     end
   end
 
-  if text:find("%d+%.%d+%.%d+%.%d+") then
+  if ContainsSensitiveIPv4(text) then
     table.insert(issues,"Review or remove the detected IPv4 address.")
   end
   if text:find("[A-Za-z]:\\") or text:find("/home/",1,true) then

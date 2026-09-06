@@ -264,6 +264,154 @@ No relevant custom changes.
   Equal(#issues,0,"completed review issues")
 end)
 
+Test("Compose preserves four-part version numbers",function()
+  local before=Report.Capture(Diagnostics(),{})
+
+  local report=Report.Compose({
+    current="The problem occurs with component version 1.2.3.4.",
+    expected="The component should behave normally.",
+    source="Verified in the component source.",
+    steps="1. Start the instance. 2. Reproduce the issue.",
+    notes="None provided.",
+    operatingSystem="Debian GNU/Linux.",
+    customChanges="No relevant custom changes.",
+  },before,nil)
+
+  Contains(
+    report,
+    "component version 1.2.3.4",
+    "four-part version was redacted")
+
+  if report:find(
+    "component version [REDACTED_IP]",1,true)
+  then
+    error("four-part version was treated as an IPv4 address")
+  end
+end)
+
+Test("Compose redacts genuine IPv4 addresses",function()
+  local before=Report.Capture(Diagnostics(),{})
+
+  local report=Report.Compose({
+    current="The server reported address 192.168.1.42.",
+    expected="No server address should appear in the report.",
+    source="Verified during reproduction.",
+    steps="1. Start the instance. 2. Reproduce the issue.",
+    notes="None provided.",
+    operatingSystem="Debian GNU/Linux.",
+    customChanges="No relevant custom changes.",
+  },before,nil)
+
+  Contains(report,"[REDACTED_IP]","IPv4 address was not redacted")
+
+  if report:find("192.168.1.42",1,true) then
+    error("IPv4 address remained in composed report")
+  end
+end)
+
+Test("Review allows four-part version numbers",function()
+  local text=[[
+### Current Behaviour
+The problem occurs with component version 1.2.3.4.
+
+### Expected Behaviour
+The component should behave normally.
+
+### Source
+Verified in the component source.
+
+### Steps to reproduce the problem
+1. Start the instance.
+2. Reproduce the issue.
+
+### Extra Notes
+None provided.
+
+### AC rev. hash/commit
+`abcdef123456`
+
+### Operating system
+Debian GNU/Linux.
+
+### Custom changes or Modules
+No relevant custom changes.
+]]
+
+  local state,issues=Report.ReviewText(text)
+  Equal(state,"READY_FOR_REVIEW","four-part version rejected")
+  Equal(#issues,0,"four-part version produced review issues")
+end)
+
+Test("Review allows version label with linking verb",function()
+  local text=[[
+### Current Behaviour
+The component version is 1.2.3.4.
+
+### Expected Behaviour
+The component should behave normally.
+
+### Source
+Verified in the component source.
+
+### Steps to reproduce the problem
+1. Start the instance.
+2. Reproduce the issue.
+
+### Extra Notes
+None provided.
+
+### AC rev. hash/commit
+`abcdef123456`
+
+### Operating system
+Debian GNU/Linux.
+
+### Custom changes or Modules
+No relevant custom changes.
+]]
+
+  local state,issues=Report.ReviewText(text)
+  Equal(state,"READY_FOR_REVIEW","version label with linking verb rejected")
+  Equal(#issues,0,"version label with linking verb produced review issues")
+end)
+
+Test("Review rejects genuine IPv4 addresses",function()
+  local text=[[
+### Current Behaviour
+The server reported address 192.168.1.42.
+
+### Expected Behaviour
+No server address should appear in the report.
+
+### Source
+Verified during reproduction.
+
+### Steps to reproduce the problem
+1. Start the instance.
+2. Reproduce the issue.
+
+### Extra Notes
+None provided.
+
+### AC rev. hash/commit
+`abcdef123456`
+
+### Operating system
+Debian GNU/Linux.
+
+### Custom changes or Modules
+No relevant custom changes.
+]]
+
+  local state,issues=Report.ReviewText(text)
+  Equal(state,"DRAFT","IPv4 address accepted")
+  Equal(#issues,1,"IPv4 review issue count")
+  Equal(
+    issues[1],
+    "Review or remove the detected IPv4 address.",
+    "IPv4 review warning")
+end)
+
 Test("Review allows unknown in legitimate prose",function()
   local text=[[
 ### Current Behaviour
