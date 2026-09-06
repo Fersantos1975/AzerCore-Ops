@@ -474,9 +474,11 @@ local function AddComparison(lines, before, after)
     local old=change.before or {}
     local new=change.after or {}
     table.insert(lines,string.format(
-      "- **%s** `%s`: `%s` → `%s`",
+      "- **%s** `%s`: severity `%s` → `%s`; actual `%s` → `%s`",
       Safe(change.kind),
       Safe(change.key),
+      Safe(old.severity or "not present"),
+      Safe(new.severity or "not present"),
       Safe(old.actual or "not present"),
       Safe(new.actual or "not present")))
   end

@@ -199,6 +199,27 @@ Test("Historical evidence is labelled",function()
   Contains(report,"`0.7.1d`","active build")
 end)
 
+Test("Compose exposes severity-only comparison changes",function()
+  local before=Report.Capture(Diagnostics(),{})
+  local after=Report.Copy(before)
+  after.diagnostics.findings[1].severity="WARNING"
+
+  local report=Report.Compose({
+    current="The diagnostic state changes unexpectedly.",
+    expected="The diagnostic state should remain stable.",
+    source="Verified in the instance diagnostic profile.",
+    steps="1. Enter the instance. 2. Run the diagnostic scan.",
+    notes="None provided.",
+    operatingSystem="Debian GNU/Linux.",
+    customChanges="No relevant custom changes.",
+  },before,after)
+
+  Contains(
+    report,
+    "severity `EXPECTED` → `WARNING`; actual `NOT_STARTED` → `NOT_STARTED`",
+    "composed severity-only comparison detail")
+end)
+
 Test("Review names unfinished sections",function()
   local before=Report.Capture(Diagnostics(),{})
   local draft=Report.Template(before,nil,"0.7.1d")
