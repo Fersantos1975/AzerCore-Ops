@@ -412,6 +412,96 @@ No relevant custom changes.
     "IPv4 review warning")
 end)
 
+Test("Compose redacts sensitive local paths",function()
+  local before=Report.Capture(Diagnostics(),{})
+
+  local report=Report.Compose({
+    current="Logs were written under /home/cura/azerothcore/server.log.",
+    expected="Local paths should not appear in the report.",
+    source="Verified during reproduction.",
+    steps="1. Start the instance. 2. Reproduce the issue.",
+    notes="None provided.",
+    operatingSystem="Debian GNU/Linux.",
+    customChanges="No relevant custom changes.",
+  },before,nil)
+
+  Contains(report,"[REDACTED_PATH]","Unix home path was not redacted")
+
+  if report:find("/home/cura/",1,true) then
+    error("Unix home path remained in composed report")
+  end
+end)
+
+Test("Review rejects sensitive local paths",function()
+  local text=[[
+### Current Behaviour
+The file was written to C:\Users\cura\server.log.
+
+### Expected Behaviour
+Local paths should not appear in the report.
+
+### Source
+Verified during reproduction.
+
+### Steps to reproduce the problem
+1. Start the instance.
+2. Reproduce the issue.
+
+### Extra Notes
+None provided.
+
+### AC rev. hash/commit
+`abcdef123456`
+
+### Operating system
+Debian GNU/Linux.
+
+### Custom changes or Modules
+No relevant custom changes.
+]]
+
+  local state,issues=Report.ReviewText(text)
+  Equal(state,"DRAFT","sensitive Windows path accepted")
+  Equal(#issues,1,"local-path review issue count")
+  Equal(
+    issues[1],
+    "Review or remove the detected local path.",
+    "local-path review warning")
+end)
+
+Test("Review allows bare path syntax examples",function()
+  local text=[[
+### Current Behaviour
+The documentation mentions C:\ and /home/ as path syntax examples.
+
+### Expected Behaviour
+Documentation examples should remain valid.
+
+### Source
+Verified in documentation.
+
+### Steps to reproduce the problem
+1. Open the documentation.
+2. Review the path syntax examples.
+
+### Extra Notes
+None provided.
+
+### AC rev. hash/commit
+`abcdef123456`
+
+### Operating system
+Debian GNU/Linux.
+
+### Custom changes or Modules
+No relevant custom changes.
+]]
+
+  local state,issues=Report.ReviewText(text)
+  Equal(state,"READY_FOR_REVIEW","bare path syntax example rejected")
+  Equal(#issues,0,"bare path syntax example produced review issues")
+end)
+
 Test("Review allows unknown in legitimate prose",function()
   local text=[[
 ### Current Behaviour

@@ -114,10 +114,34 @@ local function RedactIPv4(value)
   return table.concat(result)
 end
 
+local function ContainsSensitivePath(value)
+  value=tostring(value or "")
+
+  if value:find("[A-Za-z]:\\[^%s\\]") then
+    return true
+  end
+
+  if value:find("/home/[^%s/]") then
+    return true
+  end
+
+  return false
+end
+
+local function RedactSensitivePaths(value)
+  value=tostring(value or "")
+  value=value:gsub(
+    "[A-Za-z]:\\[^%s\\][^%s]*",
+    "[REDACTED_PATH]")
+  value=value:gsub(
+    "/home/[^%s/][^%s]*",
+    "[REDACTED_PATH]")
+  return value
+end
+
 local function Safe(value)
   value=RedactIPv4(value)
-  value=value:gsub("[A-Za-z]:\\[^%s]+","[REDACTED_PATH]")
-  value=value:gsub("/home/[^%s]+","[REDACTED_PATH]")
+  value=RedactSensitivePaths(value)
   return value
 end
 
@@ -410,7 +434,7 @@ function Report.ReviewText(text)
   if ContainsSensitiveIPv4(text) then
     table.insert(issues,"Review or remove the detected IPv4 address.")
   end
-  if text:find("[A-Za-z]:\\") or text:find("/home/",1,true) then
+  if ContainsSensitivePath(text) then
     table.insert(issues,"Review or remove the detected local path.")
   end
   local unresolvedGeneratedValues={
