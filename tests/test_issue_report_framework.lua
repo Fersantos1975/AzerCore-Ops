@@ -139,6 +139,22 @@ Test("Compare detects changed findings",function()
   Equal(changes[1].after.actual,"NOT_STARTED","after value")
 end)
 
+Test("ComparisonText exposes severity-only changes",function()
+  local before=Report.Capture(Diagnostics(),{})
+  local after=Report.Capture(Diagnostics(),{})
+  after.diagnostics.findings[1].severity="WARNING"
+
+  local changes=Report.Compare(before,after)
+  Equal(#changes,1,"severity-only change count")
+  Equal(changes[1].kind,"CHANGED","severity-only change kind")
+
+  local report=Report.ComparisonText(before,after)
+  Contains(
+    report,
+    "severity EXPECTED -> WARNING; actual NOT_STARTED -> NOT_STARTED",
+    "severity-only comparison detail")
+end)
+
 Test("ComparisonText reports no changes",function()
   local before=Report.Capture(Diagnostics(),{})
   local after=Report.Capture(Diagnostics(),{})

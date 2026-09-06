@@ -159,8 +159,10 @@ function Report.ComparisonText(before, after)
       local old=change.before or {}
       local new=change.after or {}
       table.insert(lines,string.format(
-        "[%s] %s: %s -> %s",
+        "[%s] %s: severity %s -> %s; actual %s -> %s",
         tostring(change.kind),tostring(change.key),
+        tostring(old.severity or "not present"),
+        tostring(new.severity or "not present"),
         tostring(old.actual or "not present"),
         tostring(new.actual or "not present")))
     end
