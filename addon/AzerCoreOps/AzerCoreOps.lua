@@ -7119,7 +7119,8 @@ local function BuildUI()
     local b=Button(sidebar,label,132,30,function() SelectTab(pageName) end); b:SetPoint("TOPLEFT",14,-38-(i-1)*36); tabs[pageName]=b
     b:SetScript("OnLeave",function(self) self:SetBackdropColor(unpack(activeTab==pageName and C.selected or C.button)); self:SetBackdropBorderColor(unpack(activeTab==pageName and C.gold or C.border)); GameTooltip:Hide() end)
   end
-  local build=sidebar:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); build:SetPoint("BOTTOMLEFT",14,14); build:SetPoint("BOTTOMRIGHT",-14,14); build:SetJustifyH("LEFT"); build:SetTextColor(.65,.65,.65,1); build:SetText("Protocol v"..PROTOCOL_VERSION.."\nDevelopment build")
+  local build=sidebar:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); build:SetPoint("BOTTOMLEFT",14,14); build:SetPoint("BOTTOMRIGHT",-14,14); build:SetJustifyH("LEFT"); build:SetTextColor(.65,.65,.65,1); build:SetText("Addon v"..(Platform.AddonBuild or ADDON_VERSION)..
+    "\nProtocol v"..PROTOCOL_VERSION)
 
   content=CreateFrame("Frame",nil,main); content:SetPoint("TOPLEFT",180,-48); content:SetPoint("BOTTOMRIGHT",-10,32); Backdrop(content,C.panel)
   statusText=main:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); statusText:SetPoint("BOTTOMLEFT",14,11); statusText:SetPoint("BOTTOMRIGHT",-14,11); statusText:SetJustifyH("LEFT")
