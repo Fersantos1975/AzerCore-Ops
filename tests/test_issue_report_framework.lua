@@ -173,6 +173,24 @@ Test("Evidence fingerprint changes with evidence",function()
   if first==second then error("fingerprints should differ") end
 end)
 
+Test("Evidence fingerprint includes finding content",function()
+  local first=Report.Capture(Diagnostics("0.7.1d","NOT_STARTED"),{})
+  local changed=Report.Copy(first)
+  changed.diagnostics.findings[1].actual="FAIL"
+
+  Equal(changed.captured,first.captured,
+    "test requires matching capture timestamps")
+  Equal(changed.diagnostics.generatedAt,first.diagnostics.generatedAt,
+    "test requires matching diagnostic timestamps")
+
+  local originalFingerprint=Report.EvidenceFingerprint(first,nil)
+  local changedFingerprint=Report.EvidenceFingerprint(changed,nil)
+
+  if originalFingerprint==changedFingerprint then
+    error("finding content did not affect evidence fingerprint")
+  end
+end)
+
 Test("Historical evidence is labelled",function()
   local before=Report.Capture(Diagnostics("0.7.1b"),{})
   local report=Report.Template(before,nil,"0.7.1d")
@@ -234,6 +252,52 @@ Test("Draft is bound to its evidence fingerprint",function()
     AzerCoreOpsDB.issueReportDraftFingerprint,
     Report.EvidenceFingerprint(before,nil),
     "stored fingerprint")
+end)
+
+Test("Legacy evidence fingerprint migrates saved draft",function()
+  AzerCoreOpsDB={}
+  local before=Report.Capture(Diagnostics(),{})
+  local diagnostics=before.diagnostics
+  local evidence=diagnostics.evidence
+  local header=diagnostics.header
+
+  local legacyBefore=table.concat({
+    tostring(before.captured or ""),
+    tostring(diagnostics.generatedAt or ""),
+    tostring(header.map or ""),
+    tostring(header.instance or ""),
+    tostring(header.difficulty or ""),
+    tostring(evidence.addon or ""),
+    tostring(evidence.core or ""),
+  },"|")
+  local legacyAfter=table.concat({"","","","","","",""},"|")
+
+  AzerCoreOpsDB.issueReportDraftText="preserved legacy draft"
+  AzerCoreOpsDB.issueReportDraftFingerprint=
+    legacyBefore.."=>"..legacyAfter
+
+  local shown=false
+  local shownText=""
+  local status=""
+
+  Report.OpenDraft(
+    before,nil,"0.7.1d",
+    function(title,text)
+      shown=true
+      shownText=text
+    end,
+    function(message)
+      status=message
+    end)
+
+  Equal(shown,true,"legacy saved draft was rejected")
+  Equal(shownText,"preserved legacy draft",
+    "legacy saved draft was replaced")
+  Equal(
+    AzerCoreOpsDB.issueReportDraftFingerprint,
+    Report.EvidenceFingerprint(before,nil),
+    "legacy fingerprint was not migrated")
+  Equal(status,"","legacy migration produced an error status")
 end)
 
 Test("Different evidence cannot reuse a saved draft",function()

@@ -171,7 +171,53 @@ function Report.ComparisonText(before, after)
   return table.concat(lines,"\n")
 end
 
+local function IdentityValue(value)
+  value=tostring(value or "")
+  return tostring(#value)..":"..value
+end
+
+local function FindingsIdentity(snapshot)
+  local diagnostics=snapshot and snapshot.diagnostics or {}
+  local findings=diagnostics.findings or {}
+  local result={}
+
+  for _,finding in ipairs(findings) do
+    table.insert(result,table.concat({
+      IdentityValue(finding.category),
+      IdentityValue(finding.subject),
+      IdentityValue(finding.severity),
+      IdentityValue(finding.actual),
+    },"|"))
+  end
+
+  table.sort(result)
+  return table.concat(result,";")
+end
+
 local function SnapshotIdentity(snapshot)
+  local diagnostics=snapshot and snapshot.diagnostics or {}
+  local evidence=diagnostics.evidence or {}
+  local header=diagnostics.header or {}
+  return table.concat({
+    IdentityValue(snapshot and snapshot.captured or ""),
+    IdentityValue(diagnostics.generatedAt),
+    IdentityValue(header.map),
+    IdentityValue(header.instance),
+    IdentityValue(header.difficulty),
+    IdentityValue(evidence.addon),
+    IdentityValue(evidence.core),
+    IdentityValue(FindingsIdentity(snapshot)),
+  },"|")
+end
+
+local function CapturedAddonBuild(before, after)
+  local snapshot=after or before
+  local diagnostics=snapshot and snapshot.diagnostics or {}
+  local evidence=diagnostics.evidence or {}
+  return Trim(evidence.addon)
+end
+
+local function LegacySnapshotIdentity(snapshot)
   local diagnostics=snapshot and snapshot.diagnostics or {}
   local evidence=diagnostics.evidence or {}
   local header=diagnostics.header or {}
@@ -186,15 +232,13 @@ local function SnapshotIdentity(snapshot)
   },"|")
 end
 
-local function CapturedAddonBuild(before, after)
-  local snapshot=after or before
-  local diagnostics=snapshot and snapshot.diagnostics or {}
-  local evidence=diagnostics.evidence or {}
-  return Trim(evidence.addon)
+local function LegacyEvidenceFingerprint(before, after)
+  return LegacySnapshotIdentity(before).."=>"..
+    LegacySnapshotIdentity(after)
 end
 
 function Report.EvidenceFingerprint(before, after)
-  return SnapshotIdentity(before).."=>"..SnapshotIdentity(after)
+  return "v2|"..SnapshotIdentity(before).."=>"..SnapshotIdentity(after)
 end
 
 function Report.Template(before, after, activeBuild)
@@ -319,10 +363,15 @@ function Report.OpenDraft(
   if AzerCoreOpsDB.issueReportDraftText
     and AzerCoreOpsDB.issueReportDraftFingerprint~=fingerprint
   then
-    setStatus(
-      "Saved draft belongs to different evidence. Click New Issue Draft to replace it deliberately.",
-      true)
-    return
+    local legacyFingerprint=LegacyEvidenceFingerprint(before,after)
+    if AzerCoreOpsDB.issueReportDraftFingerprint==legacyFingerprint then
+      AzerCoreOpsDB.issueReportDraftFingerprint=fingerprint
+    else
+      setStatus(
+        "Saved draft belongs to different evidence. Click New Issue Draft to replace it deliberately.",
+        true)
+      return
+    end
   end
 
   if not AzerCoreOpsDB.issueReportDraftText then
