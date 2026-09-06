@@ -23,11 +23,125 @@ local function FindingKey(finding)
     tostring(finding.subject or "UNKNOWN")
 end
 
-local function Safe(value)
+local function IsIPv4(value)
+  local a,b,c,d=value:match(
+    "^(%d+)%.(%d+)%.(%d+)%.(%d+)$")
+  if not a then return false end
+
+  for _,octet in ipairs({a,b,c,d}) do
+    local number=tonumber(octet)
+    if not number or number<0 or number>255 then
+      return false
+    end
+  end
+
+  return true
+end
+
+local function IsVersionContext(text, position)
+  local before=text:sub(1,position-1):lower()
+  local tail=before:sub(math.max(1,#before-40))
+
+  if tail:match("%f[%a]version%s*[:=]?%s*$")
+    or tail:match("%f[%a]version%s+is%s*$")
+    or tail:match("%f[%a]ver%s*[:=]?%s*$")
+    or tail:match("%f[%a]ver%s+is%s*$")
+  then
+    return true
+  end
+
+  return tail:match("%f[%a]v%s*$")~=nil
+end
+
+local function FindSensitiveIPv4(text, startPosition)
+  local position=startPosition or 1
+
+  while true do
+    local first,last=text:find(
+      "%d+%.%d+%.%d+%.%d+",position)
+
+    if not first then return nil end
+
+    local candidate=text:sub(first,last)
+    local previous=first>1 and text:sub(first-1,first-1) or ""
+    local following=last<#text and text:sub(last+1,last+1) or ""
+    local beforePrevious=
+      first>2 and text:sub(first-2,first-2) or ""
+    local afterFollowing=
+      last+1<#text and text:sub(last+2,last+2) or ""
+    local extendsLeft=
+      previous=="." and beforePrevious:match("%d")~=nil
+    local extendsRight=
+      following=="." and afterFollowing:match("%d")~=nil
+    local bounded=
+      not previous:match("%d") and
+      not following:match("%d") and
+      not extendsLeft and
+      not extendsRight
+
+    if bounded and IsIPv4(candidate)
+      and not IsVersionContext(text,first)
+    then
+      return first,last
+    end
+
+    position=last+1
+  end
+end
+
+local function ContainsSensitiveIPv4(value)
   value=tostring(value or "")
-  value=value:gsub("%d+%.%d+%.%d+%.%d+","[REDACTED_IP]")
-  value=value:gsub("[A-Za-z]:\\[^%s]+","[REDACTED_PATH]")
-  value=value:gsub("/home/[^%s]+","[REDACTED_PATH]")
+  return FindSensitiveIPv4(value,1)~=nil
+end
+
+local function RedactIPv4(value)
+  value=tostring(value or "")
+  local result={}
+  local position=1
+
+  while true do
+    local first,last=FindSensitiveIPv4(value,position)
+    if not first then
+      table.insert(result,value:sub(position))
+      break
+    end
+
+    table.insert(result,value:sub(position,first-1))
+    table.insert(result,"[REDACTED_IP]")
+    position=last+1
+  end
+
+  return table.concat(result)
+end
+
+local function ContainsSensitivePath(value)
+  value=tostring(value or "")
+
+  if value:find("[A-Za-z]:\\[^%s\\]") then
+    return true
+  end
+
+  if value:find("/home/[^%s/]") then
+    return true
+  end
+
+  return false
+end
+
+local function RedactSensitivePaths(value)
+  value=tostring(value or "")
+  value=value:gsub(
+    "[A-Za-z]:\\[^%s\\][^%s]*",
+    "[REDACTED_PATH]")
+  value=value:gsub(
+    "/home/[^%s/][^%s]*",
+    "[REDACTED_PATH]")
+  return value
+end
+
+local function Safe(value)
+  value=RedactIPv4(value)
+  value=RedactSensitivePaths(value)
   return value
 end
 
@@ -104,6 +218,35 @@ function Report.CanCapture(diagnostics)
   return true
 end
 
+function Report.MarkBefore(evidence, diagnostics, encounterHistory)
+  if type(evidence)~="table" then
+    return false,"Evidence storage is unavailable."
+  end
+
+  local ready,reason=Report.CanCapture(diagnostics)
+  if not ready then return false,reason end
+
+  evidence.before=Report.Capture(diagnostics,encounterHistory)
+  evidence.after=nil
+  return true,evidence.before
+end
+
+function Report.MarkAfter(evidence, diagnostics, encounterHistory)
+  if type(evidence)~="table" then
+    return false,"Evidence storage is unavailable."
+  end
+
+  if not evidence.before then
+    return false,"Capture Before evidence first."
+  end
+
+  local ready,reason=Report.CanCapture(diagnostics)
+  if not ready then return false,reason end
+
+  evidence.after=Report.Capture(diagnostics,encounterHistory)
+  return true,evidence.after
+end
+
 function Report.ComparisonText(before, after)
   local lines={"AzerCore Ops — Before/After Evidence"}
   table.insert(lines,"")
@@ -130,8 +273,10 @@ function Report.ComparisonText(before, after)
       local old=change.before or {}
       local new=change.after or {}
       table.insert(lines,string.format(
-        "[%s] %s: %s -> %s",
+        "[%s] %s: severity %s -> %s; actual %s -> %s",
         tostring(change.kind),tostring(change.key),
+        tostring(old.severity or "not present"),
+        tostring(new.severity or "not present"),
         tostring(old.actual or "not present"),
         tostring(new.actual or "not present")))
     end
@@ -140,7 +285,53 @@ function Report.ComparisonText(before, after)
   return table.concat(lines,"\n")
 end
 
+local function IdentityValue(value)
+  value=tostring(value or "")
+  return tostring(#value)..":"..value
+end
+
+local function FindingsIdentity(snapshot)
+  local diagnostics=snapshot and snapshot.diagnostics or {}
+  local findings=diagnostics.findings or {}
+  local result={}
+
+  for _,finding in ipairs(findings) do
+    table.insert(result,table.concat({
+      IdentityValue(finding.category),
+      IdentityValue(finding.subject),
+      IdentityValue(finding.severity),
+      IdentityValue(finding.actual),
+    },"|"))
+  end
+
+  table.sort(result)
+  return table.concat(result,";")
+end
+
 local function SnapshotIdentity(snapshot)
+  local diagnostics=snapshot and snapshot.diagnostics or {}
+  local evidence=diagnostics.evidence or {}
+  local header=diagnostics.header or {}
+  return table.concat({
+    IdentityValue(snapshot and snapshot.captured or ""),
+    IdentityValue(diagnostics.generatedAt),
+    IdentityValue(header.map),
+    IdentityValue(header.instance),
+    IdentityValue(header.difficulty),
+    IdentityValue(evidence.addon),
+    IdentityValue(evidence.core),
+    IdentityValue(FindingsIdentity(snapshot)),
+  },"|")
+end
+
+local function CapturedAddonBuild(before, after)
+  local snapshot=after or before
+  local diagnostics=snapshot and snapshot.diagnostics or {}
+  local evidence=diagnostics.evidence or {}
+  return Trim(evidence.addon)
+end
+
+local function LegacySnapshotIdentity(snapshot)
   local diagnostics=snapshot and snapshot.diagnostics or {}
   local evidence=diagnostics.evidence or {}
   local header=diagnostics.header or {}
@@ -155,15 +346,13 @@ local function SnapshotIdentity(snapshot)
   },"|")
 end
 
-local function CapturedAddonBuild(before, after)
-  local snapshot=after or before
-  local diagnostics=snapshot and snapshot.diagnostics or {}
-  local evidence=diagnostics.evidence or {}
-  return Trim(evidence.addon)
+local function LegacyEvidenceFingerprint(before, after)
+  return LegacySnapshotIdentity(before).."=>"..
+    LegacySnapshotIdentity(after)
 end
 
 function Report.EvidenceFingerprint(before, after)
-  return SnapshotIdentity(before).."=>"..SnapshotIdentity(after)
+  return "v2|"..SnapshotIdentity(before).."=>"..SnapshotIdentity(after)
 end
 
 function Report.Template(before, after, activeBuild)
@@ -242,13 +431,41 @@ function Report.ReviewText(text)
     end
   end
 
-  if text:find("%d+%.%d+%.%d+%.%d+") then
+  if ContainsSensitiveIPv4(text) then
     table.insert(issues,"Review or remove the detected IPv4 address.")
   end
-  if text:find("[A-Za-z]:\\") or text:find("/home/",1,true) then
+  if ContainsSensitivePath(text) then
     table.insert(issues,"Review or remove the detected local path.")
   end
-  if text:find("unknown",1,true) then
+  local unresolvedGeneratedValues={
+    "Evidence captured: `unknown`",
+    "Instance script: `unknown`",
+    "AzerCore Ops addon `unknown`",
+    "module `unknown`",
+    "module commit `unknown`",
+    "build `unknown`",
+    "Core workspace: `unknown`",
+    "core date: `unknown`",
+    "AzerCore Ops workspace: `unknown`",
+    "Playerbots commit: `unknown`",
+    "Playerbots workspace: `unknown`",
+  }
+
+  local unresolved=false
+  for _,marker in ipairs(unresolvedGeneratedValues) do
+    if text:find(marker,1,true) then
+      unresolved=true
+      break
+    end
+  end
+
+  if not unresolved
+    and text:find("### AC rev%. hash/commit%s+`unknown`")
+  then
+    unresolved=true
+  end
+
+  if unresolved then
     table.insert(issues,"Replace or explain remaining unknown values.")
   end
 
@@ -288,10 +505,15 @@ function Report.OpenDraft(
   if AzerCoreOpsDB.issueReportDraftText
     and AzerCoreOpsDB.issueReportDraftFingerprint~=fingerprint
   then
-    setStatus(
-      "Saved draft belongs to different evidence. Click New Issue Draft to replace it deliberately.",
-      true)
-    return
+    local legacyFingerprint=LegacyEvidenceFingerprint(before,after)
+    if AzerCoreOpsDB.issueReportDraftFingerprint==legacyFingerprint then
+      AzerCoreOpsDB.issueReportDraftFingerprint=fingerprint
+    else
+      setStatus(
+        "Saved draft belongs to different evidence. Click New Issue Draft to replace it deliberately.",
+        true)
+      return
+    end
   end
 
   if not AzerCoreOpsDB.issueReportDraftText then
@@ -315,42 +537,6 @@ function Report.OpenDraft(
           "Issue draft saved — "..table.concat(issues," "),true)
       end
     end)
-end
-
-function Report.Readiness(draft, before, after)
-  draft=draft or {}
-  local missing={}
-  local snapshot=after or before
-  local diagnostics=snapshot and snapshot.diagnostics or nil
-  local evidence=diagnostics and diagnostics.evidence or nil
-
-  if not diagnostics or not diagnostics.header then
-    table.insert(missing,"A completed diagnostic snapshot")
-  end
-  if Trim(draft.current)=="" then
-    table.insert(missing,"Current Behaviour")
-  end
-  if Trim(draft.expected)=="" then
-    table.insert(missing,"Expected Behaviour")
-  end
-  if Trim(draft.source)=="" then
-    table.insert(missing,"Source")
-  end
-  if Trim(draft.steps)=="" then
-    table.insert(missing,"Steps to reproduce")
-  end
-  if not evidence or Trim(evidence.core)=="" or evidence.core=="unknown" then
-    table.insert(missing,"AzerothCore revision")
-  end
-  if Trim(draft.operatingSystem)=="" then
-    table.insert(missing,"Operating system")
-  end
-  if Trim(draft.customChanges)=="" then
-    table.insert(missing,"Custom changes or enabled modules")
-  end
-
-  local status=#missing==0 and "READY_FOR_REVIEW" or "DRAFT"
-  return status,missing
 end
 
 local function AddFindings(lines, snapshot)
@@ -394,9 +580,11 @@ local function AddComparison(lines, before, after)
     local old=change.before or {}
     local new=change.after or {}
     table.insert(lines,string.format(
-      "- **%s** `%s`: `%s` → `%s`",
+      "- **%s** `%s`: severity `%s` → `%s`; actual `%s` → `%s`",
       Safe(change.kind),
       Safe(change.key),
+      Safe(old.severity or "not present"),
+      Safe(new.severity or "not present"),
       Safe(old.actual or "not present"),
       Safe(new.actual or "not present")))
   end

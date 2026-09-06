@@ -1,6 +1,6 @@
 local ADDON = ...
 
--- AzerCore Ops Platform 0.7.2
+-- AzerCore Ops Platform 0.7.3
 -- Target: WoW 3.3.5a / AzerothCore. All server commands live here so that
 -- branch-specific command names can be changed without touching the UI.
 local CMD = {
@@ -39,7 +39,7 @@ local CMD = {
 
 local DS = AzerCoreOpsDesign
 local Platform = AzerCoreOpsPlatform
-Platform.AddonBuild="0.7.2"
+Platform.AddonBuild="0.7.3"
 local C = {
   bg=DS.Colors.Background,
   panel=DS.Colors.Surface,
@@ -122,7 +122,7 @@ local defaults={
   rememberAuditFilter=true,autoReaudit=false,confirmResetSelected=true,
   warnNoTarget=true,compactAuditRows=false,auditFontSize=10,shiftClickInsert=true,
 }
-local ADDON_VERSION="0.7.2"
+local ADDON_VERSION="0.7.3"
 local PROTOCOL_VERSION="1"
 local TESTED_CORE="190184a04539"
 local TESTED_PLAYERBOTS="ba46fcdecde3"
@@ -6226,32 +6226,33 @@ local function BuildInstances()
 
   instanceUI.issueBeforeButton=Button(
     diagnosticControls,"Mark Before",72,22,function()
-      local ready,reason=AzerCoreOpsIssueReport.CanCapture(
-        instanceUI.diagnostics)
-      if not ready then SetStatus(reason,true); return end
       AzerCoreOpsDB.issueReportEvidence=
         AzerCoreOpsDB.issueReportEvidence or {}
-      AzerCoreOpsDB.issueReportEvidence.before=
-        AzerCoreOpsIssueReport.Capture(
-          instanceUI.diagnostics,instanceUI.encounterHistory)
-      SetStatus("Before evidence captured at "..
-        tostring(AzerCoreOpsDB.issueReportEvidence.before.captured)..".")
+      local evidence=AzerCoreOpsDB.issueReportEvidence
+      local hadAfter=evidence.after~=nil
+      local ready,result=AzerCoreOpsIssueReport.MarkBefore(
+        evidence,instanceUI.diagnostics,instanceUI.encounterHistory)
+      if not ready then SetStatus(result,true); return end
+      local message="Before evidence captured at "..
+        tostring(result.captured).."."
+      if hadAfter then
+        message=message.." Previous After evidence cleared."
+      end
+      SetStatus(message)
     end,
     "Preserve the completed scan as the state before reproduction")
   instanceUI.issueBeforeButton:SetPoint("TOPLEFT",12,-285)
 
   instanceUI.issueAfterButton=Button(
     diagnosticControls,"Mark After",72,22,function()
-      local ready,reason=AzerCoreOpsIssueReport.CanCapture(
-        instanceUI.diagnostics)
-      if not ready then SetStatus(reason,true); return end
       AzerCoreOpsDB.issueReportEvidence=
         AzerCoreOpsDB.issueReportEvidence or {}
-      AzerCoreOpsDB.issueReportEvidence.after=
-        AzerCoreOpsIssueReport.Capture(
-          instanceUI.diagnostics,instanceUI.encounterHistory)
+      local evidence=AzerCoreOpsDB.issueReportEvidence
+      local ready,result=AzerCoreOpsIssueReport.MarkAfter(
+        evidence,instanceUI.diagnostics,instanceUI.encounterHistory)
+      if not ready then SetStatus(result,true); return end
       SetStatus("After evidence captured at "..
-        tostring(AzerCoreOpsDB.issueReportEvidence.after.captured)..".")
+        tostring(result.captured)..".")
     end,
     "Preserve the completed scan as the state after reproduction")
   instanceUI.issueAfterButton:SetPoint("TOPLEFT",90,-285)
@@ -6928,7 +6929,7 @@ local function BuildDashboard()
   Button(quick,"Inspect Quest",150,30,function() SelectTab("Quest") end,"Open quest search and chain analysis"):SetPoint("TOPLEFT",174,-42)
   Button(quick,"Check Compatibility",150,30,function() RequestCompatibility(); OpenOptions() end,"Query the running AzerCoreOps module"):SetPoint("TOPLEFT",336,-42)
   Button(quick,"Information & Credits",170,30,function() SelectTab("Information") end,"View project links, credits, and acknowledgements"):SetPoint("TOPLEFT",498,-42)
-  local note=quick:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); note:SetPoint("TOPLEFT",12,-92); note:SetPoint("BOTTOMRIGHT",-12,12); note:SetJustifyH("LEFT"); note:SetJustifyV("TOP"); note:SetWordWrap(true); note:SetTextColor(unpack(C.white)); note:SetText("Release: v0.7.2\n\nAzerCore Ops 0.7.2 adds before-and-after diagnostic evidence, privacy-conscious upstream issue drafts, saved-draft protection, and Lua 5.1 regression validation. Courier remains under construction and is not included as an active release feature.")
+  local note=quick:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); note:SetPoint("TOPLEFT",12,-92); note:SetPoint("BOTTOMRIGHT",-12,12); note:SetJustifyH("LEFT"); note:SetJustifyV("TOP"); note:SetWordWrap(true); note:SetTextColor(unpack(C.white)); note:SetText("Release: v0.7.3\n\nAzerCore Ops 0.7.3 polishes upstream issue reporting with safer Before/After evidence lifecycle handling, clearer severity-aware comparisons, stronger saved-draft evidence binding with legacy migration, and more precise privacy validation for unknown values, IPv4 addresses, and local paths. Courier remains under construction and is not included as an active release feature.")
 end
 
 
@@ -7118,7 +7119,8 @@ local function BuildUI()
     local b=Button(sidebar,label,132,30,function() SelectTab(pageName) end); b:SetPoint("TOPLEFT",14,-38-(i-1)*36); tabs[pageName]=b
     b:SetScript("OnLeave",function(self) self:SetBackdropColor(unpack(activeTab==pageName and C.selected or C.button)); self:SetBackdropBorderColor(unpack(activeTab==pageName and C.gold or C.border)); GameTooltip:Hide() end)
   end
-  local build=sidebar:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); build:SetPoint("BOTTOMLEFT",14,14); build:SetPoint("BOTTOMRIGHT",-14,14); build:SetJustifyH("LEFT"); build:SetTextColor(.65,.65,.65,1); build:SetText("Protocol v"..PROTOCOL_VERSION.."\nDevelopment build")
+  local build=sidebar:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); build:SetPoint("BOTTOMLEFT",14,14); build:SetPoint("BOTTOMRIGHT",-14,14); build:SetJustifyH("LEFT"); build:SetTextColor(.65,.65,.65,1); build:SetText("Addon v"..(Platform.AddonBuild or ADDON_VERSION)..
+    "\nProtocol v"..PROTOCOL_VERSION)
 
   content=CreateFrame("Frame",nil,main); content:SetPoint("TOPLEFT",180,-48); content:SetPoint("BOTTOMRIGHT",-10,32); Backdrop(content,C.panel)
   statusText=main:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); statusText:SetPoint("BOTTOMLEFT",14,11); statusText:SetPoint("BOTTOMRIGHT",-14,11); statusText:SetJustifyH("LEFT")

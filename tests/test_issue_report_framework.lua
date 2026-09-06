@@ -89,6 +89,46 @@ Test("CanCapture rejects loading diagnostics",function()
   Contains(reason,"Wait","loading rejection reason")
 end)
 
+Test("MarkBefore clears stale After evidence",function()
+  local evidence={
+    after=Report.Capture(Diagnostics("0.7.1d","FAIL"),{}),
+  }
+
+  local ready,snapshot=Report.MarkBefore(
+    evidence,Diagnostics("0.7.1d","NOT_STARTED"),{})
+
+  Equal(ready,true,"Before capture rejected")
+  if evidence.before~=snapshot then
+    error("stored Before snapshot does not match returned snapshot")
+  end
+  Equal(evidence.after,nil,"stale After evidence was retained")
+end)
+
+Test("MarkAfter requires Before evidence",function()
+  local evidence={}
+  local ready,reason=Report.MarkAfter(evidence,Diagnostics(),{})
+
+  Equal(ready,false,"After capture accepted without Before")
+  Contains(reason,"Before","missing-Before rejection reason")
+  Equal(evidence.after,nil,"After evidence was stored unexpectedly")
+end)
+
+Test("MarkAfter captures evidence after Before",function()
+  local evidence={}
+  local ready=Report.MarkBefore(evidence,Diagnostics(),{})
+  Equal(ready,true,"Before capture rejected")
+
+  local afterReady,snapshot=Report.MarkAfter(
+    evidence,Diagnostics("0.7.1d","FAIL"),{})
+
+  Equal(afterReady,true,"After capture rejected")
+  if evidence.after~=snapshot then
+    error("stored After snapshot does not match returned snapshot")
+  end
+  Equal(snapshot.diagnostics.findings[1].actual,"FAIL",
+    "After snapshot content")
+end)
+
 Test("Compare detects changed findings",function()
   local before=Report.Capture(Diagnostics("0.7.1d","FAIL"),{})
   local after=Report.Capture(Diagnostics("0.7.1d","NOT_STARTED"),{})
@@ -97,6 +137,22 @@ Test("Compare detects changed findings",function()
   Equal(changes[1].kind,"CHANGED","change kind")
   Equal(changes[1].before.actual,"FAIL","before value")
   Equal(changes[1].after.actual,"NOT_STARTED","after value")
+end)
+
+Test("ComparisonText exposes severity-only changes",function()
+  local before=Report.Capture(Diagnostics(),{})
+  local after=Report.Capture(Diagnostics(),{})
+  after.diagnostics.findings[1].severity="WARNING"
+
+  local changes=Report.Compare(before,after)
+  Equal(#changes,1,"severity-only change count")
+  Equal(changes[1].kind,"CHANGED","severity-only change kind")
+
+  local report=Report.ComparisonText(before,after)
+  Contains(
+    report,
+    "severity EXPECTED -> WARNING; actual NOT_STARTED -> NOT_STARTED",
+    "severity-only comparison detail")
 end)
 
 Test("ComparisonText reports no changes",function()
@@ -117,12 +173,51 @@ Test("Evidence fingerprint changes with evidence",function()
   if first==second then error("fingerprints should differ") end
 end)
 
+Test("Evidence fingerprint includes finding content",function()
+  local first=Report.Capture(Diagnostics("0.7.1d","NOT_STARTED"),{})
+  local changed=Report.Copy(first)
+  changed.diagnostics.findings[1].actual="FAIL"
+
+  Equal(changed.captured,first.captured,
+    "test requires matching capture timestamps")
+  Equal(changed.diagnostics.generatedAt,first.diagnostics.generatedAt,
+    "test requires matching diagnostic timestamps")
+
+  local originalFingerprint=Report.EvidenceFingerprint(first,nil)
+  local changedFingerprint=Report.EvidenceFingerprint(changed,nil)
+
+  if originalFingerprint==changedFingerprint then
+    error("finding content did not affect evidence fingerprint")
+  end
+end)
+
 Test("Historical evidence is labelled",function()
   local before=Report.Capture(Diagnostics("0.7.1b"),{})
   local report=Report.Template(before,nil,"0.7.1d")
   Contains(report,"Historical evidence:","historical warning")
   Contains(report,"`0.7.1b`","captured build")
   Contains(report,"`0.7.1d`","active build")
+end)
+
+Test("Compose exposes severity-only comparison changes",function()
+  local before=Report.Capture(Diagnostics(),{})
+  local after=Report.Copy(before)
+  after.diagnostics.findings[1].severity="WARNING"
+
+  local report=Report.Compose({
+    current="The diagnostic state changes unexpectedly.",
+    expected="The diagnostic state should remain stable.",
+    source="Verified in the instance diagnostic profile.",
+    steps="1. Enter the instance. 2. Run the diagnostic scan.",
+    notes="None provided.",
+    operatingSystem="Debian GNU/Linux.",
+    customChanges="No relevant custom changes.",
+  },before,after)
+
+  Contains(
+    report,
+    "severity `EXPECTED` → `WARNING`; actual `NOT_STARTED` → `NOT_STARTED`",
+    "composed severity-only comparison detail")
 end)
 
 Test("Review names unfinished sections",function()
@@ -169,6 +264,314 @@ No relevant custom changes.
   Equal(#issues,0,"completed review issues")
 end)
 
+Test("Compose preserves four-part version numbers",function()
+  local before=Report.Capture(Diagnostics(),{})
+
+  local report=Report.Compose({
+    current="The problem occurs with component version 1.2.3.4.",
+    expected="The component should behave normally.",
+    source="Verified in the component source.",
+    steps="1. Start the instance. 2. Reproduce the issue.",
+    notes="None provided.",
+    operatingSystem="Debian GNU/Linux.",
+    customChanges="No relevant custom changes.",
+  },before,nil)
+
+  Contains(
+    report,
+    "component version 1.2.3.4",
+    "four-part version was redacted")
+
+  if report:find(
+    "component version [REDACTED_IP]",1,true)
+  then
+    error("four-part version was treated as an IPv4 address")
+  end
+end)
+
+Test("Compose redacts genuine IPv4 addresses",function()
+  local before=Report.Capture(Diagnostics(),{})
+
+  local report=Report.Compose({
+    current="The server reported address 192.168.1.42.",
+    expected="No server address should appear in the report.",
+    source="Verified during reproduction.",
+    steps="1. Start the instance. 2. Reproduce the issue.",
+    notes="None provided.",
+    operatingSystem="Debian GNU/Linux.",
+    customChanges="No relevant custom changes.",
+  },before,nil)
+
+  Contains(report,"[REDACTED_IP]","IPv4 address was not redacted")
+
+  if report:find("192.168.1.42",1,true) then
+    error("IPv4 address remained in composed report")
+  end
+end)
+
+Test("Review allows four-part version numbers",function()
+  local text=[[
+### Current Behaviour
+The problem occurs with component version 1.2.3.4.
+
+### Expected Behaviour
+The component should behave normally.
+
+### Source
+Verified in the component source.
+
+### Steps to reproduce the problem
+1. Start the instance.
+2. Reproduce the issue.
+
+### Extra Notes
+None provided.
+
+### AC rev. hash/commit
+`abcdef123456`
+
+### Operating system
+Debian GNU/Linux.
+
+### Custom changes or Modules
+No relevant custom changes.
+]]
+
+  local state,issues=Report.ReviewText(text)
+  Equal(state,"READY_FOR_REVIEW","four-part version rejected")
+  Equal(#issues,0,"four-part version produced review issues")
+end)
+
+Test("Review allows version label with linking verb",function()
+  local text=[[
+### Current Behaviour
+The component version is 1.2.3.4.
+
+### Expected Behaviour
+The component should behave normally.
+
+### Source
+Verified in the component source.
+
+### Steps to reproduce the problem
+1. Start the instance.
+2. Reproduce the issue.
+
+### Extra Notes
+None provided.
+
+### AC rev. hash/commit
+`abcdef123456`
+
+### Operating system
+Debian GNU/Linux.
+
+### Custom changes or Modules
+No relevant custom changes.
+]]
+
+  local state,issues=Report.ReviewText(text)
+  Equal(state,"READY_FOR_REVIEW","version label with linking verb rejected")
+  Equal(#issues,0,"version label with linking verb produced review issues")
+end)
+
+Test("Review rejects genuine IPv4 addresses",function()
+  local text=[[
+### Current Behaviour
+The server reported address 192.168.1.42.
+
+### Expected Behaviour
+No server address should appear in the report.
+
+### Source
+Verified during reproduction.
+
+### Steps to reproduce the problem
+1. Start the instance.
+2. Reproduce the issue.
+
+### Extra Notes
+None provided.
+
+### AC rev. hash/commit
+`abcdef123456`
+
+### Operating system
+Debian GNU/Linux.
+
+### Custom changes or Modules
+No relevant custom changes.
+]]
+
+  local state,issues=Report.ReviewText(text)
+  Equal(state,"DRAFT","IPv4 address accepted")
+  Equal(#issues,1,"IPv4 review issue count")
+  Equal(
+    issues[1],
+    "Review or remove the detected IPv4 address.",
+    "IPv4 review warning")
+end)
+
+Test("Compose redacts sensitive local paths",function()
+  local before=Report.Capture(Diagnostics(),{})
+
+  local report=Report.Compose({
+    current="Logs were written under /home/cura/azerothcore/server.log.",
+    expected="Local paths should not appear in the report.",
+    source="Verified during reproduction.",
+    steps="1. Start the instance. 2. Reproduce the issue.",
+    notes="None provided.",
+    operatingSystem="Debian GNU/Linux.",
+    customChanges="No relevant custom changes.",
+  },before,nil)
+
+  Contains(report,"[REDACTED_PATH]","Unix home path was not redacted")
+
+  if report:find("/home/cura/",1,true) then
+    error("Unix home path remained in composed report")
+  end
+end)
+
+Test("Review rejects sensitive local paths",function()
+  local text=[[
+### Current Behaviour
+The file was written to C:\Users\cura\server.log.
+
+### Expected Behaviour
+Local paths should not appear in the report.
+
+### Source
+Verified during reproduction.
+
+### Steps to reproduce the problem
+1. Start the instance.
+2. Reproduce the issue.
+
+### Extra Notes
+None provided.
+
+### AC rev. hash/commit
+`abcdef123456`
+
+### Operating system
+Debian GNU/Linux.
+
+### Custom changes or Modules
+No relevant custom changes.
+]]
+
+  local state,issues=Report.ReviewText(text)
+  Equal(state,"DRAFT","sensitive Windows path accepted")
+  Equal(#issues,1,"local-path review issue count")
+  Equal(
+    issues[1],
+    "Review or remove the detected local path.",
+    "local-path review warning")
+end)
+
+Test("Review allows bare path syntax examples",function()
+  local text=[[
+### Current Behaviour
+The documentation mentions C:\ and /home/ as path syntax examples.
+
+### Expected Behaviour
+Documentation examples should remain valid.
+
+### Source
+Verified in documentation.
+
+### Steps to reproduce the problem
+1. Open the documentation.
+2. Review the path syntax examples.
+
+### Extra Notes
+None provided.
+
+### AC rev. hash/commit
+`abcdef123456`
+
+### Operating system
+Debian GNU/Linux.
+
+### Custom changes or Modules
+No relevant custom changes.
+]]
+
+  local state,issues=Report.ReviewText(text)
+  Equal(state,"READY_FOR_REVIEW","bare path syntax example rejected")
+  Equal(#issues,0,"bare path syntax example produced review issues")
+end)
+
+Test("Review allows unknown in legitimate prose",function()
+  local text=[[
+### Current Behaviour
+The root cause is currently unknown, but the encounter state changes unexpectedly.
+
+### Expected Behaviour
+The encounter state should remain stable.
+
+### Source
+Verified in the instance diagnostic profile.
+
+### Steps to reproduce the problem
+1. Enter the instance.
+2. Run the diagnostic scan.
+
+### Extra Notes
+None provided.
+
+### AC rev. hash/commit
+`abcdef123456`
+
+### Operating system
+Debian GNU/Linux.
+
+### Custom changes or Modules
+No relevant custom changes.
+]]
+
+  local state,issues=Report.ReviewText(text)
+  Equal(state,"READY_FOR_REVIEW","legitimate unknown prose rejected")
+  Equal(#issues,0,"legitimate unknown prose produced review issues")
+end)
+
+Test("Review rejects generated unknown metadata",function()
+  local text=[[
+### Current Behaviour
+The encounter state changes unexpectedly.
+
+### Expected Behaviour
+The encounter state should remain stable.
+
+### Source
+Verified in the instance diagnostic profile.
+
+### Steps to reproduce the problem
+1. Enter the instance.
+2. Run the diagnostic scan.
+
+### Extra Notes
+None provided.
+
+### AC rev. hash/commit
+`unknown`
+
+### Operating system
+Debian GNU/Linux.
+
+### Custom changes or Modules
+No relevant custom changes.
+]]
+
+  local state,issues=Report.ReviewText(text)
+  Equal(state,"DRAFT","generated unknown metadata accepted")
+  Equal(#issues,1,"generated unknown metadata issue count")
+  Equal(
+    issues[1],
+    "Replace or explain remaining unknown values.",
+    "generated unknown metadata warning")
+end)
+
 Test("Draft is bound to its evidence fingerprint",function()
   AzerCoreOpsDB={}
   local before=Report.Capture(Diagnostics(),{})
@@ -178,6 +581,52 @@ Test("Draft is bound to its evidence fingerprint",function()
     AzerCoreOpsDB.issueReportDraftFingerprint,
     Report.EvidenceFingerprint(before,nil),
     "stored fingerprint")
+end)
+
+Test("Legacy evidence fingerprint migrates saved draft",function()
+  AzerCoreOpsDB={}
+  local before=Report.Capture(Diagnostics(),{})
+  local diagnostics=before.diagnostics
+  local evidence=diagnostics.evidence
+  local header=diagnostics.header
+
+  local legacyBefore=table.concat({
+    tostring(before.captured or ""),
+    tostring(diagnostics.generatedAt or ""),
+    tostring(header.map or ""),
+    tostring(header.instance or ""),
+    tostring(header.difficulty or ""),
+    tostring(evidence.addon or ""),
+    tostring(evidence.core or ""),
+  },"|")
+  local legacyAfter=table.concat({"","","","","","",""},"|")
+
+  AzerCoreOpsDB.issueReportDraftText="preserved legacy draft"
+  AzerCoreOpsDB.issueReportDraftFingerprint=
+    legacyBefore.."=>"..legacyAfter
+
+  local shown=false
+  local shownText=""
+  local status=""
+
+  Report.OpenDraft(
+    before,nil,"0.7.1d",
+    function(title,text)
+      shown=true
+      shownText=text
+    end,
+    function(message)
+      status=message
+    end)
+
+  Equal(shown,true,"legacy saved draft was rejected")
+  Equal(shownText,"preserved legacy draft",
+    "legacy saved draft was replaced")
+  Equal(
+    AzerCoreOpsDB.issueReportDraftFingerprint,
+    Report.EvidenceFingerprint(before,nil),
+    "legacy fingerprint was not migrated")
+  Equal(status,"","legacy migration produced an error status")
 end)
 
 Test("Different evidence cannot reuse a saved draft",function()
