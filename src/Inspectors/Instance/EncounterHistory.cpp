@@ -2,6 +2,7 @@
 
 #include "Chat.h"
 #include "GlobalScript.h"
+#include "InstanceDiagnosticEngine.h"
 #include "InstanceProfile.h"
 #include "InstanceScript.h"
 #include "Map.h"
@@ -12,6 +13,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
+#include <cstdlib>
 #include <deque>
 #include <mutex>
 #include <string>
@@ -25,6 +27,14 @@ namespace
 {
 constexpr std::size_t MaxEntriesPerInstance = 64;
 constexpr std::uint64_t WipeChainWindowMs = 10000;
+
+std::uint32_t ParseRequestId(Acore::ChatCommands::Tail requestArg)
+{
+    std::string raw(requestArg);
+    if (raw.empty())
+        return 0;
+    return static_cast<std::uint32_t>(std::strtoul(raw.c_str(), nullptr, 10));
+}
 
 struct EncounterCounters
 {
@@ -88,6 +98,7 @@ EncounterHistoryEntry const* PreviousFor(
 }
 
 std::pair<std::string, std::string> ClassifyTransition(
+    Map* map,
     std::deque<EncounterHistoryEntry> const& entries,
     std::uint32_t encounterId,
     EncounterState oldState,
@@ -148,6 +159,19 @@ std::pair<std::string, std::string> ClassifyTransition(
             };
         }
 
+        InitialStateAssessment initial =
+            InstanceDiagnosticEngine::AssessInitialState(
+                map,
+                encounterId,
+                newState);
+        if (initial.allowed)
+        {
+            return {
+                "EXPECTED",
+                initial.reason
+            };
+        }
+
         return {
             "SUSPICIOUS",
             "FAIL was requested from NOT_STARTED without a preceding active encounter transition"
@@ -203,6 +227,7 @@ void RecordTransition(
 
     auto classification =
         ClassifyTransition(
+            map,
             entries,
             encounterId,
             oldState,
@@ -455,12 +480,46 @@ public:
 };
 } // namespace
 
-bool EncounterHistory::Show(ChatHandler* handler)
+bool EncounterHistory::LatestTransition(
+    std::uint32_t instanceId,
+    std::uint32_t encounterId,
+    std::uint32_t currentState,
+    std::string& classification,
+    std::string& event,
+    std::string& detail)
 {
+    std::lock_guard<std::mutex> lock(HistoryMutex);
+
+    auto historyItr = HistoryByInstance.find(instanceId);
+    if (historyItr == HistoryByInstance.end())
+        return false;
+
+    auto entryItr = std::find_if(
+        historyItr->second.rbegin(),
+        historyItr->second.rend(),
+        [encounterId, currentState](EncounterHistoryEntry const& entry)
+        {
+            return entry.encounterId == encounterId &&
+                static_cast<std::uint32_t>(entry.newState) == currentState;
+        });
+
+    if (entryItr == historyItr->second.rend())
+        return false;
+
+    classification = entryItr->classification;
+    event = entryItr->event;
+    detail = entryItr->detail;
+    return true;
+}
+
+bool EncounterHistory::Show(ChatHandler* handler, Acore::ChatCommands::Tail requestArg)
+{
+    std::uint32_t requestId = ParseRequestId(requestArg);
     if (!handler || !handler->GetPlayer())
     {
         Protocol::SendEncounterHistoryError(
             handler,
+            requestId,
             "Encounter history requires an in-game player session");
         return true;
     }
@@ -474,6 +533,7 @@ bool EncounterHistory::Show(ChatHandler* handler)
     {
         Protocol::SendEncounterHistoryError(
             handler,
+            requestId,
             "Enter a dungeon or raid instance before requesting encounter history");
         return true;
     }
@@ -483,6 +543,7 @@ bool EncounterHistory::Show(ChatHandler* handler)
 
     Protocol::SendEncounterHistoryBegin(
         handler,
+        requestId,
         map->GetId(),
         map->GetInstanceId(),
         static_cast<std::uint32_t>(
@@ -501,6 +562,7 @@ bool EncounterHistory::Show(ChatHandler* handler)
 
         Protocol::SendEncounterHistoryEntry(
             handler,
+            requestId,
             entry.sequence,
             entry.timestampMs,
             entry.encounterId,
@@ -528,6 +590,7 @@ bool EncounterHistory::Show(ChatHandler* handler)
     {
         Protocol::SendEncounterHistoryStats(
             handler,
+            requestId,
             pair.first,
             ResolveEncounterName(map, pair.first),
             pair.second.attempts,
@@ -537,6 +600,7 @@ bool EncounterHistory::Show(ChatHandler* handler)
 
     Protocol::SendEncounterHistoryEnd(
         handler,
+        requestId,
         static_cast<std::uint32_t>(
             snapshot.entries.size()),
         anomalies);

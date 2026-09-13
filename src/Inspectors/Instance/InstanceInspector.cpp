@@ -24,6 +24,9 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
+#include <limits>
+#include <cstdlib>
 #include <sstream>
 #include <set>
 #include <string>
@@ -56,9 +59,18 @@ char const* GameObjectStateName(GOState state)
     return "UNKNOWN";
 }
 
+std::uint32_t ParseRequestId(Tail requestArg)
+{
+    std::string raw(requestArg);
+    if (raw.empty())
+        return 0;
+    return static_cast<std::uint32_t>(std::strtoul(raw.c_str(), nullptr, 10));
+}
+
 struct DiagnosticEmitter
 {
     ChatHandler* handler;
+    uint32 requestId{0};
     uint32 passed{0};
     uint32 warnings{0};
     uint32 failures{0};
@@ -68,7 +80,7 @@ struct DiagnosticEmitter
         if (severity == "PASS" || severity == "EXPECTED" || severity == "INFO") ++passed;
         else if (severity == "FAIL") ++failures;
         else ++warnings;
-        Protocol::SendEncounterDiagnosticFinding(handler, severity, category, subject, expected, actual, detail, recommendation);
+        Protocol::SendEncounterDiagnosticFinding(handler, requestId, severity, category, subject, expected, actual, detail, recommendation);
     }
 };
 
@@ -374,12 +386,13 @@ bool InstanceInspector::Binds(ChatHandler* handler, Tail scopeArg)
     return true;
 }
 
-bool InstanceInspector::Diagnose(ChatHandler* handler)
+bool InstanceInspector::Diagnose(ChatHandler* handler, Tail requestArg)
 {
+    std::uint32_t requestId = ParseRequestId(requestArg);
     Player* player = handler && handler->GetSession() ? handler->GetSession()->GetPlayer() : nullptr;
     if (!player || !player->GetMap() || !player->GetMap()->IsDungeon())
     {
-        Protocol::SendEncounterDiagnosticError(handler, "Enter the dungeon or raid instance that you want to diagnose");
+        Protocol::SendEncounterDiagnosticError(handler, requestId, "Enter the dungeon or raid instance that you want to diagnose");
         return true;
     }
 
@@ -388,10 +401,11 @@ bool InstanceInspector::Diagnose(ChatHandler* handler)
     MapEntry const* mapEntry = sMapStore.LookupEntry(player->GetMapId());
     std::string mapName = mapEntry ? LocalizedMapName(mapEntry, handler) : ("Map " + std::to_string(player->GetMapId()));
     std::string scriptName = map ? map->GetScriptName() : "";
-    Protocol::SendEncounterDiagnosticBegin(handler, player->GetMapId(), player->GetInstanceId(), uint32(map->GetDifficulty()), mapName, scriptName.empty() ? "None" : scriptName);
-    DiagnosticEmitter diagnostics{handler};
+    Protocol::SendEncounterDiagnosticBegin(handler, requestId, player->GetMapId(), player->GetInstanceId(), uint32(map->GetDifficulty()), mapName, scriptName.empty() ? "None" : scriptName);
+    DiagnosticEmitter diagnostics{handler, requestId};
     RecoveryContext recoveryContext;
     recoveryContext.mapId = player->GetMapId();
+    recoveryContext.instanceId = player->GetInstanceId();
     recoveryContext.difficulty = uint32(map->GetDifficulty());
     recoveryContext.scriptName = scriptName;
     recoveryContext.instanceEncounterInProgress = script && script->IsEncounterInProgress();
@@ -399,6 +413,7 @@ bool InstanceInspector::Diagnose(ChatHandler* handler)
     diagnostics.Finding(script ? "PASS" : "FAIL", "INSTANCE", "Instance script", "Loaded", script ? (scriptName.empty() ? "Loaded; name unavailable" : scriptName) : "Missing", script ? "The instance has an authoritative runtime controller" : "Boss progression, doors and event state cannot be evaluated without an InstanceScript", script ? "No action required" : "Verify the map ScriptName and rebuild/restart the server before attempting encounter repairs");
     diagnostics.Finding(script && script->IsEncounterInProgress() ? "INFO" : "PASS", "INSTANCE", "Encounter activity", "Valid runtime activity", script && script->IsEncounterInProgress() ? "An encounter is in progress" : "No encounter currently in progress", script && script->IsEncounterInProgress() ? "The instance confirms active scripted combat" : "The instance is not globally locked by an active encounter", script && script->IsEncounterInProgress() ? "Complete or wipe the active encounter normally, then rescan" : "No action required");
 
+    InstanceProfile const* instanceProfile = InstanceProfileCatalog::Find(player->GetMapId());
     if (Creature* selected = handler->getSelectedCreature())
     {
         recoveryContext.selectedCreatureEntry = selected->GetEntry();
@@ -410,11 +425,43 @@ bool InstanceInspector::Diagnose(ChatHandler* handler)
         diagnostics.Finding("PASS", "TARGET", selected->GetName(), "Runtime creature available", "Entry " + std::to_string(selected->GetEntry()) + (selected->IsAlive() ? "; alive" : "; dead") + (selected->IsInCombat() ? "; in combat" : "; out of combat"), "Selected creature runtime state was captured", "Use the findings below to compare creature state with encounter state");
         diagnostics.Finding(selectable ? "PASS" : "WARN", "TARGET", "Selectable flag", "Selectable when the encounter permits interaction", selectable ? "Selectable" : "UNIT_FLAG_NOT_SELECTABLE", selectable ? "The client can select this creature" : "The instance script or event may intentionally be preventing selection", selectable ? "No action required" : "Check prerequisites and event NPCs before changing unit flags manually");
         diagnostics.Finding(attackable ? "PASS" : "WARN", "TARGET", "Attackable flag", "Attackable only when the encounter is ready", attackable ? "Attackable" : "UNIT_FLAG_NON_ATTACKABLE", creatureTemplate ? ("AI " + (creatureTemplate->AIName.empty() ? std::string("default") : creatureTemplate->AIName) + "; Script ID " + std::to_string(creatureTemplate->ScriptID)) : "Creature template unavailable", attackable ? "No action required" : "Allow the scripted introduction to complete; do not force combat until prerequisites pass");
+
+        if (instanceProfile)
+        {
+            bool heroic = map->GetDifficulty() == RAID_DIFFICULTY_10MAN_HEROIC || map->GetDifficulty() == RAID_DIFFICULTY_25MAN_HEROIC;
+            for (EncounterMechanic const& mechanic : instanceProfile->mechanics)
+            {
+                if (mechanic.heroicOnly && !heroic)
+                    continue;
+                if (std::find(mechanic.creatureEntries.begin(), mechanic.creatureEntries.end(), selected->GetEntry()) == mechanic.creatureEntries.end())
+                    continue;
+
+                std::ostringstream actual;
+                actual << mechanic.phase << "; encounter script ID " << mechanic.encounter;
+                if (!mechanic.spellIds.empty())
+                {
+                    actual << "; spell IDs ";
+                    for (std::size_t i = 0; i < mechanic.spellIds.size(); ++i)
+                    {
+                        if (i)
+                            actual << ", ";
+                        actual << mechanic.spellIds[i];
+                    }
+                }
+                diagnostics.Finding(
+                    "INFO",
+                    "MECHANIC_PROFILE",
+                    mechanic.name,
+                    "Source-verified ICC mechanic",
+                    actual.str(),
+                    mechanic.sourceBehavior,
+                    "During recording, correlate this mechanic with encounter transitions, summons, spell activity and nearby objects; absence in a single snapshot is not a failure");
+            }
+        }
     }
     else
         diagnostics.Finding("INFO", "TARGET", "Selected creature", "Optional boss or event NPC target", "No creature selected", "Generic instance checks will continue; target-specific flags and AI are optional evidence", "Target an affected boss or event NPC only when investigating that creature");
 
-    InstanceProfile const* instanceProfile = InstanceProfileCatalog::Find(player->GetMapId());
     std::set<uint32> reportedEncounters;
     std::set<uint32> reportedScriptEncounters;
     for (DungeonEncounter const* encounter : EncountersFor(player->GetMapId(), map->GetDifficulty()))
@@ -448,7 +495,20 @@ bool InstanceInspector::Diagnose(ChatHandler* handler)
         for (ProgressionGate const& gate : instanceProfile->gates)
         {
             GateAssessment assessment = InstanceDiagnosticEngine::AssessGate(recoveryContext, gate);
-            diagnostics.Finding(assessment.severity, "GATE", gate.name, "All verified prerequisites complete", assessment.actual, assessment.detail, assessment.recommendation);
+            if (assessment.severity == "PASS" && gate.completionSignalDataId != 0)
+            {
+                uint32 signalValue = script->GetData(gate.completionSignalDataId);
+                bool signalAccepted = std::find(gate.completionSignalValues.begin(), gate.completionSignalValues.end(), signalValue) != gate.completionSignalValues.end();
+                if (!signalAccepted)
+                {
+                    assessment.severity = "EXPECTED";
+                    assessment.actual += "; progression signal " + std::to_string(gate.completionSignalDataId) + "=" +
+                        (signalValue <= TO_BE_DECIDED ? InstanceScript::GetBossStateName(EncounterState(signalValue)) : std::to_string(signalValue));
+                    assessment.detail = gate.consequence + "; boss prerequisites are complete but the scripted valve/airlock progression has not reached a verified accessible state";
+                    assessment.recommendation = "Complete the normal scripted progression controls, then rescan; do not force the dependant encounter state";
+                }
+            }
+            diagnostics.Finding(assessment.severity, "GATE", gate.name, "All verified prerequisites and scripted progression controls complete", assessment.actual, assessment.detail, assessment.recommendation);
         }
 
         bool heroic = map->GetDifficulty() == RAID_DIFFICULTY_10MAN_HEROIC || map->GetDifficulty() == RAID_DIFFICULTY_25MAN_HEROIC;
@@ -483,11 +543,57 @@ bool InstanceInspector::Diagnose(ChatHandler* handler)
             GameObject* gameObject = player->FindNearestGameObject(object.entry, 300.0f, false);
             if (!gameObject)
                 continue;
+
+            if (object.policy == ProfileObjectPolicy::EncounterRoomDoor)
+            {
+                RecoveryEncounter const* encounter = nullptr;
+                if (!object.prerequisites.empty())
+                {
+                    auto found = std::find_if(recoveryContext.encounters.begin(), recoveryContext.encounters.end(), [&object](RecoveryEncounter const& candidate)
+                    {
+                        return candidate.id == object.prerequisites.front();
+                    });
+                    if (found != recoveryContext.encounters.end())
+                        encounter = &*found;
+                }
+
+                bool open = gameObject->GetGoState() != GO_STATE_READY;
+                bool expectedOpen = !encounter || encounter->state != IN_PROGRESS;
+                std::string severity = open == expectedOpen ? (expectedOpen ? "PASS" : "EXPECTED") : "FAIL";
+                diagnostics.Finding(
+                    severity,
+                    object.category,
+                    object.name + " [" + std::to_string(object.entry) + "]",
+                    expectedOpen ? "Open outside active combat" : "Closed while encounter is IN_PROGRESS",
+                    GameObjectStateName(gameObject->GetGoState()),
+                    "This room door is correlated with encounter " + (encounter ? encounter->name : std::string("state")),
+                    severity == "FAIL" ? "Door and encounter state disagree; capture Before/After evidence before recovery" : "No recovery action required");
+                continue;
+            }
+
             bool ready = std::all_of(object.prerequisites.begin(), object.prerequisites.end(), encounterDone);
             std::string expected = ready ? "Available after verified prerequisites" : "Locked during current progression";
             if (object.policy == ProfileObjectPolicy::Observe)
             {
                 diagnostics.Finding("INFO", object.category, object.name + " [" + std::to_string(object.entry) + "]", "Script-controlled physical state", GameObjectStateName(gameObject->GetGoState()), "This object has compound room, event or transition behavior", "Compare it with its related encounter and event findings; do not change it in isolation");
+                continue;
+            }
+
+            if (object.policy == ProfileObjectPolicy::OneShotSelectableWhenReady)
+            {
+                bool selectable = !gameObject->HasGameObjectFlag(GO_FLAG_NOT_SELECTABLE) && !gameObject->HasGameObjectFlag(GO_FLAG_INTERACT_COND);
+                std::string severity = !ready ? (selectable ? "FAIL" : "EXPECTED") : "PASS";
+                std::string actual = !ready
+                    ? (selectable ? "Unexpectedly selectable" : "Locked")
+                    : (selectable ? "Ready to activate" : "Activated / consumed");
+                diagnostics.Finding(
+                    severity,
+                    object.category,
+                    object.name + " [" + std::to_string(object.entry) + "]",
+                    ready ? "Ready for one activation, then consumed" : "Locked until verified prerequisite completes",
+                    actual,
+                    "The authoritative instance script makes this a one-shot progression control",
+                    severity == "FAIL" ? "Valve availability disagrees with encounter progression; capture evidence before recovery" : "Track the transition in Before/After evidence");
                 continue;
             }
 
@@ -499,6 +605,90 @@ bool InstanceInspector::Diagnose(ChatHandler* handler)
                 ? GameObjectStateName(gameObject->GetGoState())
                 : (available ? "Selectable" : "Not selectable");
             diagnostics.Finding(severity, object.category, object.name + " [" + std::to_string(object.entry) + "]", expected, actual, "The verified profile correlates this object with prerequisite encounter states", severity == "FAIL" ? "Object and progression evidence disagree; reload the grid and rescan before recovery" : "No recovery action required");
+        }
+
+        for (ProfilePrerequisiteCreature const& definition : instanceProfile->prerequisiteCreatures)
+        {
+            if (!definition.difficulties.empty() &&
+                std::find(definition.difficulties.begin(), definition.difficulties.end(), recoveryContext.difficulty) == definition.difficulties.end())
+                continue;
+
+            ObjectGuid::LowType spawnId = static_cast<ObjectGuid::LowType>(definition.spawnId);
+            CreatureData const* spawnData = sObjectMgr->GetCreatureData(spawnId);
+            PrerequisiteCreatureObservation observation;
+            observation.progressionDone = encounterDone(definition.progressionState);
+            observation.spawnDefined = spawnData != nullptr;
+            observation.actualEntry = spawnData ? spawnData->id : 0;
+
+            if (spawnData)
+            {
+                float dx = spawnData->posX - definition.expectedRegion.x;
+                float dy = spawnData->posY - definition.expectedRegion.y;
+                float dz = spawnData->posZ - definition.expectedRegion.z;
+                float distance = std::sqrt(dx * dx + dy * dy + dz * dz);
+                observation.locationMatches = spawnData->mapid == player->GetMapId() &&
+                    distance <= definition.expectedRegion.radius;
+
+                if (spawnData->mapid == player->GetMapId())
+                {
+                    observation.gridLoaded = map->IsGridLoaded(spawnData->posX, spawnData->posY);
+                    auto const bounds = map->GetCreatureBySpawnIdStore().equal_range(spawnId);
+                    for (auto itr = bounds.first; itr != bounds.second; ++itr)
+                    {
+                        Creature* creature = itr->second;
+                        if (!creature)
+                            continue;
+                        observation.loaded = true;
+                        if (creature->IsAlive())
+                            observation.alive = true;
+                        else
+                            observation.dead = true;
+                    }
+
+                    time_t now = GameTime::GetGameTime().count();
+                    time_t respawnTime = map->GetCreatureRespawnTime(spawnId);
+                    if (respawnTime > now)
+                    {
+                        uint64 remaining = static_cast<uint64>(respawnTime - now);
+                        observation.respawnSeconds = remaining > std::numeric_limits<uint32>::max()
+                            ? std::numeric_limits<uint32>::max()
+                            : static_cast<uint32>(remaining);
+                    }
+                }
+            }
+
+            PrerequisiteCreatureAssessment assessment =
+                InstanceDiagnosticEngine::AssessPrerequisiteCreature(definition, observation);
+
+            std::ostringstream actual;
+            actual << assessment.status
+                   << "; expected Entry " << definition.creatureEntry
+                   << "; Spawn ID " << definition.spawnId;
+            if (spawnData)
+            {
+                actual << "; actual Entry " << spawnData->id
+                       << "; DB position " << spawnData->posX << ", "
+                       << spawnData->posY << ", " << spawnData->posZ;
+            }
+            if (observation.respawnSeconds)
+                actual << "; respawn " << observation.respawnSeconds << "s";
+
+            std::ostringstream expected;
+            expected << definition.name << " Entry " << definition.creatureEntry
+                     << ", Spawn ID " << definition.spawnId
+                     << " near " << definition.expectedRegion.x << ", "
+                     << definition.expectedRegion.y << ", " << definition.expectedRegion.z
+                     << " (radius " << definition.expectedRegion.radius << ")";
+
+            diagnostics.Finding(
+                assessment.severity,
+                "PREREQUISITE_CREATURE",
+                definition.name + " [Entry " + std::to_string(definition.creatureEntry) +
+                    "; Spawn " + std::to_string(definition.spawnId) + "]",
+                expected.str(),
+                actual.str(),
+                definition.relation + ". " + assessment.detail,
+                assessment.recommendation);
         }
     }
 
@@ -555,9 +745,9 @@ bool InstanceInspector::Diagnose(ChatHandler* handler)
 
     if (script)
         for (RecoveryGuidance const& recovery : RecoveryGuidanceEngine::Evaluate(recoveryContext))
-            Protocol::SendEncounterDiagnosticRecovery(handler, recovery.id, recovery.title, recovery.confidence, recovery.evidence, recovery.verificationCommand, recovery.actionCommands, recovery.recheckCommand, recovery.expectedResult, recovery.safety);
+            Protocol::SendEncounterDiagnosticRecovery(handler, requestId, recovery.id, recovery.title, recovery.confidence, recovery.evidence, recovery.verificationCommand, recovery.actionCommands, recovery.recheckCommand, recovery.expectedResult, recovery.safety);
 
-    Protocol::SendEncounterDiagnosticEnd(handler, diagnostics.passed, diagnostics.warnings, diagnostics.failures);
+    Protocol::SendEncounterDiagnosticEnd(handler, requestId, diagnostics.passed, diagnostics.warnings, diagnostics.failures);
     return true;
 }
 
