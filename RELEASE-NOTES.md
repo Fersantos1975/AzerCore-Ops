@@ -1,105 +1,55 @@
-# AzerCore Ops 0.7.2
+# AzerCore Ops 0.7.4
 
-AzerCore Ops 0.7.2 adds evidence-driven diagnostic capture and a safe upstream issue-report workflow while retaining the Item, Movement, NPC, Quest, Character, and Instance Access capabilities of previous releases.
+AzerCore Ops 0.7.4 expands Instance Intelligence into a source-aware encounter investigation workflow for AzerothCore while preserving the existing Quest, Character, Item, NPC, Movement, Instance Access, and evidence-driven reporting capabilities.
 
 ## Highlights
 
-- NPC-style horizontal Item Search layout
-- Immediate Movement teleport when selecting a destination
-- Brighter Movement region, zone, and destination menus
-- Authoritative live NPC Spawn diagnostics
-- Go to NPC with Emergency Return support
-- Automatic NPC target-name insertion into search
-- Honest database-spawn selection without misleading client targeting
+- Encounter recording with PULL, WIPE, RESET, KILL, and INITIALIZATION classification.
+- Correlated Before/After diagnostic evidence with suspicious-transition counts.
+- Source-verified Icecrown Citadel mechanics profiles for all twelve encounters.
+- ICC progression diagnostics for bosses, doors, valves, airlocks, sigils, prerequisite creatures, and script runtime signals.
+- Improved wipe/reset interpretation and locality-aware evidence handling.
+- Cleaner diagnostic comparisons that suppress static mechanic-profile and final target-deselection noise.
+- Improved Diagnostics viewport sizing for long encounter reports.
 
-## Evidence-driven issue reporting
+## Instance Intelligence
 
-- Capture completed diagnostics as Before and After evidence.
-- Preserve snapshots as deep copies in per-character SavedVariables.
-- Compare diagnostic findings without modifying encounter state.
-- Generate editable AzerothCore issue drafts.
-- Warn when evidence was captured by an older addon build.
-- Bind saved drafts to evidence fingerprints to prevent accidental mixing.
-- Detect unfinished sections, local paths, IPv4 addresses, and unexplained unknown values.
-- Require deliberate human review and submission.
+The Instance Inspector now combines the current instance state with encounter history and verified profile knowledge. ICC profiles describe encounter dependencies, allowed initialization states, runtime state definitions, progression gates, relevant world objects, prerequisite creatures, and source-verified mechanics.
 
-## Validation and automation
+Mechanic profiles are intentionally contextual: they describe mechanics verified from AzerothCore encounter scripts but are not presented as proof that an individual spell or mechanic fired during a recording. Runtime mechanic-event capture remains future work.
 
-The project preflight validates Lua 5.1 syntax and runs 12 issue-report framework regression tests. GitHub Actions executes the same validation for pull requests.
+## Encounter recording
 
-## Item Inspector
+Encounter recording captures a bounded investigation window and reports:
 
-Item Search now follows the established NPC Search layout, with a full-width search field and separate Search and Clear controls.
+- start and stop snapshots;
+- recording duration;
+- encounter-state transitions;
+- PULL, WIPE, RESET, KILL, and INITIALIZATION classification;
+- suspicious-transition totals;
+- final diagnostic changes between the opening and closing snapshots.
 
-Controlled Add Item and Remove Item operations remain in the Operations panel with Item ID and quantity fields. Input rendering uses the shared complete-border style validated on the WoW 3.3.5a client.
+The comparison layer now treats locality-sensitive targets as NOT_OBSERVED when appropriate, ignores static MECHANIC_PROFILE context, and suppresses the expected final `Selected creature -> No creature selected` noise after a boss kill.
 
-## Movement
+## Icecrown Citadel progression
 
-Selecting a final Movement destination now teleports immediately through the existing server-authorized movement backend. A successful teleport records the previous location for Emergency Return.
+ICC-specific diagnostics now correlate progression across encounter states and nearby scripted objects. Validated examples include Saurfang passage progression, Festergut/Rotface valve readiness, plague-wing airlock state, sigils, and Frozen Throne prerequisites.
 
-Region, zone, and destination menu entries use brighter labels for improved readability while retaining the existing catalogue hierarchy.
-
-## NPC Inspector
-
-The Spawn view is now distinct from Location and reports authoritative live creature-spawn data:
-
-- Spawn ID
-- Database-backed or runtime/summoned source
-- Home position and orientation
-- Current distance from home
-- Respawn and corpse delays
-- Movement type
-- Wander distance
-
-Go to NPC teleports the GM near the currently selected live creature and preserves an Emergency Return point. Arrival is offset slightly behind the creature to avoid placing the player inside its model.
-
-When a creature is targeted, its name is inserted automatically into NPC Search. Active manual edits are preserved, and the search remains deliberate until Search is pressed.
-
-Database world-spawn rows now select only the intended database record. WoW 3.3.5 cannot reliably target an arbitrary Spawn ID when several nearby creatures share the same name, so the addon no longer claims that a row click changes the visible client target.
-
-## Reliability
-
-The removed same-name targeting experiment no longer invokes protected targeting actions and cannot trigger Blizzard blocked-action warnings.
-
-NPC Spawn data continues to use structured protocol v1 records and participates in the existing request, target, and stale-response protections.
+Professor Putricide access now requires both boss prerequisites and the verified valve/airlock progression signal before the gate is considered PASS. This avoids reporting the gate as complete immediately after Festergut and Rotface die while a required valve sequence is still pending.
 
 ## Validation
 
-The 0.7.2 regression pass covered:
+The 0.7.4 release candidate passed:
 
-- Item Search layout and input rendering
-- Exact-ID and name-based Item workflows
-- Movement destination selection and automatic teleport
-- Emergency Return after destination and NPC navigation
-- Go to NPC positioning
-- Live NPC Spawn ID and database-source reporting
-- Home position, delay, movement, and wander fields
-- Database-spawn row selection without client-target changes
-- Automatic target-name insertion into NPC Search
-- Protection of actively edited search text
-- Addon and module compatibility
-- Clean committed server build
-- Final BugGrabber review
+- Lua 5.1 syntax validation;
+- 39 issue-report framework regression tests;
+- project preflight;
+- worldserver compile validation;
+- live ICC encounter recordings with expected transitions and zero suspicious events in the validated runs;
+- live environmental progression checks for gas/ooze valves, plague pipes, Putricide airlock objects, and sigils.
 
-## Known limitations
+Validated encounter recordings during development include Marrowgar, Lady Deathwhisper, Deathbringer Saurfang, Rotface, Gunship Battle, Blood Prince Council, Valithria Dreamwalker, and Sindragosa. Additional ICC runs remain useful regression coverage but are not required to interpret static mechanic-profile rows as runtime mechanic events.
 
-- WoW 3.3.5 cannot reliably target one exact Spawn ID among multiple nearby creatures with the same name. Select the database row, use Go to Spawn, and then target the nearby creature normally.
-- Creature templates using gossip menu ID 0 can expose generic database conversation options that are not necessarily available on that NPC.
-- Target Quest Log reports do not yet include objective-level progress.
-- Some Quest scaling and status labels remain presentation improvements for a future release.
-- Courier remains under construction and is not included as an active release feature.
+## Safety and reporting
 
-## Versions
-
-- Server module: 0.7.2
-- Client addon: 0.7.2
-- Protocol: v1
-- Release tag: 0.7.2
-
-## Installation
-
-Install the repository as `mod-azercore-ops` inside the AzerothCore modules directory and rebuild the core.
-
-Copy the ready-to-install `addon/AzerCoreOps` directory into the WoW client `Interface/AddOns` directory.
-
-The addon and running server module must use matching release versions.
+AzerCore Ops diagnostics remain observational unless a separately authorized recovery operation is explicitly invoked. Issue reports remain editable local drafts and are never submitted automatically. Privacy validation continues to guard against sensitive local paths and unintended IPv4 addresses in generated reports.

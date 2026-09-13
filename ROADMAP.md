@@ -3,7 +3,25 @@
 AzerCore Ops is an operational intelligence platform for AzerothCore built from a
 server-side C++ module and a matching World of Warcraft 3.3.5a addon.
 
-The current stable baseline is `0.6.2`.
+The current release target is `0.7.4`, focused on encounter-aware Instance Intelligence and hardened evidence recording.
+
+## 0.7.4 — Instance Intelligence
+
+Release scope:
+
+- Correlate encounter history with current diagnostics instead of evaluating snapshots in isolation.
+- Maintain source-verified ICC mechanics profiles for all twelve encounters.
+- Record and classify encounter transitions as PULL, WIPE, RESET, KILL, or INITIALIZATION.
+- Correlate ICC doors, valves, airlocks, sigils, prerequisite creatures, and runtime profile signals.
+- Suppress static profile and expected target-deselection noise from Before/After evidence.
+- Keep mechanic profiles distinct from future live mechanic-event capture.
+- Harden progression gates so compound scripted controls, such as Putricide valve/airlock progression, are not reduced to boss-state prerequisites alone.
+
+Post-0.7.4 direction:
+
+- Add a bounded live mechanic-event recorder filtered by the verified profile catalog.
+- Correlate actor identity, timestamps, spells, summons, game objects, and encounter phases into diagnostic evidence.
+- Expand encounter-profile validation beyond ICC without introducing map-specific assumptions into the generic engine.
 
 ## Completed foundation
 
