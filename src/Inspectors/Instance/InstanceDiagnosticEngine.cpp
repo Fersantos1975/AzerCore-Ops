@@ -1,8 +1,12 @@
 #include "InstanceDiagnosticEngine.h"
 
+#include "EncounterHistory.h"
 #include "InstanceProfile.h"
+#include "InstanceScript.h"
+#include "Map.h"
 
 #include <algorithm>
+#include <functional>
 #include <sstream>
 
 namespace AzerCoreOps
@@ -25,17 +29,22 @@ InitialStateAllowance const* FindInitialAllowance(InstanceProfile const* profile
     return nullptr;
 }
 
-bool AllowanceApplies(RecoveryContext const& context, InitialStateAllowance const* allowance)
+bool AllowanceApplies(
+    InitialStateAllowance const* allowance,
+    bool fresh,
+    std::function<bool(std::uint32_t)> const& prerequisiteDone)
 {
     if (!allowance)
         return false;
-    if (InstanceDiagnosticEngine::IsFresh(context) || allowance->strictAfter.empty())
+    if (fresh || allowance->strictAfter.empty())
         return true;
-    return std::any_of(allowance->strictAfter.begin(), allowance->strictAfter.end(), [&context](std::uint32_t id)
-    {
-        RecoveryEncounter const* prerequisite = FindEncounter(context, id);
-        return !prerequisite || prerequisite->state != DONE;
-    });
+    return std::any_of(
+        allowance->strictAfter.begin(),
+        allowance->strictAfter.end(),
+        [&prerequisiteDone](std::uint32_t id)
+        {
+            return !prerequisiteDone(id);
+        });
 }
 }
 
@@ -45,6 +54,86 @@ bool InstanceDiagnosticEngine::IsFresh(RecoveryContext const& context)
     {
         return encounter.state == DONE || encounter.state == IN_PROGRESS || encounter.state == SPECIAL;
     });
+}
+
+InitialStateAssessment InstanceDiagnosticEngine::AssessInitialState(
+    RecoveryContext const& context,
+    std::uint32_t encounterId,
+    EncounterState state)
+{
+    InitialStateAllowance const* allowance =
+        FindInitialAllowance(
+            InstanceProfileCatalog::Find(context.mapId),
+            encounterId,
+            state);
+
+    bool allowed = AllowanceApplies(
+        allowance,
+        IsFresh(context),
+        [&context](std::uint32_t id)
+        {
+            RecoveryEncounter const* prerequisite = FindEncounter(context, id);
+            return prerequisite && prerequisite->state == DONE;
+        });
+
+    return {
+        allowed,
+        allowance ? allowance->reason : std::string{}
+    };
+}
+
+InitialStateAssessment InstanceDiagnosticEngine::AssessInitialState(
+    Map* map,
+    std::uint32_t encounterId,
+    EncounterState state)
+{
+    if (!map)
+        return {};
+
+    InstanceProfile const* profile =
+        InstanceProfileCatalog::Find(map->GetId());
+    InitialStateAllowance const* allowance =
+        FindInitialAllowance(profile, encounterId, state);
+    if (!allowance)
+        return {};
+
+    InstanceMap* instanceMap = map->ToInstanceMap();
+    InstanceScript* script = instanceMap ? instanceMap->GetInstanceScript() : nullptr;
+    bool fresh = true;
+
+    if (script && profile)
+    {
+        for (EncounterIdMapping const& mapping : profile->encounterMappings)
+        {
+            EncounterState current = script->GetBossState(mapping.scriptId);
+            if (current == DONE || current == IN_PROGRESS || current == SPECIAL)
+            {
+                fresh = false;
+                break;
+            }
+        }
+
+        if (fresh)
+            for (RuntimeStateDefinition const& runtimeState : profile->runtimeStates)
+            {
+                EncounterState current = script->GetBossState(runtimeState.scriptId);
+                if (current == DONE || current == IN_PROGRESS || current == SPECIAL)
+                {
+                    fresh = false;
+                    break;
+                }
+            }
+    }
+
+    bool allowed = AllowanceApplies(
+        allowance,
+        fresh,
+        [script](std::uint32_t id)
+        {
+            return script && script->GetBossState(id) == DONE;
+        });
+
+    return {allowed, allowance->reason};
 }
 
 bool InstanceDiagnosticEngine::HasCompletedDependant(RecoveryContext const& context, std::uint32_t prerequisite)
@@ -77,23 +166,64 @@ EncounterAssessment InstanceDiagnosticEngine::AssessEncounter(RecoveryContext co
             return {"WARN", "The encounter is IN_PROGRESS while the instance reports no active encounter", "Allow the scripted reset to finish and rescan before considering recovery"};
         case FAIL:
         {
-            InitialStateAllowance const* allowance = FindInitialAllowance(InstanceProfileCatalog::Find(context.mapId), encounter.id, encounter.state);
-            if (AllowanceApplies(context, allowance))
-                return {"EXPECTED", allowance->reason, "Continue normal progression; only investigate if this state remains stuck when its wing is reached"};
-            return {"WARN", "The encounter recorded a failed or reset transition", "Allow the scripted reset to complete; escalate only if the state remains stuck"};
+            std::string classification;
+            std::string event;
+            std::string detail;
+            if (context.instanceId &&
+                EncounterHistory::LatestTransition(
+                    context.instanceId,
+                    encounter.id,
+                    static_cast<std::uint32_t>(encounter.state),
+                    classification,
+                    event,
+                    detail) &&
+                (classification == "WIPE_CHAIN" || event == "WIPE" || event == "RESET"))
+            {
+                return {
+                    "EXPECTED",
+                    "Latest server history confirms normal wipe/reset handling: " + detail,
+                    "Re-engage normally when ready; no recovery action is required"
+                };
+            }
+
+            InitialStateAssessment initial = AssessInitialState(context, encounter.id, encounter.state);
+            if (initial.allowed)
+                return {"EXPECTED", initial.reason, "Continue normal progression; only investigate if this state remains stuck when its wing is reached"};
+            return {"WARN", "The encounter recorded a failed or reset transition without a validated wipe/reset history context", "Allow the scripted reset to complete; escalate only if the state remains stuck"};
         }
         case SPECIAL:
             return {"INFO", "The encounter is using a script-specific transitional state", "Collect nearby creature, event and door evidence before judging this state"};
         case TO_BE_DECIDED:
         {
-            InitialStateAllowance const* allowance = FindInitialAllowance(InstanceProfileCatalog::Find(context.mapId), encounter.id, encounter.state);
-            if (AllowanceApplies(context, allowance))
-                return {"EXPECTED", allowance->reason, "Continue normal progression; initialization will occur through the encounter script"};
+            InitialStateAssessment initial = AssessInitialState(context, encounter.id, encounter.state);
+            if (initial.allowed)
+                return {"EXPECTED", initial.reason, "Continue normal progression; initialization will occur through the encounter script"};
             return {"INFO", "The encounter has not yet been initialized by its script", "Do not force DONE; inspect its verified prerequisites and initialization event"};
         }
         default:
             return {"WARN", "The instance returned an unknown encounter state", "Export this scan for investigation"};
     }
+}
+
+PrerequisiteCreatureAssessment InstanceDiagnosticEngine::AssessPrerequisiteCreature(ProfilePrerequisiteCreature const& definition, PrerequisiteCreatureObservation const& observation)
+{
+    if (!observation.spawnDefined)
+        return {"FAIL", "MISSING", "The required DB spawn does not exist", "Restore the source-verified spawn definition; do not create a substitute with a different Spawn ID"};
+    if (observation.actualEntry != definition.creatureEntry)
+        return {"FAIL", "WRONG_SPAWN", "The required Spawn ID resolves to a different creature Entry", "Restore the source-verified Entry for this exact Spawn ID; do not substitute another creature"};
+    if (!observation.locationMatches)
+        return {"FAIL", "WRONG_LOCATION", "The exact scripted prerequisite exists outside its source-verified region", "Correct the DB spawn placement and restart/reload through normal server maintenance; do not move the live creature as a substitute"};
+    if (observation.loaded && observation.alive)
+        return {observation.progressionDone ? "INFO" : "EXPECTED", "ALIVE", observation.progressionDone ? "The prerequisite event is already complete although this spawn is alive in the loaded grid" : "This exact scripted prerequisite remains alive", observation.progressionDone ? "No progression recovery is required; inspect only if the creature should have despawned" : "Defeat this exact prerequisite through normal gameplay"};
+    if (observation.loaded && observation.dead)
+        return {"PASS", "DEAD", "The exact scripted prerequisite is dead in the loaded grid", "No action required"};
+    if (observation.respawnSeconds > 0)
+        return {observation.progressionDone ? "INFO" : "EXPECTED", "RESPAWNING", "The exact DB spawn has a future respawn timer", observation.progressionDone ? "No progression action required" : "Wait for the normal respawn or reset before judging progression"};
+    if (!observation.gridLoaded)
+        return {"INFO", "NOT_LOADED", "The exact DB spawn is correctly defined but its grid is not loaded", "Move near the expected region and rescan when live creature state is required"};
+    if (observation.progressionDone)
+        return {"PASS", "NOT_PRESENT", "The prerequisite event is complete and the exact spawn is not currently present", "No action required"};
+    return {"WARN", "NOT_PRESENT", "The expected grid is loaded but the exact DB spawn is not currently present and has no future respawn timer", "Check event, pool and condition state before changing the spawn"};
 }
 
 GateAssessment InstanceDiagnosticEngine::AssessGate(RecoveryContext const& context, ProgressionGate const& gate)

@@ -23,6 +23,7 @@ struct RecoveryEncounter
 struct RecoveryContext
 {
     std::uint32_t mapId{0};
+    std::uint32_t instanceId{0};
     std::uint32_t difficulty{0};
     std::string scriptName;
     std::vector<RecoveryEncounter> encounters;

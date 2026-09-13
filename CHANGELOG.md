@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.7.4 — Instance Intelligence and Encounter Recording
+
+### Added
+
+- Added encounter-aware Instance Intelligence with correlated encounter history and diagnostic context.
+- Added source-verified Icecrown Citadel mechanic profiles for all twelve raid encounters.
+- Added mechanic-profile context for selected bosses without treating static profile rows as runtime evidence.
+- Added richer ICC progression evidence for doors, valves, airlocks, sigils, prerequisite creatures, and script-exported runtime signals.
+- Added encounter recording with PULL, WIPE, RESET, KILL, and INITIALIZATION classification.
+- Added recording summaries with duration, transition counts, suspicious counts, and final Before/After diagnostic changes.
+
+### Changed
+
+- Hardened wipe/reset interpretation to avoid double-counting alternate transition chains.
+- Improved locality-sensitive comparison so disappeared runtime targets are reported as NOT_OBSERVED instead of false removals.
+- Excluded static MECHANIC_PROFILE context and expected final target deselection from diagnostic-change noise.
+- Improved the diagnostic recording viewport so long report content remains inside the visible panel.
+- Tightened Professor Putricide access diagnostics so boss prerequisites alone no longer imply access before the scripted valve/airlock progression completes.
+
+### Validation
+
+- Passed 39 Lua 5.1 issue-report framework regression tests.
+- Passed project preflight and worldserver compile validation.
+- Live-tested ICC encounter recording across Marrowgar, Deathwhisper, Saurfang, Rotface, Putricide wing-object progression, Gunship, Blood Prince Council, Valithria, and Sindragosa with expected transitions and zero suspicious events in the validated runs.
+- Validated ICC environmental progression evidence for gas/ooze valves, plague pipes, airlock gates, collision objects, and sigils.
+
 ## 0.7.2 — Evidence-Driven Issue Reporting
 
 ### Added

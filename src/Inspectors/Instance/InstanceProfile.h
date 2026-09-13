@@ -58,13 +58,17 @@ struct ProgressionGate
     std::vector<std::uint32_t> prerequisites;
     std::uint32_t dependant{0};
     std::string consequence;
+    std::uint32_t completionSignalDataId{0};
+    std::vector<std::uint32_t> completionSignalValues;
 };
 
 enum class ProfileObjectPolicy
 {
     Observe,
     OpenWhenReady,
-    SelectableWhenReady
+    SelectableWhenReady,
+    OneShotSelectableWhenReady,
+    EncounterRoomDoor
 };
 
 struct ProfileObject
@@ -74,6 +78,38 @@ struct ProfileObject
     std::string category;
     ProfileObjectPolicy policy{ProfileObjectPolicy::Observe};
     std::vector<std::uint32_t> prerequisites;
+};
+
+struct ExpectedCreatureRegion
+{
+    float x{0.0f};
+    float y{0.0f};
+    float z{0.0f};
+    float radius{0.0f};
+};
+
+struct ProfilePrerequisiteCreature
+{
+    std::string id;
+    std::string name;
+    std::uint32_t creatureEntry{0};
+    std::uint64_t spawnId{0};
+    ExpectedCreatureRegion expectedRegion;
+    std::uint32_t progressionState{0};
+    std::string relation;
+    std::vector<std::uint32_t> difficulties;
+};
+
+struct EncounterMechanic
+{
+    std::uint32_t encounter{0};
+    std::vector<std::uint32_t> creatureEntries;
+    std::string id;
+    std::string name;
+    std::string phase;
+    std::vector<std::uint32_t> spellIds;
+    bool heroicOnly{false};
+    std::string sourceBehavior;
 };
 
 struct InstanceProfile
@@ -89,6 +125,8 @@ struct InstanceProfile
     std::vector<RuntimeStateDefinition> runtimeStates;
     std::vector<ProfileSignal> signals;
     std::vector<ProfileObject> objects;
+    std::vector<ProfilePrerequisiteCreature> prerequisiteCreatures;
+    std::vector<EncounterMechanic> mechanics;
 };
 
 class InstanceProfileCatalog

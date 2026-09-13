@@ -5,7 +5,7 @@
 
 AzerCore Ops Platform combines an AzerothCore C++ module with a World of Warcraft: Wrath of the Lich King 3.3.5a addon. It provides server-authoritative operations for administrators and Game Masters alongside a safe Player Mode for regular players. Player Mode exposes only permitted gameplay, inspection, and reporting features and cannot grant administrative authority.
 
-> **Current release:** `0.7.3` — polishes evidence-driven issue reporting with safer Before/After capture, severity-aware comparisons, stronger saved-draft binding, and more precise privacy validation.
+> **Current release candidate:** `0.7.4` — expands Instance Intelligence with encounter-history correlation, source-verified ICC mechanics profiles, progression-gate diagnostics, environmental object evidence, and hardened encounter recording/reporting.
 
 ## Features
 
@@ -17,6 +17,9 @@ AzerCore Ops Platform combines an AzerothCore C++ module with a World of Warcraf
 - Search history and activity logging
 - Report copy and export workflows
 - Before/after diagnostic evidence capture and comparison
+- Encounter recording with PULL, WIPE, RESET, KILL, and initialization classification
+- Source-verified Icecrown Citadel mechanics profiles and progression-gate diagnostics
+- Door, valve, airlock, sigil, prerequisite, and runtime-signal correlation for ICC investigations
 - Editable, privacy-conscious AzerothCore upstream issue drafts
 - Saved draft persistence with diagnostic-evidence binding
 - Structured personal and target bind inventories with exact Instance IDs
