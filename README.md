@@ -5,7 +5,7 @@
 
 AzerCore Ops Platform combines an AzerothCore C++ module with a World of Warcraft: Wrath of the Lich King 3.3.5a addon. It provides server-authoritative operations for administrators and Game Masters alongside a safe Player Mode for regular players. Player Mode exposes only permitted gameplay, inspection, and reporting features and cannot grant administrative authority.
 
-> **Current release candidate:** `0.7.4` — expands Instance Intelligence with encounter-history correlation, source-verified ICC mechanics profiles, progression-gate diagnostics, environmental object evidence, and hardened encounter recording/reporting.
+> **Current development target:** `0.7.5f` — evolves Instance Intelligence into a resumable instance-journey recorder with manual-first controls, live progress, profile-filtered activity, and encounter evidence.
 
 ## Features
 

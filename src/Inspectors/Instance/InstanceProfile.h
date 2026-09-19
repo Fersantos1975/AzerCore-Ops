@@ -78,6 +78,11 @@ struct ProfileObject
     std::string category;
     ProfileObjectPolicy policy{ProfileObjectPolicy::Observe};
     std::vector<std::uint32_t> prerequisites;
+    // Authoritative DoorData relationships from the instance script.
+    // Passage doors unlock when the linked encounter is DONE; room doors
+    // close during IN_PROGRESS and reopen when combat ends.
+    std::vector<std::uint32_t> passageEncounters;
+    std::vector<std::uint32_t> roomEncounters;
 };
 
 struct ExpectedCreatureRegion
@@ -110,6 +115,9 @@ struct EncounterMechanic
     std::vector<std::uint32_t> spellIds;
     bool heroicOnly{false};
     std::string sourceBehavior;
+    // Profile-filtered NPCs whose runtime lifecycle is evidence for this mechanic.
+    // Kept separate from creatureEntries, which identifies the mechanic actors.
+    std::vector<std::uint32_t> observedCreatureEntries;
 };
 
 struct InstanceProfile

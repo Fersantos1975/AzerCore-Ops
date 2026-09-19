@@ -4,6 +4,7 @@
 #include "GlobalScript.h"
 #include "InstanceDiagnosticEngine.h"
 #include "InstanceProfile.h"
+#include "MechanicEventRecorder.h"
 #include "InstanceScript.h"
 #include "Map.h"
 #include "ObjectMgr.h"
@@ -214,6 +215,8 @@ void RecordTransition(
     if (!map || oldState == newState)
         return;
 
+    MechanicEventRecorder::OnEncounterState(map, encounterId, newState, oldState);
+
     std::uint32_t instanceId = map->GetInstanceId();
     if (!instanceId)
         return;
@@ -344,6 +347,7 @@ void ClearInstance(std::uint32_t instanceId)
 
     HistoryByInstance.erase(instanceId);
     CountersByInstance.erase(instanceId);
+    MechanicEventRecorder::Clear(instanceId);
 }
 
 struct EncounterHistorySnapshot
@@ -598,12 +602,16 @@ bool EncounterHistory::Show(ChatHandler* handler, Acore::ChatCommands::Tail requ
             pair.second.kills);
     }
 
+    std::uint32_t mechanicEvents =
+        MechanicEventRecorder::Show(handler, requestId, map);
+
     Protocol::SendEncounterHistoryEnd(
         handler,
         requestId,
         static_cast<std::uint32_t>(
             snapshot.entries.size()),
-        anomalies);
+        anomalies,
+        mechanicEvents);
 
     return true;
 }

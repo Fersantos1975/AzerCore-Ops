@@ -225,6 +225,53 @@ Test("MarkAfter scopes encounter history after Before",function()
   Equal(tonumber(snapshot.historyWindow.entries[2].seq),12,"second scoped sequence")
 end)
 
+Test("MarkAfter scopes mechanic activity after Before",function()
+  local evidence={}
+  local beforeHistory=History()
+  beforeHistory.mechanics={{seq=40,event="ENCOUNTER_START",elapsed=1200000}}
+  local ready=Report.MarkBefore(evidence,Diagnostics(),beforeHistory)
+  Equal(ready,true,"Before capture rejected")
+
+  local afterHistory=History()
+  afterHistory.requestId=203
+  afterHistory.mechanics={
+    {seq=40,event="ENCOUNTER_START",elapsed=1200000},
+    {seq=41,event="NPC_SPAWN",entry=38508,elapsed=1215000},
+    {seq=42,event="NPC_DEATH",entry=38508,elapsed=1245000},
+  }
+  local afterReady,snapshot=Report.MarkAfter(evidence,Diagnostics(),afterHistory)
+  Equal(afterReady,true,"After capture rejected")
+  Equal(snapshot.historyWindow.startMechanicSequence,40,"mechanic window start")
+  Equal(snapshot.historyWindow.endMechanicSequence,42,"mechanic window end")
+  Equal(snapshot.historyWindow.mechanicCount,2,"mechanic window count")
+  Equal(snapshot.historyWindow.mechanics[1].event,"NPC_SPAWN","first mechanic event")
+  Equal(snapshot.historyWindow.mechanics[2].event,"NPC_DEATH","second mechanic event")
+  Equal(snapshot.historyWindow.startMechanicElapsed,1200000,"mechanic elapsed baseline")
+  Equal(snapshot.historyWindow.mechanics[1].sessionElapsed,15000,"first session-relative mechanic time")
+  Equal(snapshot.historyWindow.mechanics[2].sessionElapsed,45000,"second session-relative mechanic time")
+end)
+
+Test("HistoryWindow preserves elapsed after encounter counter reset",function()
+  local evidence={}
+  local beforeHistory=History()
+  beforeHistory.mechanics={{seq=50,event="NPC_DEATH",elapsed=78000}}
+  Equal(Report.MarkBefore(evidence,Diagnostics(),beforeHistory),true,"Before capture rejected")
+
+  local afterHistory=History()
+  afterHistory.requestId=204
+  afterHistory.mechanics={
+    {seq=50,event="NPC_DEATH",elapsed=78000},
+    {seq=51,event="ENCOUNTER_START",elapsed=0},
+    {seq=52,event="MECHANIC_CAST",elapsed=17000},
+    {seq=53,event="ENCOUNTER_KILL",elapsed=96000},
+  }
+  local ready,snapshot=Report.MarkAfter(evidence,Diagnostics(),afterHistory)
+  Equal(ready,true,"After capture rejected")
+  Equal(snapshot.historyWindow.mechanics[1].sessionElapsed,0,"reset start time")
+  Equal(snapshot.historyWindow.mechanics[2].sessionElapsed,17000,"reset mechanic time")
+  Equal(snapshot.historyWindow.mechanics[3].sessionElapsed,96000,"post-reset mechanic time")
+end)
+
 Test("Compare detects changed findings",function()
   local before=Report.Capture(Diagnostics("0.7.1d","FAIL"),{})
   local after=Report.Capture(Diagnostics("0.7.1d","NOT_STARTED"),{})
