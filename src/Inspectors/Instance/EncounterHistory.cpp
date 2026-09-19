@@ -2,7 +2,9 @@
 
 #include "Chat.h"
 #include "GlobalScript.h"
+#include "InstanceDiagnosticEngine.h"
 #include "InstanceProfile.h"
+#include "MechanicEventRecorder.h"
 #include "InstanceScript.h"
 #include "Map.h"
 #include "ObjectMgr.h"
@@ -97,6 +99,7 @@ EncounterHistoryEntry const* PreviousFor(
 }
 
 std::pair<std::string, std::string> ClassifyTransition(
+    Map* map,
     std::deque<EncounterHistoryEntry> const& entries,
     std::uint32_t encounterId,
     EncounterState oldState,
@@ -157,6 +160,19 @@ std::pair<std::string, std::string> ClassifyTransition(
             };
         }
 
+        InitialStateAssessment initial =
+            InstanceDiagnosticEngine::AssessInitialState(
+                map,
+                encounterId,
+                newState);
+        if (initial.allowed)
+        {
+            return {
+                "EXPECTED",
+                initial.reason
+            };
+        }
+
         return {
             "SUSPICIOUS",
             "FAIL was requested from NOT_STARTED without a preceding active encounter transition"
@@ -199,6 +215,8 @@ void RecordTransition(
     if (!map || oldState == newState)
         return;
 
+    MechanicEventRecorder::OnEncounterState(map, encounterId, newState, oldState);
+
     std::uint32_t instanceId = map->GetInstanceId();
     if (!instanceId)
         return;
@@ -212,6 +230,7 @@ void RecordTransition(
 
     auto classification =
         ClassifyTransition(
+            map,
             entries,
             encounterId,
             oldState,
@@ -328,6 +347,7 @@ void ClearInstance(std::uint32_t instanceId)
 
     HistoryByInstance.erase(instanceId);
     CountersByInstance.erase(instanceId);
+    MechanicEventRecorder::Clear(instanceId);
 }
 
 struct EncounterHistorySnapshot
@@ -464,6 +484,38 @@ public:
 };
 } // namespace
 
+bool EncounterHistory::LatestTransition(
+    std::uint32_t instanceId,
+    std::uint32_t encounterId,
+    std::uint32_t currentState,
+    std::string& classification,
+    std::string& event,
+    std::string& detail)
+{
+    std::lock_guard<std::mutex> lock(HistoryMutex);
+
+    auto historyItr = HistoryByInstance.find(instanceId);
+    if (historyItr == HistoryByInstance.end())
+        return false;
+
+    auto entryItr = std::find_if(
+        historyItr->second.rbegin(),
+        historyItr->second.rend(),
+        [encounterId, currentState](EncounterHistoryEntry const& entry)
+        {
+            return entry.encounterId == encounterId &&
+                static_cast<std::uint32_t>(entry.newState) == currentState;
+        });
+
+    if (entryItr == historyItr->second.rend())
+        return false;
+
+    classification = entryItr->classification;
+    event = entryItr->event;
+    detail = entryItr->detail;
+    return true;
+}
+
 bool EncounterHistory::Show(ChatHandler* handler, Acore::ChatCommands::Tail requestArg)
 {
     std::uint32_t requestId = ParseRequestId(requestArg);
@@ -550,12 +602,16 @@ bool EncounterHistory::Show(ChatHandler* handler, Acore::ChatCommands::Tail requ
             pair.second.kills);
     }
 
+    std::uint32_t mechanicEvents =
+        MechanicEventRecorder::Show(handler, requestId, map);
+
     Protocol::SendEncounterHistoryEnd(
         handler,
         requestId,
         static_cast<std::uint32_t>(
             snapshot.entries.size()),
-        anomalies);
+        anomalies,
+        mechanicEvents);
 
     return true;
 }

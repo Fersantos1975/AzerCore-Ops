@@ -1,105 +1,74 @@
-# AzerCore Ops 0.7.2
+# AzerCore Ops 0.7.5f
 
-AzerCore Ops 0.7.2 adds evidence-driven diagnostic capture and a safe upstream issue-report workflow while retaining the Item, Movement, NPC, Quest, Character, and Instance Access capabilities of previous releases.
+AzerCore Ops 0.7.5f turns Instance Intelligence into a resumable, profile-driven recording workspace. It adds source-audited Ulduar coverage, richer Icecrown Citadel evidence, persistent recording controls, and a configurable addon interface while keeping diagnostics observational and bounded.
 
 ## Highlights
 
-- NPC-style horizontal Item Search layout
-- Immediate Movement teleport when selecting a destination
-- Brighter Movement region, zone, and destination menus
-- Authoritative live NPC Spawn diagnostics
-- Go to NPC with Emergency Return support
-- Automatic NPC target-name insertion into search
-- Honest database-spawn selection without misleading client targeting
+- Source-audited Ulduar profile covering all fourteen encounters, hard-mode paths, progression gates, tracked objects, and runtime signals.
+- Resumable instance-journey recording with Manual, Automatic Instance, and Off modes.
+- Standard, Full Trace, and Custom recording detail levels.
+- Live progress viewing without stopping or finalizing the active recording.
+- Saved completed sessions with configurable retention and recall.
+- Movable floating recorder status control with continuously updated mode, state, detail level, and elapsed time.
+- Recording controls available directly from the floating control's right-click menu.
+- Dedicated configuration file and improved Recording & Interface settings.
+- Compatibility decisions based on protocol/capability support rather than requiring identical addon and module display versions.
 
-## Evidence-driven issue reporting
+## Recording workspace
 
-- Capture completed diagnostics as Before and After evidence.
-- Preserve snapshots as deep copies in per-character SavedVariables.
-- Compare diagnostic findings without modifying encounter state.
-- Generate editable AzerothCore issue drafts.
-- Warn when evidence was captured by an older addon build.
-- Bind saved drafts to evidence fingerprints to prevent accidental mixing.
-- Detect unfinished sections, local paths, IPv4 addresses, and unexplained unknown values.
-- Require deliberate human review and submission.
+The Diagnostics workspace is separated into Diagnostic Scan, Live Recording, and Saved Reports. Manual remains the default recording mode. Automatic Instance mode can follow a profiled instance journey, while Off disables recording deliberately.
 
-## Validation and automation
+A session is associated with the active character, map, difficulty, and Instance ID. Supported lifecycle evidence includes entering or leaving an instance, disconnect/re-entry continuity, death, spirit release, resurrection, encounter transitions, profiled creatures, relevant game objects, spells, auras, and phase hints.
 
-The project preflight validates Lua 5.1 syntax and runs 12 issue-report framework regression tests. GitHub Actions executes the same validation for pull requests.
+The current recording can be inspected through View Live Progress without stopping it. Stopping a manual recording finalizes and saves the session, allowing it to be recalled with the Older and Newer controls.
 
-## Item Inspector
+## Evidence detail and export
 
-Item Search now follows the established NPC Search layout, with a full-width search field and separate Search and Clear controls.
+Standard view emphasizes encounter milestones and condenses repeated trash or add activity. Full Trace preserves detailed event-by-event evidence. Custom mode lets the user independently include boss events, phase hints, objects, lifecycle events, trash, spells, and auras.
 
-Controlled Add Item and Remove Item operations remain in the Operations panel with Item ID and quantity fields. Input rendering uses the shared complete-border style validated on the WoW 3.3.5a client.
+Standard and Full Recording switch inside the Encounter Evidence frame. Share and Export use complete evidence by default, with a setting to use only the visible view. Selectable export remains available for manual copying.
 
-## Movement
+Repeated high-volume events are bounded and condensed for readability without turning the recorder into an unbounded combat-log collector.
 
-Selecting a final Movement destination now teleports immediately through the existing server-authorized movement backend. A successful teleport records the previous location for Emergency Return.
+## Interface and configuration
 
-Region, zone, and destination menu entries use brighter labels for improved readability while retaining the existing catalogue hierarchy.
+The addon now loads `AzerCoreOps_Config.lua` before the main implementation so defaults and migrations have one owner. Recording settings are movable and remember their position.
 
-## NPC Inspector
+The floating recorder can be shown or hidden, locked or unlocked, and configured to display elapsed time. Its right-click menu provides Start, Stop & Save, recording mode, detail level, and Custom Settings actions.
 
-The Spawn view is now distinct from Location and reports authoritative live creature-spawn data:
+Global tooltip control, notification preferences, automatic completion behavior, instance-resume behavior, and saved-session retention are exposed through settings.
 
-- Spawn ID
-- Database-backed or runtime/summoned source
-- Home position and orientation
-- Current distance from home
-- Respawn and corpse delays
-- Movement type
-- Wander distance
+## Profile intelligence
 
-Go to NPC teleports the GM near the currently selected live creature and preserves an Emergency Return point. Arrival is offset slightly behind the creature to avoid placing the player inside its model.
+Icecrown Citadel evidence includes source-verified encounter mechanics, prerequisite creatures, doors, valves, airlocks, sigils, transports, gauntlet progression, and exported runtime signals.
 
-When a creature is targeted, its name is inserted automatically into NPC Search. Active manual edits are preserved, and the search remains deliberate until Search is pressed.
+Ulduar adds all fourteen encounters and their major scripted mechanics, including hard-mode activation paths and instance progression objects. Profile mechanics remain contextual until an observed runtime spell, aura, creature, object, or state transition supplies evidence.
 
-Database world-spawn rows now select only the intended database record. WoW 3.3.5 cannot reliably target an arbitrary Spawn ID when several nearby creatures share the same name, so the addon no longer claims that a row click changes the visible client target.
+Player-controlled pets, guardians, totems, critters, and similar helpers are excluded from generic mechanic noise while boss-owned summons remain observable.
 
-## Reliability
+## Reliability improvements
 
-The removed same-name targeting experiment no longer invokes protected targeting actions and cannot trigger Blizzard blocked-action warnings.
-
-NPC Spawn data continues to use structured protocol v1 records and participates in the existing request, target, and stale-response protections.
+- Keeps elapsed time and live encounter polling active when the main addon window or Diagnostics page is hidden.
+- Uses reset-aware session-relative timestamps so a new encounter does not collapse its timeline to `+00:00`.
+- Preserves complete evidence while showing a concise standard summary.
+- Keeps addon, issue-report framework, configuration, and module versions synchronized at `0.7.5f`.
+- Retains protocol v1 compatibility while evaluating actual compatibility separately from display-version equality.
 
 ## Validation
 
-The 0.7.2 regression pass covered:
+The 0.7.5f release candidate passed:
 
-- Item Search layout and input rendering
-- Exact-ID and name-based Item workflows
-- Movement destination selection and automatic teleport
-- Emergency Return after destination and NPC navigation
-- Go to NPC positioning
-- Live NPC Spawn ID and database-source reporting
-- Home position, delay, movement, and wander fields
-- Database-spawn row selection without client-target changes
-- Automatic target-name insertion into NPC Search
-- Protection of actively edited search text
-- Addon and module compatibility
-- Clean committed server build
-- Final BugGrabber review
+- Lua 5.1 syntax validation;
+- 41 issue-report framework regression tests;
+- project preflight;
+- whitespace validation;
+- full AzerothCore RelWithDebInfo rebuild;
+- worldserver and authserver installation validation.
 
-## Known limitations
+The rebuild completed successfully on 19 September 2026 with servers intentionally left offline and maintenance mode enabled.
 
-- WoW 3.3.5 cannot reliably target one exact Spawn ID among multiple nearby creatures with the same name. Select the database row, use Go to Spawn, and then target the nearby creature normally.
-- Creature templates using gossip menu ID 0 can expose generic database conversation options that are not necessarily available on that NPC.
-- Target Quest Log reports do not yet include objective-level progress.
-- Some Quest scaling and status labels remain presentation improvements for a future release.
-- Courier remains under construction and is not included as an active release feature.
+## Safety and reporting
 
-## Versions
+Recording and diagnostics remain observational. They do not modify encounter state or write recording events to the database. Recovery actions remain separate and require explicit authorization.
 
-- Server module: 0.7.2
-- Client addon: 0.7.2
-- Protocol: v1
-- Release tag: 0.7.2
-
-## Installation
-
-Install the repository as `mod-azercore-ops` inside the AzerothCore modules directory and rebuild the core.
-
-Copy the ready-to-install `addon/AzerCoreOps` directory into the WoW client `Interface/AddOns` directory.
-
-The addon and running server module must use matching release versions.
+Issue reports remain editable local drafts and are never submitted automatically. Privacy validation continues to guard against sensitive local paths and unintended IPv4 addresses.

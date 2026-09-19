@@ -32,7 +32,10 @@ gates represent `ALL` relationships such as:
 - Putricide + Lana'thel + Sindragosa -> Frozen Throne access.
 
 Normal incomplete gates are `EXPECTED`. They become `FAIL` only when the dependant is already
-complete, proving contradictory progression.
+complete, proving contradictory progression. Gates may also declare an authoritative completion
+signal (`completionSignalDataId` + `completionSignalValue`) when boss completion alone is not enough.
+ICC uses this for Professor Putricide access so Festergut and Rotface being `DONE` does not produce
+a false `PASS` before the scripted valve/airlock sequence reaches its verified state.
 
 ## Runtime signals
 
@@ -50,6 +53,17 @@ Objects may use one of three policies:
 
 Only objects loaded in the player's current grid are evaluated. An unloaded object is never a
 failure.
+
+## Encounter mechanics
+
+Profiles may include source-verified `EncounterMechanic` records containing the owning encounter,
+relevant creature entries, stable mechanic ID, display name, phase, spell IDs, heroic-only flag,
+and a short description of the behavior verified in the authoritative encounter script.
+
+These rows are contextual knowledge, not proof that a mechanic occurred during a specific scan or
+recording. The addon therefore excludes `MECHANIC_PROFILE` rows from Before/After change comparison.
+A future bounded event recorder may correlate live spell, summon, game-object and actor events back
+to these profile entries.
 
 ## Safety
 

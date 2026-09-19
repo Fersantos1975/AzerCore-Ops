@@ -3,6 +3,8 @@
 
 AzerCoreOpsIssueReport = AzerCoreOpsIssueReport or {}
 local Report = AzerCoreOpsIssueReport
+Report.FrameworkBuild="0.7.5f"
+Report.FrameworkSchema=1
 
 local function Trim(value)
   return tostring(value or ""):gsub("^%s+",""):gsub("%s+$","")
@@ -161,6 +163,22 @@ local function LastHistorySequence(encounterHistory)
   return last
 end
 
+local function LastMechanicSequence(encounterHistory)
+  local last=0
+  for _,entry in ipairs(encounterHistory and encounterHistory.mechanics or {}) do
+    last=math.max(last,HistorySequence(entry))
+  end
+  return last
+end
+
+local function LastMechanicElapsed(encounterHistory)
+  local last=0
+  for _,entry in ipairs(encounterHistory and encounterHistory.mechanics or {}) do
+    last=math.max(last,tonumber(entry and entry.elapsed) or 0)
+  end
+  return last
+end
+
 local function SessionIdentity(diagnostics, encounterHistory)
   diagnostics=diagnostics or {}
   encounterHistory=encounterHistory or {}
@@ -175,6 +193,8 @@ local function SessionIdentity(diagnostics, encounterHistory)
     diagnosticGeneratedAt=diagnostics.generatedAt,
     historyGeneratedAt=encounterHistory.generatedAt,
     historyLastSequence=LastHistorySequence(encounterHistory),
+    mechanicLastSequence=LastMechanicSequence(encounterHistory),
+    mechanicLastElapsed=LastMechanicElapsed(encounterHistory),
   }
 end
 
@@ -189,6 +209,30 @@ function Report.Capture(diagnostics, encounterHistory)
   return snapshot
 end
 
+local function ComparableActual(finding)
+  local actual=tostring(finding and finding.actual or "")
+  if finding and finding.category=="PREREQUISITE_CREATURE" then
+    actual=actual:gsub("respawn%s+%d+%s*s","respawn <countdown>")
+  end
+  return actual
+end
+
+local NotObservedCategories={
+  TARGET=true,DOOR=true,AIRLOCK=true,VALVE=true,MECHANIC=true,
+  SIGIL=true,TRANSPORT=true,
+}
+
+local NonComparableCategories={
+  MECHANIC_PROFILE=true,
+}
+
+local function IsFinalTargetDeselection(finding)
+  return finding
+    and tostring(finding.category or "")=="TARGET"
+    and tostring(finding.subject or "")=="Selected creature"
+    and tostring(finding.actual or "")=="No creature selected"
+end
+
 function Report.Compare(before, after)
   local result={}
   local beforeFindings=
@@ -198,29 +242,48 @@ function Report.Compare(before, after)
   local previous={}
 
   for _,finding in ipairs(beforeFindings) do
-    previous[FindingKey(finding)]=finding
+    if not NonComparableCategories[tostring(finding.category or "")] then
+      previous[FindingKey(finding)]=finding
+    end
   end
 
   for _,finding in ipairs(afterFindings) do
-    local key=FindingKey(finding)
-    local old=previous[key]
-    if not old then
-      table.insert(result,{kind="ADDED",key=key,after=Copy(finding)})
-    elseif tostring(old.severity)~=tostring(finding.severity)
-      or tostring(old.actual)~=tostring(finding.actual)
-    then
-      table.insert(result,{
-        kind="CHANGED",
-        key=key,
-        before=Copy(old),
-        after=Copy(finding),
-      })
+    if not NonComparableCategories[tostring(finding.category or "")] then
+      local key=FindingKey(finding)
+      local old=previous[key]
+      if not old and IsFinalTargetDeselection(finding) then
+        -- Losing the selected boss after a kill is expected UI/runtime context,
+        -- not a meaningful diagnostic change.
+      elseif not old then
+        table.insert(result,{kind="ADDED",key=key,after=Copy(finding)})
+      elseif tostring(old.severity)~=tostring(finding.severity)
+        or ComparableActual(old)~=ComparableActual(finding)
+      then
+        table.insert(result,{
+          kind="CHANGED",
+          key=key,
+          before=Copy(old),
+          after=Copy(finding),
+        })
+      end
+      previous[key]=nil
     end
-    previous[key]=nil
   end
 
   for key,finding in pairs(previous) do
-    table.insert(result,{kind="REMOVED",key=key,before=Copy(finding)})
+    if NotObservedCategories[tostring(finding.category or "")] then
+      table.insert(result,{
+        kind="NOT_OBSERVED",
+        key=key,
+        before=Copy(finding),
+        after={
+          severity="NOT_OBSERVED",
+          actual="Not observed in final scan (possibly outside loaded grid/range)",
+        },
+      })
+    else
+      table.insert(result,{kind="REMOVED",key=key,before=Copy(finding)})
+    end
   end
 
   table.sort(result,function(a,b)
@@ -297,12 +360,21 @@ function Report.HistoryWindow(before, after)
   local startSequence=tonumber(previous.historyLastSequence) or
     LastHistorySequence(before and before.encounterHistory or {})
   local history=after and after.encounterHistory or {}
+  local startMechanicSequence=tonumber(previous.mechanicLastSequence) or
+    LastMechanicSequence(before and before.encounterHistory or {})
+  local startMechanicElapsed=tonumber(previous.mechanicLastElapsed) or
+    LastMechanicElapsed(before and before.encounterHistory or {})
   local window={
-    schema=1,
+    schema=2,
     startSequence=startSequence,
     endSequence=LastHistorySequence(history),
+    startMechanicSequence=startMechanicSequence,
+    endMechanicSequence=LastMechanicSequence(history),
+    startMechanicElapsed=startMechanicElapsed,
     entries={},
+    mechanics={},
     count=0,
+    mechanicCount=0,
     anomalies=0,
   }
 
@@ -316,6 +388,20 @@ function Report.HistoryWindow(before, after)
     end
   end
   window.count=#window.entries
+  local mechanicCounterReset=false
+  for _,entry in ipairs(history.mechanics or {}) do
+    if HistorySequence(entry)>startMechanicSequence then
+      local copy=Copy(entry)
+      local rawElapsed=tonumber(copy.elapsed) or 0
+      -- Encounter elapsed resets when a new boss pull starts. Once a reset is
+      -- detected, the complete new window uses the new counter directly.
+      if rawElapsed<startMechanicElapsed then mechanicCounterReset=true end
+      copy.sessionElapsed=mechanicCounterReset and rawElapsed or
+        (rawElapsed-startMechanicElapsed)
+      table.insert(window.mechanics,copy)
+    end
+  end
+  window.mechanicCount=#window.mechanics
   return window
 end
 

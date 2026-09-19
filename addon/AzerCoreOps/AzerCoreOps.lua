@@ -1,6 +1,6 @@
 local ADDON = ...
 
--- AzerCore Ops Platform 0.7.4-dev
+-- AzerCore Ops Platform 0.7.5f
 -- Target: WoW 3.3.5a / AzerothCore. All server commands live here so that
 -- branch-specific command names can be changed without touching the UI.
 local CMD = {
@@ -39,7 +39,7 @@ local CMD = {
 
 local DS = AzerCoreOpsDesign
 local Platform = AzerCoreOpsPlatform
-Platform.AddonBuild="0.7.4-dev"
+Platform.AddonBuild="0.7.5f"
 local C = {
   bg=DS.Colors.Background,
   panel=DS.Colors.Surface,
@@ -111,6 +111,7 @@ instanceUI.pendingDiagnosticPurpose=nil
 instanceUI.pendingHistoryRequest=nil
 instanceUI.pendingHistoryPurpose=nil
 instanceUI.captureFlow=nil
+instanceUI.evidenceSessionGeneration=0
 local auditUI={search={},members={},searchRows={},memberRows={},filterButtons={},filtered={},mapBox=nil,diffBox=nil,summary=nil,scroll=nil,scrollChild=nil,horizontal=nil,filter="ALL",lastMap=nil,lastDifficulty=nil,reportEdit=nil,
   searchOffset=0,selectedMap=nil,selectedName=nil,selectedType=nil,selectedMaxPlayers=nil,difficulty=0,difficultyLabel="Normal",lockedText=nil,difficultyButton=nil,difficultyMenu=nil,historyIndex=0,searchBox=nil,
   referenceId=0,expectedMembers=0,display={},groupVerdict="NOT AUDITED",groupReason="Run Group Audit",generatedAt=nil,stale=false}
@@ -119,17 +120,26 @@ local shareFrame, shareText, courierUI
 local ShowSelectableReport
 local EnsureShareFrame
 local ApplyPlayerTargetIdentity
-local defaults={
-  startMinimized=true,showMinimap=true,showMini=true,mbfCompatibility=true,scale=1,roleMode="AUTOMATIC",
-  characterRaid="ICC",characterRaidDifficulty="10N",
-  characterRaidLocked=true,
-  confirmCommands=true,hideAuditChat=true,defaultDifficulty=0,
-  auditTooltips=true,wrapAuditReasons=true,mouseWheelAudit=true,problemsFirst=false,
-  rememberAuditFilter=true,autoReaudit=false,confirmResetSelected=true,
-  warnNoTarget=true,compactAuditRows=false,auditFontSize=10,shiftClickInsert=true,
-}
-local ADDON_VERSION="0.7.4-dev"
+local defaults=(AzerCoreOpsConfig and AzerCoreOpsConfig.Defaults) or {}
+local ADDON_VERSION="0.7.5f"
 local PROTOCOL_VERSION="1"
+Platform.ReporterSchemaVersion=1
+
+function Platform:ReporterCompatibility()
+  local reporter=AzerCoreOpsIssueReport
+  local addonBuild=self.AddonBuild or ADDON_VERSION
+  local reporterBuild=reporter and reporter.FrameworkBuild
+  local reporterSchema=reporter and tonumber(reporter.FrameworkSchema)
+  local hasAPI=reporter and
+    type(reporter.MarkBefore)=="function" and
+    type(reporter.MarkAfter)=="function" and
+    type(reporter.Compare)=="function" and
+    type(reporter.HistoryWindow)=="function" and
+    type(reporter.NewDraft)=="function" and
+    type(reporter.OpenDraft)=="function"
+  local schemaOK=reporterSchema==nil or reporterSchema==self.ReporterSchemaVersion
+  return hasAPI and schemaOK,addonBuild,reporterBuild,reporterSchema
+end
 local TESTED_CORE="190184a04539"
 local TESTED_PLAYERBOTS="ba46fcdecde3"
 
@@ -275,7 +285,7 @@ local function Button(parent, text, w, h, click, tip)
   b:SetScript("OnEnter",function(self)
     self:SetBackdropColor(unpack(C.hover))
     local explanation=self.disabledReason or tip
-    if explanation then GameTooltip:SetOwner(self,"ANCHOR_RIGHT"); GameTooltip:SetText(text,1,.82,0); GameTooltip:AddLine(explanation,1,1,1,true); GameTooltip:Show() end
+    if explanation and Settings().showTooltips~=false then GameTooltip:SetOwner(self,"ANCHOR_RIGHT"); GameTooltip:SetText(text,1,.82,0); GameTooltip:AddLine(explanation,1,1,1,true); GameTooltip:Show() end
   end)
   b:SetScript("OnLeave",function(self)
     if self:IsEnabled() then self:SetBackdropColor(unpack(C.button)) else self:SetBackdropColor(.08,.08,.08,1) end
@@ -6191,9 +6201,117 @@ local function BuildInstances()
   Button(bindFooter,"Export",62,20,ExportBindReport,"Export the complete visible bind report"):SetPoint("RIGHT",-4,0)
 
   local diagnosticScroll, diagnosticScan, diagnosticHistoryButton, diagnosticClear, diagnosticOlder, diagnosticNewer, recoveryButton
-  local diagnosticControls=CreateFrame("Frame",nil,diagnosticPage); diagnosticControls:SetPoint("TOPLEFT",12,-5); diagnosticControls:SetPoint("BOTTOMLEFT",12,10); diagnosticControls:SetWidth(180); Backdrop(diagnosticControls,C.panel)
-  local diagnosticHeading=Section(diagnosticControls,"ENCOUNTER SCAN",C.gold); diagnosticHeading:SetPoint("TOPLEFT",10,-10)
-  local diagnosticHelp=diagnosticControls:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); diagnosticHelp:SetPoint("TOPLEFT",10,-39); diagnosticHelp:SetPoint("TOPRIGHT",-10,-39); diagnosticHelp:SetJustifyH("LEFT"); diagnosticHelp:SetJustifyV("TOP"); diagnosticHelp:SetWordWrap(true); diagnosticHelp:SetTextColor(unpack(C.white)); diagnosticHelp:SetText("Enter the affected dungeon or raid. Target the boss or event NPC for extra evidence, then run the scan.\n\nThis workspace never changes encounter state, doors, creatures or lockouts.")
+  local recordingOlder, recordingNewer, recordingListLabel, fullRecordingButton
+  local function CopyRecording(value,seen)
+    if type(value)~="table" then return value end
+    seen=seen or {}
+    if seen[value] then return seen[value] end
+    local copy={}
+    seen[value]=copy
+    for key,item in pairs(value) do copy[CopyRecording(key,seen)]=CopyRecording(item,seen) end
+    return copy
+  end
+  local function RecordingReports()
+    AzerCoreOpsDB.recordingReports=AzerCoreOpsDB.recordingReports or {}
+    return AzerCoreOpsDB.recordingReports
+  end
+  local function SaveCompletedRecording(evidence)
+    if not evidence or not evidence.before or not evidence.after then return end
+    local reports=RecordingReports()
+    if evidence.savedReportId then return end
+    evidence.savedReportId=tostring(evidence.startedAtEpoch or time())..":"..tostring(evidence.sessionId or #reports+1)
+    table.insert(reports,1,CopyRecording(evidence))
+    local limit=math.max(1,math.min(50,tonumber(Settings().recordingRetention) or 10))
+    while #reports>limit do table.remove(reports) end
+    instanceUI.selectedRecordingReport=1
+  end
+  local SelectDiagnosticTab
+  local diagnosticTabBar=CreateFrame("Frame",nil,diagnosticPage)
+  diagnosticTabBar:SetPoint("TOPLEFT",12,-4); diagnosticTabBar:SetPoint("TOPRIGHT",-12,-4); diagnosticTabBar:SetHeight(28)
+  local diagnosticTabButtons={}
+  diagnosticTabButtons.SCAN=Button(diagnosticTabBar,"Diagnostic Scan",126,24,function() SelectDiagnosticTab("SCAN") end,
+    "Run a read-only snapshot of the current instance")
+  diagnosticTabButtons.SCAN:SetPoint("TOPLEFT",0,0)
+  diagnosticTabButtons.RECORDING=Button(diagnosticTabBar,"Live Recording",126,24,function() SelectDiagnosticTab("RECORDING") end,
+    "Start, stop, configure, and inspect the current recording")
+  diagnosticTabButtons.RECORDING:SetPoint("LEFT",diagnosticTabButtons.SCAN,"RIGHT",6,0)
+  diagnosticTabButtons.REPORTS=Button(diagnosticTabBar,"Saved Reports",126,24,function() SelectDiagnosticTab("REPORTS") end,
+    "Browse saved scans and build an issue report")
+  diagnosticTabButtons.REPORTS:SetPoint("LEFT",diagnosticTabButtons.RECORDING,"RIGHT",6,0)
+
+  local diagnosticControls=CreateFrame("Frame",nil,diagnosticPage); diagnosticControls:SetPoint("TOPLEFT",12,-36); diagnosticControls:SetPoint("BOTTOMLEFT",12,10); diagnosticControls:SetWidth(180); Backdrop(diagnosticControls,C.panel)
+  local diagnosticHeading=Section(diagnosticControls,"DIAGNOSTIC SCAN",C.gold); diagnosticHeading:SetPoint("TOPLEFT",10,-10)
+  local diagnosticHelp=diagnosticControls:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); diagnosticHelp:SetPoint("TOPLEFT",10,-35); diagnosticHelp:SetPoint("TOPRIGHT",-10,-35); diagnosticHelp:SetJustifyH("LEFT"); diagnosticHelp:SetJustifyV("TOP"); diagnosticHelp:SetWordWrap(true); diagnosticHelp:SetTextColor(unpack(C.white)); diagnosticHelp:SetText("Run a read-only snapshot. Recording and history remain separate and can be opened without stopping a session.")
+
+  local function RecordingMode()
+    local mode=tostring(Settings().instanceRecordingMode or "MANUAL"):upper()
+    if mode~="MANUAL" and mode~="AUTOMATIC" and mode~="OFF" then
+      mode="MANUAL"
+      Settings().instanceRecordingMode=mode
+    end
+    return mode
+  end
+
+  local function FormatEvidenceDuration(seconds)
+    seconds=math.max(0,math.floor(tonumber(seconds) or 0))
+    local hours=math.floor(seconds/3600)
+    local minutes=math.floor((seconds%3600)/60)
+    local secs=seconds%60
+    if hours>0 then return string.format("%02d:%02d:%02d",hours,minutes,secs) end
+    return string.format("%02d:%02d",minutes,secs)
+  end
+
+  function instanceUI.EvidenceElapsedSeconds()
+    local evidence=AzerCoreOpsDB and AzerCoreOpsDB.issueReportEvidence or nil
+    if evidence and evidence.stopRequestedElapsed then
+      return tonumber(evidence.stopRequestedElapsed) or 0
+    end
+    if instanceUI.evidenceSessionStartClock then
+      return math.max(0,GetTime()-instanceUI.evidenceSessionStartClock)
+    end
+    if evidence and evidence.durationSeconds then return tonumber(evidence.durationSeconds) or 0 end
+    if evidence and evidence.startedAtEpoch and evidence.before and not evidence.after then
+      return math.max(0,time()-(tonumber(evidence.startedAtEpoch) or time()))
+    end
+    return 0
+  end
+
+  function instanceUI.UpdateEvidenceSessionUI()
+    local evidence=AzerCoreOpsDB and AzerCoreOpsDB.issueReportEvidence or {}
+    local before=evidence and evidence.before~=nil
+    local after=evidence and evidence.after~=nil
+    local busy=instanceUI.captureFlow~=nil
+    local timed=evidence and (evidence.startedAtEpoch or evidence.durationSeconds)
+    local state="READY"
+    if before and not after and evidence.stopRequestedAt then state="STOPPING"
+    elseif busy then state="CAPTURING "..tostring(instanceUI.captureFlow.kind or "EVIDENCE")
+    elseif before and after and timed then state="COMPLETE"
+    elseif before and after then state="SAVED EVIDENCE"
+    elseif before then state="RECORDING" end
+    local mode=RecordingMode()
+    local modeLabel=mode=="AUTOMATIC" and "AUTO" or mode
+    if instanceUI.evidenceStateText then instanceUI.evidenceStateText:SetText(modeLabel..": "..state) end
+    if instanceUI.evidenceTimerText then
+      if before and after and not timed then
+        instanceUI.evidenceTimerText:SetText("Duration: --:--")
+      else
+        local prefix=(before or busy) and "Duration: " or "Elapsed: "
+        instanceUI.evidenceTimerText:SetText(prefix..FormatEvidenceDuration(instanceUI.EvidenceElapsedSeconds()))
+      end
+    end
+    if instanceUI.issueBeforeButton then
+      if mode=="OFF" or busy or (before and not after) then instanceUI.issueBeforeButton:Disable(); instanceUI.issueBeforeButton:SetAlpha(0.55)
+      else instanceUI.issueBeforeButton:Enable(); instanceUI.issueBeforeButton:SetAlpha(1) end
+    end
+    if instanceUI.issueAfterButton then
+      if busy or not before or after then instanceUI.issueAfterButton:Disable(); instanceUI.issueAfterButton:SetAlpha(0.55)
+      else instanceUI.issueAfterButton:Enable(); instanceUI.issueAfterButton:SetAlpha(1) end
+    end
+    if instanceUI.issueResetButton then
+      if busy or (not before and not after) then instanceUI.issueResetButton:Disable(); instanceUI.issueResetButton:SetAlpha(0.55)
+      else instanceUI.issueResetButton:Enable(); instanceUI.issueResetButton:SetAlpha(1) end
+    end
+  end
   local function NextInstanceRequestId()
     local nextId=(tonumber(instanceUI.requestGeneration) or 0)+1
     if nextId>2147483000 then nextId=1 end
@@ -6203,13 +6321,16 @@ local function BuildInstances()
 
   function instanceUI.SetEvidenceCaptureBusy(busy)
     local controls={diagnosticScan,diagnosticHistoryButton,diagnosticClear,
-      instanceUI.issueBeforeButton,instanceUI.issueAfterButton}
+      diagnosticOlder,diagnosticNewer,recordingOlder,recordingNewer,instanceUI.issueCompareButton,
+      instanceUI.issueBuildButton,instanceUI.issueNewDraftButton,
+      instanceUI.issueClearHistoryButton}
     for _,control in ipairs(controls) do
       if control then
         if busy then control:Disable() else control:Enable() end
         control:SetAlpha(busy and 0.55 or 1)
       end
     end
+    if instanceUI.UpdateEvidenceSessionUI then instanceUI.UpdateEvidenceSessionUI() end
   end
 
   function instanceUI.BeginDiagnosticRequest(purpose)
@@ -6226,6 +6347,20 @@ local function BuildInstances()
     if diagnosticScroll then diagnosticScroll:SetVerticalScroll(0) end
     if instanceUI.RenderDiagnostics then instanceUI.RenderDiagnostics() end
     SendCommand(CMD.instanceDiagnose.." "..tostring(requestId))
+    After(15,function()
+      if tonumber(instanceUI.pendingDiagnosticRequest)~=requestId then return end
+      instanceUI.pendingDiagnosticRequest=nil
+      instanceUI.pendingDiagnosticPurpose=nil
+      instanceUI.diagnostics.loading=false
+      instanceUI.diagnostics.error="Encounter diagnostic request timed out; retry the scan."
+      if instanceUI.captureFlow and
+        tonumber(instanceUI.captureFlow.diagnosticRequest)==requestId then
+        instanceUI.FailEvidenceCapture(instanceUI.diagnostics.error)
+      else
+        if instanceUI.RenderDiagnostics then instanceUI.RenderDiagnostics() end
+        SetStatus(instanceUI.diagnostics.error,true)
+      end
+    end)
     return true,requestId
   end
 
@@ -6237,20 +6372,43 @@ local function BuildInstances()
     instanceUI.pendingHistoryRequest=requestId
     instanceUI.pendingHistoryPurpose=purpose or "MANUAL"
     instanceUI.diagnostics.mode="HISTORY"
-    instanceUI.encounterHistory={entries={},stats={},loading=true,header=nil,
-      summary=nil,error=nil,generatedAt=nil,requestId=requestId,
-      purpose=instanceUI.pendingHistoryPurpose}
+    local previous=instanceUI.encounterHistory or {}
+    instanceUI.encounterHistory={entries=previous.entries or {},stats=previous.stats or {},loading=true,
+      header=previous.header,summary=previous.summary,error=nil,generatedAt=previous.generatedAt,
+      requestId=requestId,purpose=instanceUI.pendingHistoryPurpose}
     if diagnosticScroll then diagnosticScroll:SetVerticalScroll(0) end
     if instanceUI.RenderDiagnostics then instanceUI.RenderDiagnostics() end
     SendCommand(CMD.instanceHistory.." "..tostring(requestId))
+    After(15,function()
+      if tonumber(instanceUI.pendingHistoryRequest)~=requestId then return end
+      instanceUI.pendingHistoryRequest=nil
+      instanceUI.pendingHistoryPurpose=nil
+      instanceUI.diagnostics.mode="HISTORY"
+      instanceUI.encounterHistory.loading=false
+      instanceUI.encounterHistory.error="Encounter history request timed out; retry the request."
+      if instanceUI.captureFlow and
+        tonumber(instanceUI.captureFlow.historyRequest)==requestId then
+        instanceUI.FailEvidenceCapture(instanceUI.encounterHistory.error)
+      else
+        if instanceUI.RenderDiagnostics then instanceUI.RenderDiagnostics() end
+        SetStatus(instanceUI.encounterHistory.error,true)
+      end
+    end)
     return true,requestId
   end
 
   function instanceUI.FailEvidenceCapture(reason)
+    local failedKind=instanceUI.captureFlow and instanceUI.captureFlow.kind or nil
     instanceUI.captureFlow=nil
+    if failedKind=="BEFORE" then
+      instanceUI.evidenceSessionStartClock=nil
+      instanceUI.evidenceSessionElapsed=nil
+      if AzerCoreOpsDB then AzerCoreOpsDB.issueReportEvidence={} end
+    end
     instanceUI.SetEvidenceCaptureBusy(false)
     instanceUI.diagnostics.mode="SCAN"
     if instanceUI.RenderDiagnostics then instanceUI.RenderDiagnostics() end
+    if instanceUI.UpdateEvidenceSessionUI then instanceUI.UpdateEvidenceSessionUI() end
     SetStatus("Evidence capture failed: "..tostring(reason or "unknown error"),true)
   end
 
@@ -6265,63 +6423,158 @@ local function BuildInstances()
       ready,result=AzerCoreOpsIssueReport.MarkBefore(
         evidence,instanceUI.diagnostics,instanceUI.encounterHistory)
     else
+      local beforeSession=evidence.before and evidence.before.clientSessionId
+      if beforeSession~=evidence.sessionId then
+        instanceUI.FailEvidenceCapture("Current After capture does not belong to the active Before session.")
+        return
+      end
       ready,result=AzerCoreOpsIssueReport.MarkAfter(
         evidence,instanceUI.diagnostics,instanceUI.encounterHistory)
     end
     if not ready then instanceUI.FailEvidenceCapture(result); return end
+    result.clientSessionId=evidence.sessionId
     instanceUI.captureFlow=nil
     instanceUI.SetEvidenceCaptureBusy(false)
     instanceUI.diagnostics.mode="SCAN"
-    if instanceUI.RenderDiagnostics then instanceUI.RenderDiagnostics() end
-    local label=flow.kind=="BEFORE" and "Before" or "After"
-    local message=label.." evidence captured from fresh scan "..
+    local label=flow.kind=="BEFORE" and "Recording started" or "Recording stopped"
+    local message=label.." with fresh scan "..
       tostring(result.diagnostics and result.diagnostics.requestId or "?")..
       " at "..tostring(result.captured).."."
     if flow.kind=="BEFORE" and hadAfter then
-      message=message.." Previous After evidence cleared."
+      message=message.." Previous final snapshot cleared."
     end
+    if flow.kind=="AFTER" then
+      local elapsed=instanceUI.EvidenceElapsedSeconds and instanceUI.EvidenceElapsedSeconds() or 0
+      evidence.durationSeconds=elapsed
+      evidence.completedAt=date("%Y-%m-%d %H:%M:%S")
+      instanceUI.evidenceSessionElapsed=elapsed
+      instanceUI.evidenceSessionStartClock=nil
+      message=message.." Session duration "..FormatEvidenceDuration(elapsed).."."
+      SaveCompletedRecording(evidence)
+      message=message.." Saved in Reports."
+    end
+    if instanceUI.UpdateEvidenceSessionUI then instanceUI.UpdateEvidenceSessionUI() end
+    if instanceUI.RenderDiagnostics then instanceUI.RenderDiagnostics() end
     SetStatus(message)
   end
 
+  local function ReporterBuildInSync()
+    return Platform:ReporterCompatibility()
+  end
+
   function instanceUI.BeginEvidenceCapture(kind)
+    if kind=="BEFORE" then
+      local inSync,addonBuild,reporterBuild=ReporterBuildInSync()
+      if not inSync then
+        SetStatus("Cannot start recording: the issue reporter API is missing or incompatible. Main="..tostring(addonBuild)..", reporter="..tostring(reporterBuild or "unknown")..". Copy the current IssueReportFramework.lua and /reload.",true)
+        return
+      end
+    end
     if instanceUI.captureFlow then
       SetStatus("An evidence capture is already in progress.",true)
       return
     end
     AzerCoreOpsDB.issueReportEvidence=AzerCoreOpsDB.issueReportEvidence or {}
-    if kind=="AFTER" and not AzerCoreOpsDB.issueReportEvidence.before then
+    local evidence=AzerCoreOpsDB.issueReportEvidence
+    if kind=="AFTER" and evidence.before and not evidence.after and not evidence.stopRequestedAt then
+      local elapsed=instanceUI.EvidenceElapsedSeconds and instanceUI.EvidenceElapsedSeconds() or 0
+      evidence.stopRequestedElapsed=elapsed
+      evidence.durationSeconds=elapsed
+      evidence.stopRequestedAt=date("%Y-%m-%d %H:%M:%S")
+      evidence.stopRequestedEpoch=time()
+      instanceUI.evidenceSessionElapsed=elapsed
+      instanceUI.evidenceSessionStartClock=nil
+      if instanceUI.UpdateEvidenceSessionUI then instanceUI.UpdateEvidenceSessionUI() end
+      if instanceUI.RenderDiagnostics then instanceUI.RenderDiagnostics() end
+    end
+    if kind=="AFTER" and instanceUI.pendingHistoryRequest
+      and instanceUI.pendingHistoryPurpose=="RECORDING_LIVE" then
+      instanceUI.stopRecordingPending=true
+      SetStatus("Recording stopped at "..tostring(evidence.stopRequestedAt or "now").."; finalizing after the current timeline refresh completes...")
+      return
+    end
+    if kind=="BEFORE" then
+      instanceUI.workspaceOverride=nil
+      if AzerCoreOpsDB.issueReportEvidence.after then
+        SaveCompletedRecording(AzerCoreOpsDB.issueReportEvidence)
+        AzerCoreOpsDB.issueReportEvidence={}
+      end
+      if AzerCoreOpsDB.issueReportEvidence.before then
+        SetStatus("Stop the current recording before starting another.",true)
+        return
+      end
+      instanceUI.evidenceSessionGeneration=(tonumber(instanceUI.evidenceSessionGeneration) or 0)+1
+      AzerCoreOpsDB.issueReportEvidence={
+        sessionId=instanceUI.evidenceSessionGeneration,
+        startedAt=date("%Y-%m-%d %H:%M:%S"),
+        startedAtEpoch=time()
+      }
+      instanceUI.evidenceSessionStartClock=GetTime()
+      instanceUI.evidenceSessionElapsed=nil
+    elseif not AzerCoreOpsDB.issueReportEvidence.before then
       SetStatus("Capture Before evidence first.",true)
+      return
+    elseif AzerCoreOpsDB.issueReportEvidence.after then
+      SetStatus("This evidence session is complete. Start a new manual recording to continue.",true)
       return
     end
     instanceUI.captureFlow={kind=kind,stage="SCAN"}
+    if instanceUI.UpdateEvidenceSessionUI then instanceUI.UpdateEvidenceSessionUI() end
     instanceUI.SetEvidenceCaptureBusy(true)
     local ready,result=instanceUI.BeginDiagnosticRequest("CAPTURE_"..kind)
     if not ready then instanceUI.FailEvidenceCapture(result); return end
     instanceUI.captureFlow.diagnosticRequest=result
-    SetStatus("Refreshing live diagnostics for "..
-      (kind=="BEFORE" and "Before" or "After").." evidence...")
+    SetStatus(kind=="BEFORE" and
+      "Starting encounter recording with a fresh initial scan..." or
+      "Stopping encounter recording with a fresh final scan...")
   end
 
-  diagnosticScan=Button(diagnosticControls,"Scan Current Instance",156,28,function()
+  diagnosticScan=Button(diagnosticControls,"Run Diagnostic",156,28,function()
+    instanceUI.workspaceOverride="SCAN"
     local ready,result=instanceUI.BeginDiagnosticRequest("MANUAL")
     if not ready then SetStatus(result,true); return end
     SetStatus("Collecting live encounter evidence (scan "..tostring(result)..")...")
-  end,"Run a read-only server scan of the current instance"); diagnosticScan:SetPoint("TOPLEFT",12,-145)
+  end,"Run a read-only server scan of the current instance"); diagnosticScan:SetPoint("TOPLEFT",12,-82)
 
-  diagnosticHistoryButton=Button(diagnosticControls,"Encounter History",156,28,function()
+  diagnosticHistoryButton=Button(diagnosticControls,"View Live Progress",156,26,function()
+    instanceUI.diagnosticSubTab="RECORDING"
+    instanceUI.workspaceOverride="HISTORY"
     local ready,result=instanceUI.BeginHistoryRequest("MANUAL")
-    if not ready then SetStatus(result,true); return end
+    if not ready then
+      if instanceUI.pendingHistoryPurpose=="RECORDING_LIVE" then
+        SetStatus("Showing the current timeline; live refresh is in progress.")
+      else SetStatus(result,true) end
+      return
+    end
     SetStatus("Loading server encounter-state history (request "..tostring(result)..")...")
-  end,"Show server-captured encounter state transitions for the current live instance"); diagnosticHistoryButton:SetPoint("TOPLEFT",12,-181)
+  end,"Open the current server timeline and progress without stopping the recording"); diagnosticHistoryButton:SetPoint("TOPLEFT",12,-116)
 
-  diagnosticClear=Button(diagnosticControls,"Clear",72,22,function()
+  diagnosticClear=Button(diagnosticControls,"Clear View",76,22,function()
     instanceUI.diagnostics={findings={},recoveries={},loading=false,header=nil,summary=nil,error=nil,generatedAt=nil,historyIndex=0,mode="SCAN",evidence=nil}
     instanceUI.encounterHistory={entries={},stats={},loading=false,header=nil,summary=nil,error=nil,generatedAt=nil}
     if diagnosticScroll then diagnosticScroll:SetVerticalScroll(0) end
     instanceUI.RenderDiagnostics()
-    SetStatus("Encounter diagnostics cleared.")
-  end,"Clear the displayed encounter evidence"); diagnosticClear:SetPoint("TOPLEFT",12,-217)
+    SetStatus("Displayed encounter diagnostics cleared. Saved history was not changed.")
+  end,"Clear only the currently displayed diagnostic result"); diagnosticClear:SetPoint("TOPLEFT",12,-146)
 
+  local evidenceHeading=Section(diagnosticControls,"LIVE RECORDING",C.gold); evidenceHeading:SetPoint("TOPLEFT",10,-178)
+  instanceUI.evidenceStateText=diagnosticControls:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall")
+  instanceUI.evidenceStateText:SetPoint("TOPLEFT",12,-200); instanceUI.evidenceStateText:SetTextColor(unpack(C.white)); instanceUI.evidenceStateText:SetText("Status: IDLE")
+  instanceUI.evidenceTimerText=diagnosticControls:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall")
+  instanceUI.evidenceTimerText:SetPoint("TOPLEFT",12,-218); instanceUI.evidenceTimerText:SetTextColor(unpack(C.white)); instanceUI.evidenceTimerText:SetText("Elapsed: 00:00")
+
+  local function SelectRecordingReport(delta)
+    local reports=RecordingReports()
+    if #reports==0 then SetStatus("No completed encounter recordings saved yet.",true); return end
+    local index=math.max(1,math.min(#reports,(instanceUI.selectedRecordingReport or 1)+delta))
+    instanceUI.selectedRecordingReport=index
+    instanceUI.RenderDiagnostics()
+    SetStatus(string.format("Viewing saved recording %d of %d — %s",index,#reports,reports[index].completedAt or "unknown time"))
+  end
+  recordingOlder=Button(diagnosticControls,"< Older",72,22,function() SelectRecordingReport(1) end,"Open an older completed recording")
+  recordingNewer=Button(diagnosticControls,"Newer >",72,22,function() SelectRecordingReport(-1) end,"Open a newer completed recording")
+  recordingListLabel=Label(diagnosticControls,"No completed recordings yet","GameFontHighlightSmall")
+  recordingListLabel:SetWidth(156); recordingListLabel:SetJustifyH("LEFT"); recordingListLabel:SetTextColor(unpack(C.white))
   local function LoadDiagnosticHistory(delta)
     AzerCoreOpsDB.diagnosticHistory=AzerCoreOpsDB.diagnosticHistory or {}
     if #AzerCoreOpsDB.diagnosticHistory==0 then SetStatus("No saved diagnostic scans yet.",true); return end
@@ -6332,56 +6585,98 @@ local function BuildInstances()
     instanceUI.RenderDiagnostics()
     SetStatus(string.format("Viewing diagnostic history %d of %d — %s",index,#AzerCoreOpsDB.diagnosticHistory,saved.generatedAt or "unknown time"))
   end
-  diagnosticOlder=Button(diagnosticControls,"< Older",72,22,function() LoadDiagnosticHistory(1) end,"Open an older saved diagnostic scan"); diagnosticOlder:SetPoint("TOPLEFT",12,-249)
-  diagnosticNewer=Button(diagnosticControls,"Newer >",72,22,function() LoadDiagnosticHistory(-1) end,"Open a newer saved diagnostic scan"); diagnosticNewer:SetPoint("TOPLEFT",90,-249)
+
+  function instanceUI.StartRecording()
+    instanceUI.BeginEvidenceCapture("BEFORE")
+  end
+
+  function instanceUI.StopRecording()
+    if UnitIsDeadOrGhost("player") then
+      SetStatus("Stop Recording is unavailable while your character is dead or a ghost. Resurrect first, then click Stop Recording to capture the final snapshot.",true)
+      return
+    end
+    instanceUI.BeginEvidenceCapture("AFTER")
+  end
 
   instanceUI.issueBeforeButton=Button(
-    diagnosticControls,"Mark Before",72,22,function()
-      instanceUI.BeginEvidenceCapture("BEFORE")
-    end,
-    "Run a fresh scan and history refresh, then preserve Before evidence")
-  instanceUI.issueBeforeButton:SetPoint("TOPLEFT",12,-285)
+    diagnosticControls,"Start Manual Recording",156,24,instanceUI.StartRecording,
+    "Start a timed encounter recording with a fresh initial scan and history snapshot")
+  instanceUI.issueBeforeButton:SetPoint("TOPLEFT",12,-240)
 
   instanceUI.issueAfterButton=Button(
-    diagnosticControls,"Mark After",72,22,function()
-      instanceUI.BeginEvidenceCapture("AFTER")
-    end,
-    "Run a fresh scan and history refresh, then preserve After evidence")
-  instanceUI.issueAfterButton:SetPoint("TOPLEFT",90,-285)
+    diagnosticControls,"Stop Manual Recording",156,24,instanceUI.StopRecording,
+    "Stop recording after a fresh final scan and history snapshot is preserved. Your character must be alive to complete the final capture.")
+  instanceUI.issueAfterButton:SetPoint("TOPLEFT",12,-270)
 
-  instanceUI.issueCompareButton=Button(
-    diagnosticControls,"Compare Evidence",156,24,function()
-      AzerCoreOpsDB.issueReportEvidence=
-        AzerCoreOpsDB.issueReportEvidence or {}
-      if not AzerCoreOpsDB.issueReportEvidence.before
-        or not AzerCoreOpsDB.issueReportEvidence.after
-      then
-        SetStatus("Capture both Before and After evidence first.",true)
-        return
-      end
-      ShowSelectableReport(
-        "Before/After diagnostic evidence",
-        AzerCoreOpsIssueReport.ComparisonText(
-          AzerCoreOpsDB.issueReportEvidence.before,
-          AzerCoreOpsDB.issueReportEvidence.after))
+  instanceUI.issueResetButton=Button(
+    diagnosticControls,"Reset Session",156,22,function()
+      if instanceUI.captureFlow then SetStatus("Wait for the current evidence capture to finish before resetting.",true); return end
+      instanceUI.evidenceSessionGeneration=(tonumber(instanceUI.evidenceSessionGeneration) or 0)+1
+      AzerCoreOpsDB.issueReportEvidence={sessionId=instanceUI.evidenceSessionGeneration}
+      instanceUI.evidenceSessionStartClock=nil
+      instanceUI.evidenceSessionElapsed=nil
+      instanceUI.UpdateEvidenceSessionUI()
+      instanceUI.stopRecordingPending=nil
+      instanceUI.workspaceOverride=nil
+      instanceUI.diagnostics.mode="SCAN"
+      if instanceUI.RenderDiagnostics then instanceUI.RenderDiagnostics() end
+      SetStatus("Current encounter recording reset. New session "..tostring(instanceUI.evidenceSessionGeneration).." is ready; saved diagnostic history was not changed.")
     end,
-    "Compare the preserved read-only diagnostic snapshots")
-  instanceUI.issueCompareButton:SetPoint("TOPLEFT",12,-317)
+    "Discard only the current encounter recording and timer; saved reports remain available")
+  instanceUI.issueResetButton:SetPoint("TOPLEFT",12,-300)
+
+  local historyHeading=Section(diagnosticControls,"SAVED REPORTS",C.gold); historyHeading:SetPoint("TOPLEFT",10,-332)
+  diagnosticOlder=Button(diagnosticControls,"< Older",72,22,function() LoadDiagnosticHistory(1) end,"Open an older saved diagnostic scan"); diagnosticOlder:SetPoint("TOPLEFT",12,-354)
+  diagnosticNewer=Button(diagnosticControls,"Newer >",72,22,function() LoadDiagnosticHistory(-1) end,"Open a newer saved diagnostic scan"); diagnosticNewer:SetPoint("TOPLEFT",90,-354)
+
+  local function ClearAllDiagnosticHistory()
+    AzerCoreOpsDB.diagnosticHistory={}
+    AzerCoreOpsDB.recordingReports={}
+    instanceUI.selectedRecordingReport=nil
+    AzerCoreOpsDB.issueReportEvidence={}
+    instanceUI.evidenceSessionStartClock=nil
+    instanceUI.evidenceSessionElapsed=nil
+    instanceUI.diagnostics={findings={},recoveries={},loading=false,header=nil,summary=nil,error=nil,generatedAt=nil,historyIndex=0,mode="SCAN",evidence=nil}
+    instanceUI.encounterHistory={entries={},stats={},loading=false,header=nil,summary=nil,error=nil,generatedAt=nil}
+    if diagnosticScroll then diagnosticScroll:SetVerticalScroll(0) end
+    if instanceUI.RenderDiagnostics then instanceUI.RenderDiagnostics() end
+    instanceUI.UpdateEvidenceSessionUI()
+    SetStatus("Local AzerCoreOps diagnostic and evidence history deleted. Server encounter state/history was not changed.")
+  end
+
+  StaticPopupDialogs["AZERCORE_OPS_CLEAR_DIAGNOSTIC_HISTORY"]={
+    text="Delete ALL locally saved AzerCoreOps diagnostic scans and the current encounter recording?\n\nThis does not change the server instance or boss states.",
+    button1="DELETE ALL",button2="Cancel",timeout=0,whileDead=true,hideOnEscape=true,preferredIndex=3,
+    OnAccept=function() ClearAllDiagnosticHistory() end
+  }
+
+  instanceUI.issueClearHistoryButton=Button(
+    diagnosticControls,"Delete All History",156,22,function()
+      StaticPopup_Show("AZERCORE_OPS_CLEAR_DIAGNOSTIC_HISTORY")
+    end,
+    "Delete all locally saved diagnostic scans and current evidence after confirmation")
+  instanceUI.issueClearHistoryButton:SetPoint("TOPLEFT",12,-382)
 
   instanceUI.issueBuildButton=Button(
-    diagnosticControls,"Build Issue Report",156,24,function()
+    diagnosticControls,"Build Report",72,22,function()
       local evidence=AzerCoreOpsDB.issueReportEvidence or {}
+      if instanceUI.diagnosticSubTab=="REPORTS" then
+        evidence=RecordingReports()[instanceUI.selectedRecordingReport or 1] or {}
+      end
       AzerCoreOpsIssueReport.OpenDraft(
         evidence.before,evidence.after,
         Platform.AddonBuild or ADDON_VERSION,
         ShowSelectableReport,SetStatus)
     end,
     "Build and review a privacy-conscious AzerothCore issue draft")
-  instanceUI.issueBuildButton:SetPoint("TOPLEFT",12,-349)
+  instanceUI.issueBuildButton:SetPoint("TOPLEFT",12,-414)
 
   instanceUI.issueNewDraftButton=Button(
-    diagnosticControls,"New Issue Draft",156,24,function()
+    diagnosticControls,"New Draft",72,22,function()
       local evidence=AzerCoreOpsDB.issueReportEvidence or {}
+      if instanceUI.diagnosticSubTab=="REPORTS" then
+        evidence=RecordingReports()[instanceUI.selectedRecordingReport or 1] or {}
+      end
       local ready,reason=AzerCoreOpsIssueReport.NewDraft(
         evidence.before,evidence.after,
         Platform.AddonBuild or ADDON_VERSION)
@@ -6392,18 +6687,443 @@ local function BuildInstances()
         ShowSelectableReport,SetStatus)
     end,
     "Deliberately replace the saved draft and bind it to current evidence")
-  instanceUI.issueNewDraftButton:SetPoint("TOPLEFT",12,-381)
+  instanceUI.issueNewDraftButton:SetPoint("TOPLEFT",90,-414)
 
-  local diagnosticPanel=CreateFrame("Frame",nil,diagnosticPage); diagnosticPanel:SetPoint("TOPLEFT",200,-5); diagnosticPanel:SetPoint("BOTTOMRIGHT",-12,10); Backdrop(diagnosticPanel,C.panel)
+  -- Keep the recorder clock and live polling active even while the main
+  -- AzerCoreOps window or Diagnostics page is hidden.
+  local evidenceTicker=CreateFrame("Frame",nil,UIParent)
+  local evidenceTick=0
+  local recordingHistoryTick=0
+  evidenceTicker:SetScript("OnUpdate",function(_,elapsed)
+    evidenceTick=evidenceTick+elapsed
+    recordingHistoryTick=recordingHistoryTick+elapsed
+    if evidenceTick<0.25 then return end
+    evidenceTick=0
+    local evidence=AzerCoreOpsDB and AzerCoreOpsDB.issueReportEvidence or nil
+    local recording=evidence and evidence.before and not evidence.after and not evidence.stopRequestedAt
+    if instanceUI.evidenceSessionStartClock or recording or (evidence and evidence.stopRequestedAt and not evidence.after) then
+      instanceUI.UpdateEvidenceSessionUI()
+      if instanceUI.RenderDiagnostics and diagnosticControls:IsShown() then instanceUI.RenderDiagnostics() end
+    end
+    if instanceUI.UpdateRecordingStatusButton then instanceUI.UpdateRecordingStatusButton() end
+    if recording and recordingHistoryTick>=3 then
+      recordingHistoryTick=0
+      if not instanceUI.captureFlow and not instanceUI.pendingDiagnosticRequest
+        and not instanceUI.pendingHistoryRequest then
+        instanceUI.BeginHistoryRequest("RECORDING_LIVE")
+      end
+    elseif not recording then
+      recordingHistoryTick=0
+    end
+  end)
+  SaveCompletedRecording(AzerCoreOpsDB and AzerCoreOpsDB.issueReportEvidence)
+  instanceUI.UpdateEvidenceSessionUI()
+
+  local diagnosticPanel=CreateFrame("Frame",nil,diagnosticPage); diagnosticPanel:SetPoint("TOPLEFT",200,-36); diagnosticPanel:SetPoint("BOTTOMRIGHT",-12,10); Backdrop(diagnosticPanel,C.panel)
   local diagnosticTitle=Section(diagnosticPanel,"LIVE ENCOUNTER EVIDENCE",C.gold); diagnosticTitle:SetPoint("TOPLEFT",10,-10)
+
+  local recordingSettings=CreateFrame("Frame","AZERCORE_OPS_RecordingSettings",UIParent)
+  recordingSettings:SetWidth(500); recordingSettings:SetHeight(520)
+  recordingSettings:SetPoint("CENTER",UIParent,"CENTER",
+    tonumber(Settings().recordingSettingsX) or 0,tonumber(Settings().recordingSettingsY) or 0)
+  recordingSettings:SetFrameStrata("FULLSCREEN_DIALOG"); recordingSettings:SetFrameLevel(120)
+  recordingSettings:SetClampedToScreen(true)
+  Backdrop(recordingSettings,C.panel)
+  recordingSettings:SetBackdropColor(0.012,0.016,0.024,.98)
+  recordingSettings:SetBackdropBorderColor(unpack(C.gold))
+  recordingSettings:EnableMouse(true); recordingSettings:SetMovable(true)
+  recordingSettings:RegisterForDrag("LeftButton")
+  recordingSettings:SetScript("OnDragStart",function(self) self:StartMoving() end)
+  recordingSettings:SetScript("OnDragStop",function(self)
+    self:StopMovingOrSizing()
+    local x,y=self:GetCenter(); local ux,uy=UIParent:GetCenter()
+    Settings().recordingSettingsX=math.floor((x or ux)-ux+.5)
+    Settings().recordingSettingsY=math.floor((y or uy)-uy+.5)
+  end)
+  recordingSettings:Hide()
+  instanceUI.recordingSettings=recordingSettings
+
+  local recordingSettingsTitle=Section(recordingSettings,"RECORDING SETTINGS  |cff909090(drag to move)|r",C.gold)
+  recordingSettingsTitle:SetPoint("TOPLEFT",14,-14)
+  Button(recordingSettings,"X",24,20,function() recordingSettings:Hide() end,
+    "Close recording settings"):SetPoint("TOPRIGHT",-10,-10)
+
+  local modeButtons,detailButtons,customChecks={}, {}, {}
+  local function SettingLabel(text,y)
+    local label=recordingSettings:CreateFontString(nil,"OVERLAY","GameFontNormalSmall")
+    label:SetPoint("TOPLEFT",14,y); label:SetText(text); label:SetTextColor(unpack(C.gold))
+    return label
+  end
+  SettingLabel("RECORDING MODE",-46)
+  local recordingModeHelp=recordingSettings:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall")
+  recordingModeHelp:SetPoint("TOPRIGHT",-14,-46); recordingModeHelp:SetText("Manual is the default")
+  recordingModeHelp:SetTextColor(unpack(C.muted))
+
+  local function RecordingCheck(x,y,label,key,tip,onChange)
+    local check=CreateFrame("CheckButton",nil,recordingSettings,"UICheckButtonTemplate")
+    check:SetWidth(22); check:SetHeight(22); check:SetPoint("TOPLEFT",x,y)
+    local text=recordingSettings:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall")
+    text:SetPoint("LEFT",check,"RIGHT",2,0); text:SetText(label); text:SetTextColor(unpack(C.white))
+    check.label=text; check.settingKey=key
+    check:SetChecked(Settings()[key] and true or false)
+    check:SetScript("OnClick",function(self)
+      Settings()[key]=self:GetChecked() and true or false
+      if onChange then onChange(self) end
+    end)
+    check:SetScript("OnEnter",function(self)
+      if Settings().showTooltips==false then return end
+      GameTooltip:SetOwner(self,"ANCHOR_RIGHT"); GameTooltip:SetText(label,1,.82,0)
+      GameTooltip:AddLine(tip,1,1,1,true); GameTooltip:Show()
+    end)
+    check:SetScript("OnLeave",function() GameTooltip:Hide() end)
+    return check
+  end
+
+  local function RefreshRecordingSettings()
+    local selected=RecordingMode()
+    for mode,button in pairs(modeButtons) do
+      button:SetBackdropColor(unpack(mode==selected and C.selected or C.button))
+      button:SetBackdropBorderColor(unpack(mode==selected and C.gold or C.border))
+    end
+    local detail=tostring(Settings().recordingDetailLevel or "STANDARD"):upper()
+    if detail~="FULL" and detail~="CUSTOM" then detail="STANDARD" end
+    Settings().recordingDetailLevel=detail
+    for level,button in pairs(detailButtons) do
+      button:SetBackdropColor(unpack(level==detail and C.selected or C.button))
+      button:SetBackdropBorderColor(unpack(level==detail and C.gold or C.border))
+    end
+    for _,check in ipairs(customChecks) do
+      check:SetChecked(Settings()[check.settingKey] and true or false)
+      if detail=="CUSTOM" then check:Enable(); check:SetAlpha(1)
+      else check:Disable(); check:SetAlpha(.48) end
+    end
+    if instanceUI.UpdateEvidenceSessionUI then instanceUI.UpdateEvidenceSessionUI() end
+  end
+  local function SetRecordingMode(mode)
+    Settings().instanceRecordingMode=mode
+    RefreshRecordingSettings()
+    SetStatus("Instance recording mode set to "..(mode=="AUTOMATIC" and "Automatic Instance" or mode)..".")
+  end
+  instanceUI.SetRecordingMode=SetRecordingMode
+  instanceUI.RefreshRecordingSettings=RefreshRecordingSettings
+  modeButtons.MANUAL=Button(recordingSettings,"Manual",108,24,function() SetRecordingMode("MANUAL") end,
+    "Start and stop an instance recording yourself")
+  modeButtons.MANUAL:SetPoint("TOPLEFT",14,-64)
+  modeButtons.AUTOMATIC=Button(recordingSettings,"Automatic",108,24,function() SetRecordingMode("AUTOMATIC") end,
+    "Start or resume when entering a supported instance")
+  modeButtons.AUTOMATIC:SetPoint("LEFT",modeButtons.MANUAL,"RIGHT",8,0)
+  modeButtons.OFF=Button(recordingSettings,"Off",88,24,function() SetRecordingMode("OFF") end,
+    "Do not create new recording sessions")
+  modeButtons.OFF:SetPoint("LEFT",modeButtons.AUTOMATIC,"RIGHT",8,0)
+
+  SettingLabel("EVIDENCE DETAIL",-106)
+  local function SetRecordingDetail(level)
+    Settings().recordingDetailLevel=level
+    RefreshRecordingSettings()
+    SetStatus("Recording detail set to "..(level=="FULL" and "Full Trace" or (level=="CUSTOM" and "Custom" or "Standard"))..".")
+  end
+  instanceUI.SetRecordingDetail=SetRecordingDetail
+  detailButtons.STANDARD=Button(recordingSettings,"Standard",108,24,function() SetRecordingDetail("STANDARD") end,
+    "Main mechanics, phases, progression, adds, doors, objects and instance signals")
+  detailButtons.STANDARD:SetPoint("TOPLEFT",14,-124)
+  detailButtons.FULL=Button(recordingSettings,"Full Trace",108,24,function() SetRecordingDetail("FULL") end,
+    "All profiled events plus script casts and aura activity")
+  detailButtons.FULL:SetPoint("LEFT",detailButtons.STANDARD,"RIGHT",8,0)
+  detailButtons.CUSTOM=Button(recordingSettings,"Custom",108,24,function() SetRecordingDetail("CUSTOM") end,
+    "Choose the event categories to retain")
+  detailButtons.CUSTOM:SetPoint("LEFT",detailButtons.FULL,"RIGHT",8,0)
+
+  SettingLabel("CUSTOM EVENT CATEGORIES",-166)
+  customChecks[1]=RecordingCheck(12,-180,"Boss milestones","recordingCustomBoss","Pulls, kills and encounter completion")
+  customChecks[2]=RecordingCheck(252,-180,"Phases","recordingCustomPhases","Phase changes and phase hints")
+  customChecks[3]=RecordingCheck(12,-206,"Doors and objects","recordingCustomObjects","Doors, gates, controls, valves and instance signals")
+  customChecks[4]=RecordingCheck(252,-206,"Player lifecycle","recordingCustomLifecycle","Death, spirit release, resurrection and instance travel")
+  customChecks[5]=RecordingCheck(12,-232,"Trash and adds","recordingCustomTrash","Creature spawns and deaths")
+  customChecks[6]=RecordingCheck(252,-232,"Spells and auras","recordingCustomSpells","Mechanic/script casts and aura changes")
+
+  SettingLabel("WORKSPACE & OUTPUT",-274)
+  local tooltipCheck=RecordingCheck(12,-288,"Show tooltips","showTooltips",
+    "Enable explanatory tooltips throughout AzerCore Ops")
+  local fullOutputCheck=RecordingCheck(252,-288,"Share/export full text","recordingShareExportFull",
+    "Share and Export use the complete recording even while Standard view is displayed")
+  local selectableCheck=RecordingCheck(12,-314,"Selectable Export window","recordingSelectableExport",
+    "Open Export text in a selectable Ctrl+C window; disabled switches the workspace to Full view")
+  local statusCheck=RecordingCheck(252,-314,"Floating recorder status","recordingStatusButton",
+    "Show the movable recording-state control",function() if instanceUI.UpdateRecordingStatusButton then instanceUI.UpdateRecordingStatusButton() end end)
+
+  SettingLabel("FLOATING RECORDER",-352)
+  local lockCheck=RecordingCheck(12,-366,"Lock position","recordingStatusLocked",
+    "Prevent accidental movement of the floating recorder control")
+  local elapsedCheck=RecordingCheck(252,-366,"Show elapsed time","recordingStatusShowElapsed",
+    "Display the current recording duration on the floating control")
+
+  SettingLabel("INSTANCE JOURNEY",-404)
+  RecordingCheck(12,-418,"Resume same Instance ID","recordingResumeSameInstance",
+    "Continue the matching session after leaving, disconnecting or reloading")
+  RecordingCheck(252,-418,"Continue events while away","recordingContinueWhileAway",
+    "Keep shared server events while the player is outside")
+  RecordingCheck(12,-444,"Finalize verified completion","recordingFinalizeOnComplete",
+    "Complete only after the instance profile verifies completion")
+  RecordingCheck(252,-444,"Lifecycle events","recordingLifecycleEvents",
+    "Record death, spirit release and resurrection")
+  RecordingCheck(12,-470,"Recording notifications","recordingNotifications",
+    "Show concise recording state messages")
+  RecordingCheck(252,-470,"Open completed report","recordingOpenCompleted",
+    "Open the saved report after verified completion")
+
+  local retentionLabel=recordingSettings:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall")
+  retentionLabel:SetPoint("BOTTOMLEFT",16,14); retentionLabel:SetTextColor(unpack(C.white))
+  local function RefreshRetention()
+    local value=math.max(1,math.min(50,tonumber(Settings().recordingRetention) or 10))
+    Settings().recordingRetention=value
+    retentionLabel:SetText("Saved sessions: "..value)
+  end
+  Button(recordingSettings,"-",28,20,function()
+    Settings().recordingRetention=math.max(1,(tonumber(Settings().recordingRetention) or 10)-1)
+    RefreshRetention()
+  end,"Keep fewer completed sessions"):SetPoint("BOTTOMRIGHT",-50,10)
+  Button(recordingSettings,"+",28,20,function()
+    Settings().recordingRetention=math.min(50,(tonumber(Settings().recordingRetention) or 10)+1)
+    RefreshRetention()
+  end,"Keep more completed sessions"):SetPoint("BOTTOMRIGHT",-14,10)
+
+  function instanceUI.OpenRecordingSettings()
+    RefreshRecordingSettings(); RefreshRetention()
+    recordingSettings:Show(); recordingSettings:Raise()
+  end
+  local recordingSettingsButton=Button(diagnosticControls,"Recording Settings",156,22,function()
+    if recordingSettings:IsShown() then recordingSettings:Hide()
+    else instanceUI.OpenRecordingSettings() end
+  end,"Open the complete recording, floating-control, and output settings")
+
+  local diagnosticTabControls={
+    diagnosticHeading,diagnosticHelp,diagnosticScan,diagnosticHistoryButton,diagnosticClear,
+    evidenceHeading,instanceUI.evidenceStateText,instanceUI.evidenceTimerText,
+    instanceUI.issueBeforeButton,instanceUI.issueAfterButton,instanceUI.issueResetButton,
+    recordingSettingsButton,historyHeading,diagnosticOlder,diagnosticNewer,
+    recordingOlder,recordingNewer,recordingListLabel,
+    instanceUI.issueClearHistoryButton,instanceUI.issueBuildButton,instanceUI.issueNewDraftButton
+  }
+  local function ShowDiagnosticControls(...)
+    for _,control in pairs(diagnosticTabControls) do if control then control:Hide() end end
+    for index=1,select("#",...) do
+      local control=select(index,...)
+      if control then control:Show() end
+    end
+  end
+  local function PlaceControl(control,point,relativePoint,x,y)
+    control:ClearAllPoints()
+    control:SetPoint(point,diagnosticControls,relativePoint,x,y)
+  end
+  SelectDiagnosticTab=function(tab)
+    tab=tab=="RECORDING" and "RECORDING" or (tab=="REPORTS" and "REPORTS" or "SCAN")
+    instanceUI.diagnosticSubTab=tab
+    recordingSettings:Hide()
+    for name,button in pairs(diagnosticTabButtons) do
+      button:SetBackdropColor(unpack(name==tab and C.selected or C.button))
+      button:SetBackdropBorderColor(unpack(name==tab and C.gold or C.border))
+    end
+    if tab=="RECORDING" then
+      ShowDiagnosticControls(evidenceHeading,instanceUI.evidenceStateText,instanceUI.evidenceTimerText,
+        instanceUI.issueBeforeButton,instanceUI.issueAfterButton,instanceUI.issueResetButton,
+        diagnosticHistoryButton,recordingSettingsButton)
+      PlaceControl(evidenceHeading,"TOPLEFT","TOPLEFT",10,-12)
+      PlaceControl(recordingSettingsButton,"TOPLEFT","TOPLEFT",12,-38)
+      PlaceControl(instanceUI.evidenceStateText,"TOPLEFT","TOPLEFT",12,-72)
+      PlaceControl(instanceUI.evidenceTimerText,"TOPLEFT","TOPLEFT",12,-92)
+      PlaceControl(instanceUI.issueBeforeButton,"TOPLEFT","TOPLEFT",12,-122)
+      PlaceControl(instanceUI.issueAfterButton,"TOPLEFT","TOPLEFT",12,-154)
+      PlaceControl(instanceUI.issueResetButton,"TOPLEFT","TOPLEFT",12,-186)
+      PlaceControl(diagnosticHistoryButton,"TOPLEFT","TOPLEFT",12,-226)
+      diagnosticTitle:SetText("LIVE INSTANCE PROGRESS")
+      instanceUI.workspaceOverride="HISTORY"
+    elseif tab=="REPORTS" then
+      ShowDiagnosticControls(historyHeading,recordingOlder,recordingNewer,recordingListLabel,
+        instanceUI.issueClearHistoryButton,instanceUI.issueBuildButton,instanceUI.issueNewDraftButton)
+      PlaceControl(historyHeading,"TOPLEFT","TOPLEFT",10,-12)
+      PlaceControl(recordingOlder,"TOPLEFT","TOPLEFT",12,-40)
+      PlaceControl(recordingNewer,"TOPLEFT","TOPLEFT",90,-40)
+      PlaceControl(recordingListLabel,"TOPLEFT","TOPLEFT",12,-74)
+      PlaceControl(instanceUI.issueClearHistoryButton,"TOPLEFT","TOPLEFT",12,-114)
+      PlaceControl(instanceUI.issueBuildButton,"TOPLEFT","TOPLEFT",12,-146)
+      PlaceControl(instanceUI.issueNewDraftButton,"TOPLEFT","TOPLEFT",90,-146)
+      diagnosticTitle:SetText("SAVED REPORT EVIDENCE")
+    else
+      ShowDiagnosticControls(diagnosticHeading,diagnosticHelp,diagnosticScan,diagnosticClear)
+      PlaceControl(diagnosticHeading,"TOPLEFT","TOPLEFT",10,-12)
+      diagnosticHelp:ClearAllPoints()
+      diagnosticHelp:SetPoint("TOPLEFT",diagnosticControls,"TOPLEFT",10,-38)
+      diagnosticHelp:SetPoint("TOPRIGHT",diagnosticControls,"TOPRIGHT",-10,-38)
+      PlaceControl(diagnosticScan,"TOPLEFT","TOPLEFT",12,-100)
+      PlaceControl(diagnosticClear,"TOPLEFT","TOPLEFT",12,-138)
+      diagnosticTitle:SetText("LIVE DIAGNOSTIC EVIDENCE")
+      instanceUI.workspaceOverride="SCAN"
+    end
+    if instanceUI.RenderDiagnostics then instanceUI.RenderDiagnostics() end
+  end
+  for name,button in pairs(diagnosticTabButtons) do
+    local tabName=name
+    button:SetScript("OnLeave",function(self)
+      local active=instanceUI.diagnosticSubTab==tabName
+      self:SetBackdropColor(unpack(active and C.selected or C.button))
+      self:SetBackdropBorderColor(unpack(active and C.gold or C.border))
+      GameTooltip:Hide()
+    end)
+  end
+  instanceUI.SelectDiagnosticTab=SelectDiagnosticTab
+  RefreshRecordingSettings(); RefreshRetention()
+
   diagnosticScroll=CreateFrame("ScrollFrame","AZERCORE_OPS_EncounterDiagnosticScroll",diagnosticPanel,"UIPanelScrollFrameTemplate"); diagnosticScroll:SetPoint("TOPLEFT",10,-32); diagnosticScroll:SetPoint("BOTTOMRIGHT",-28,36)
-  local diagnosticChild=CreateFrame("Frame",nil,diagnosticScroll); diagnosticChild:SetWidth(650); diagnosticChild:SetHeight(500); diagnosticScroll:SetScrollChild(diagnosticChild)
-  local diagnosticText=diagnosticChild:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); diagnosticText:SetPoint("TOPLEFT",2,-2); diagnosticText:SetWidth(640); diagnosticText:SetJustifyH("LEFT"); diagnosticText:SetJustifyV("TOP"); diagnosticText:SetWordWrap(true)
+  -- Keep encounter-recording output inside the visible diagnostic panel.
+  -- The scroll viewport is ~540 logical pixels wide; the previous 650px
+  -- child forced wrapped report content and controls beyond the right edge.
+  local diagnosticChild=CreateFrame("Frame",nil,diagnosticScroll); diagnosticChild:SetWidth(530); diagnosticChild:SetHeight(500); diagnosticScroll:SetScrollChild(diagnosticChild)
+  local diagnosticText=diagnosticChild:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); diagnosticText:SetPoint("TOPLEFT",2,-2); diagnosticText:SetWidth(520); diagnosticText:SetJustifyH("LEFT"); diagnosticText:SetJustifyV("TOP"); diagnosticText:SetWordWrap(true)
+  SelectDiagnosticTab(instanceUI.diagnosticSubTab or "SCAN")
 
   local function EncounterHistoryTime(value)
     local milliseconds=tonumber(value)
     if not milliseconds then return "unknown" end
     return date("%m-%d %H:%M:%S",math.floor(milliseconds/1000))
+  end
+
+  local function MechanicElapsed(value)
+    local seconds=math.max(0,math.floor((tonumber(value) or 0)/1000))
+    local hours=math.floor(seconds/3600)
+    local minutes=math.floor((seconds%3600)/60)
+    if hours>0 then return string.format("+%02d:%02d:%02d",hours,minutes,seconds%60) end
+    return string.format("+%02d:%02d",minutes,seconds%60)
+  end
+
+  local function AppendMechanicTimeline(add,events,plain)
+    events=events or {}
+    add(plain and "MECHANIC ACTIVITY" or "|cffffd100MECHANIC ACTIVITY|r")
+    if #events==0 then
+      add("No profile-matched mechanic activity captured yet.")
+      add("")
+      return
+    end
+    local colors={ENCOUNTER_START="|cff00bfff",NPC_SPAWN="|cff80dfff",
+      NPC_DEATH="|cff40ff40",ENCOUNTER_KILL="|cff40ff40",
+      ENCOUNTER_END="|cffff8030",INSTANCE_ENTER="|cff80dfff",
+      PLAYER_RETURNED="|cff40ff40",PLAYER_LEFT="|cffffb020",
+      PLAYER_DIED="|cffff4040",SPIRIT_RELEASED="|cffb080ff",
+      PLAYER_RESURRECTED="|cff40ff40",DOOR_CLOSED="|cffffb020",DOOR_BLOCKED="|cffffb020",
+      DOOR_OPENED="|cff40ff40",MECHANIC_CAST="|cff80dfff",
+      PHASE_HINT="|cffffb020",OBJECT_OBSERVED="|cff80dfff",
+      OBJECT_STATE="|cff40ff40",VALVE_ACTIVATED="|cff40ff40",
+      INSTANCE_SIGNAL="|cff40ff40",SCRIPT_CAST="|cffb0b0b0",
+      AURA_APPLIED="|cffb080ff",AURA_REMOVED="|cff808080"}
+    for _,entry in ipairs(events) do
+      local event=tostring(entry.event or "MECHANIC")
+      local label=plain and ("["..event.."]") or
+        ((colors[event] or "|cffffffff").."["..event.."]|r")
+      local subject=tostring(entry.creature or "")
+      if subject=="" then subject=tostring(entry.mechanicname or "Encounter") end
+      if tonumber(entry.entry) and tonumber(entry.entry)>0 then
+        subject=subject.." ["..tostring(entry.entry).."]"
+      end
+      add(string.format("#%s  %s  %s  %s",
+        tostring(entry.seq or "?"),MechanicElapsed(entry.sessionElapsed or entry.elapsed),label,subject))
+      if entry.mechanicname and entry.mechanicname~="" then
+        add("  Mechanic: "..tostring(entry.mechanicname)..
+          ((entry.phase and entry.phase~="") and ("  |  Phase: "..tostring(entry.phase)) or ""))
+      end
+      if entry.detail and entry.detail~="" then add("  "..tostring(entry.detail)) end
+      add("")
+    end
+  end
+
+  local function AppendMechanicSummary(add,events,plain)
+    events=events or {}
+    add(plain and "SESSION HIGHLIGHTS" or "|cffffd100SESSION HIGHLIGHTS|r")
+    if #events==0 then
+      add("No profiled mechanic activity was recorded during this session.")
+      add("")
+      return
+    end
+
+    local important={
+      ENCOUNTER_START=true,ENCOUNTER_KILL=true,ENCOUNTER_END=true,
+      INSTANCE_ENTER=true,PLAYER_RETURNED=true,PLAYER_LEFT=true,
+      PLAYER_DIED=true,SPIRIT_RELEASED=true,PLAYER_RESURRECTED=true,
+      DOOR_CLOSED=true,DOOR_BLOCKED=true,DOOR_OPENED=true,
+      PHASE_HINT=true,OBJECT_OBSERVED=true,OBJECT_STATE=true,
+      VALVE_ACTIVATED=true,INSTANCE_SIGNAL=true
+    }
+    local colors={ENCOUNTER_START="|cff00bfff",ENCOUNTER_KILL="|cff40ff40",
+      ENCOUNTER_END="|cffff8030",INSTANCE_ENTER="|cff80dfff",
+      PLAYER_RETURNED="|cff40ff40",PLAYER_LEFT="|cffffb020",
+      PLAYER_DIED="|cffff4040",SPIRIT_RELEASED="|cffb080ff",
+      PLAYER_RESURRECTED="|cff40ff40",DOOR_CLOSED="|cffffb020",
+      DOOR_BLOCKED="|cffffb020",DOOR_OPENED="|cff40ff40",
+      PHASE_HINT="|cffffb020",OBJECT_OBSERVED="|cff80dfff",
+      OBJECT_STATE="|cff40ff40",VALVE_ACTIVATED="|cff40ff40",
+      INSTANCE_SIGNAL="|cff40ff40"}
+    local ignoredCritters={["Black Rat"]=true,Roach=true,Spider=true}
+    local deaths,spawns={},{}
+    local hidden=0
+    local shown=0
+
+    local function subject(entry)
+      local value=tostring(entry.creature or "")
+      if value=="" then value=tostring(entry.mechanicname or "Encounter") end
+      return value
+    end
+    local function addImportant(entry)
+      local event=tostring(entry.event or "MECHANIC")
+      local label=plain and ("["..event.."]") or
+        ((colors[event] or "|cffffffff").."["..event.."]|r")
+      add(string.format("%s  %s  %s",
+        MechanicElapsed(entry.sessionElapsed or entry.elapsed),label,subject(entry)))
+      if entry.detail and entry.detail~="" then add("  "..tostring(entry.detail)) end
+      shown=shown+1
+    end
+
+    for _,entry in ipairs(events) do
+      local event=tostring(entry.event or "")
+      local name=subject(entry)
+      if important[event] then
+        addImportant(entry)
+      elseif event=="NPC_DEATH" and not ignoredCritters[name] then
+        deaths[name]=(deaths[name] or 0)+1
+        hidden=hidden+1
+      elseif event=="NPC_SPAWN" and not ignoredCritters[name] then
+        spawns[name]=(spawns[name] or 0)+1
+        hidden=hidden+1
+      else
+        hidden=hidden+1
+      end
+    end
+
+    local function appendGroups(label,groups)
+      local values={}
+      for name,count in pairs(groups) do table.insert(values,{name=name,count=count}) end
+      table.sort(values,function(a,b)
+        if a.count==b.count then return a.name<b.name end
+        return a.count>b.count
+      end)
+      if #values>0 then
+        local parts={}
+        for index,item in ipairs(values) do
+          if index<=10 then table.insert(parts,item.name.." x"..tostring(item.count)) end
+        end
+        if #values>10 then table.insert(parts,"+"..tostring(#values-10).." more types") end
+        add(label..": "..table.concat(parts,", "))
+        shown=shown+1
+      end
+    end
+    appendGroups("Trash / adds defeated",deaths)
+    appendGroups("Adds spawned",spawns)
+
+    if shown==0 then add("No main encounter milestones were recorded.") end
+    add("")
+    add((plain and "DETAILS: " or "|cff80dfffDETAILS: |r")..
+      tostring(#events).." total mechanic events captured. Use Full Recording below for the complete event-by-event trace.")
+    if hidden>0 then
+      add(tostring(hidden).." lower-level events are condensed in this summary.")
+    end
+    add("")
   end
 
   local function EncounterHistoryClassLabel(classification,plain)
@@ -6587,6 +7307,8 @@ local function BuildInstances()
       end
     end
 
+    AppendMechanicTimeline(add,h.mechanics,plain)
+
     if #initial>0 then
       add(plain and
         "INITIAL STATE" or
@@ -6661,13 +7383,221 @@ local function BuildInstances()
     if d.summary then add(string.format("SUMMARY — %s passed, %s warnings, %s failures",d.summary.passed or 0,d.summary.warnings or 0,d.summary.failures or 0)); if d.generatedAt then add("Generated: "..d.generatedAt) end end
     return table.concat(lines,"\n")
   end
+  local function EvidenceWorkspaceReport(plain,selectedEvidence,summaryOnly)
+    local evidence=selectedEvidence or (AzerCoreOpsDB and AzerCoreOpsDB.issueReportEvidence) or {}
+    if not evidence.before then return nil end
+
+    if evidence.after then
+      local lines={}
+      local function add(value) table.insert(lines,value) end
+      local historyWindow=evidence.after.historyWindow or
+        AzerCoreOpsIssueReport.HistoryWindow(evidence.before,evidence.after)
+      local changes=AzerCoreOpsIssueReport.Compare(evidence.before,evidence.after)
+      local duration=FormatEvidenceDuration(evidence.durationSeconds or 0)
+
+      add(plain and "ENCOUNTER RECORDING — COMPLETE" or "|cffffd100ENCOUNTER RECORDING — COMPLETE|r")
+      add("Addon build: "..tostring(Platform.AddonBuild or ADDON_VERSION).."  |  Reporter build: "..tostring(AzerCoreOpsIssueReport and AzerCoreOpsIssueReport.FrameworkBuild or "unknown"))
+      add("Start snapshot: "..tostring(evidence.before.captured or evidence.startedAt or "unknown"))
+      add("Stop snapshot: "..tostring(evidence.after.captured or evidence.completedAt or "unknown"))
+      add("Duration: "..duration)
+      add(string.format("Recorded transitions: %d  |  Suspicious: %d",
+        tonumber(historyWindow and historyWindow.count) or 0,
+        tonumber(historyWindow and historyWindow.anomalies) or 0))
+      add("")
+      add(plain and "RECORDED TIMELINE" or "|cffffd100RECORDED TIMELINE|r")
+
+      if not historyWindow or #(historyWindow.entries or {})==0 then
+        add("No encounter-state transitions were recorded during this session.")
+      else
+        for _,entry in ipairs(historyWindow.entries or {}) do
+          add(string.format("#%s  %s  %s",
+            tostring(entry.seq or "?"),EncounterHistoryTime(entry.time),
+            tostring(entry.name or ("Encounter "..tostring(entry.id or "?")))))
+          add(string.format("  %s  %s  ->  %s",
+            EncounterHistoryEventLabel(entry,plain),
+            EncounterHistoryStateLabel(entry.oldname,entry.old,plain),
+            EncounterHistoryStateLabel(entry.newname,entry.new,plain)))
+          if entry.detail and entry.detail~="" then add("  "..tostring(entry.detail)) end
+          add("")
+        end
+      end
+
+      if summaryOnly then
+        AppendMechanicSummary(add,historyWindow and historyWindow.mechanics,plain)
+      else
+        AppendMechanicTimeline(add,historyWindow and historyWindow.mechanics,plain)
+      end
+
+      add(plain and "FINAL DIAGNOSTIC CHANGES" or "|cffffd100FINAL DIAGNOSTIC CHANGES|r")
+      add("Detected changes: "..tostring(#changes))
+      add("")
+      if #changes==0 then
+        add(plain and
+          "No diagnostic state changes were detected between the start and stop snapshots." or
+          "|cff40ff40No diagnostic state changes were detected between the start and stop snapshots.|r")
+      else
+        local severityColors={
+          PASS="|cff40ff40",
+          EXPECTED="|cff80dfff",
+          INFO="|cffb0b0b0",
+          WARN="|cffffb020",
+          FAIL="|cffff4040",
+          NOT_OBSERVED="|cff909090"
+        }
+        local kindColors={
+          ADDED="|cff40ff40",
+          CHANGED="|cffffd100",
+          REMOVED="|cffff4040"
+        }
+        local function coloredValue(value,severity)
+          value=tostring(value or "not present")
+          if plain then return value end
+          local color=severityColors[tostring(severity or "")]
+          if value:find("NOT_OBSERVED",1,true) then color=severityColors.NOT_OBSERVED end
+          return (color or "|cffffffff")..value.."|r"
+        end
+        local function coloredKind(kind)
+          kind=tostring(kind or "CHANGED")
+          if plain then return "["..kind.."]" end
+          return (kindColors[kind] or "|cffffd100").."["..kind.."]|r"
+        end
+
+        for index,change in ipairs(changes) do
+          local old=change.before or {}
+          local new=change.after or {}
+          add(string.format("%s  %02d  %s",
+            coloredKind(change.kind),index,tostring(change.key or "Unknown diagnostic")))
+          add("  Severity")
+          add("    Before: "..coloredValue(old.severity or "not present",old.severity))
+          add("    After:  "..coloredValue(new.severity or "not present",new.severity))
+          add("  Observed state")
+          add("    Before: "..coloredValue(old.actual or "not present",old.severity))
+          add("    After:  "..coloredValue(new.actual or "not present",new.severity))
+          add("")
+        end
+      end
+
+      return table.concat(lines,"\n")
+    end
+
+    local lines={}
+    local function add(value) table.insert(lines,value) end
+    local elapsed=FormatEvidenceDuration(instanceUI.EvidenceElapsedSeconds())
+    local stopping=evidence.stopRequestedAt~=nil
+    add(stopping and
+      (plain and "ENCOUNTER RECORDING — STOPPING" or "|cffffd100ENCOUNTER RECORDING — STOPPING|r") or
+      (plain and "ENCOUNTER RECORDING — LIVE" or "|cffffd100ENCOUNTER RECORDING — LIVE|r"))
+    add("Started: "..tostring(evidence.before.captured or evidence.startedAt or "unknown"))
+    if stopping then
+      add("Stopped: "..tostring(evidence.stopRequestedAt).."  |  Duration: "..elapsed)
+    else
+      add("Elapsed: "..elapsed)
+    end
+    add("")
+
+    local initial=evidence.before.diagnostics or {}
+    if initial.header then
+      add(string.format("%s — Map %s, Instance %s, Difficulty %s",
+        initial.header.name or "Current instance",
+        initial.header.map or "?",initial.header.instance or "?",
+        initial.header.difficulty or "?"))
+    end
+    if initial.summary then
+      add(string.format("Initial scan: %s passed, %s warnings, %s failures",
+        initial.summary.passed or 0,initial.summary.warnings or 0,
+        initial.summary.failures or 0))
+    end
+    add("")
+    add(plain and "LIVE ENCOUNTER TIMELINE" or "|cffffd100LIVE ENCOUNTER TIMELINE|r")
+
+    local current={encounterHistory=instanceUI.encounterHistory or {}}
+    local window=AzerCoreOpsIssueReport.HistoryWindow(evidence.before,current)
+    if not window or #(window.entries or {})==0 then
+      add("Recording active. No encounter-state transition has occurred since recording started.")
+    else
+      for _,entry in ipairs(window.entries or {}) do
+        add(string.format("#%s  %s  %s",
+          tostring(entry.seq or "?"),EncounterHistoryTime(entry.time),
+          tostring(entry.name or ("Encounter "..tostring(entry.id or "?")))))
+        add(string.format("  %s  %s  ->  %s",
+          EncounterHistoryEventLabel(entry,plain),
+          EncounterHistoryStateLabel(entry.oldname,entry.old,plain),
+          EncounterHistoryStateLabel(entry.newname,entry.new,plain)))
+        if entry.detail and entry.detail~="" then add("  "..tostring(entry.detail)) end
+        add("")
+      end
+      add(string.format("Live transitions: %d  |  Suspicious: %d",
+        tonumber(window.count) or #(window.entries or {}),
+        tonumber(window.anomalies) or 0))
+    end
+    add("")
+    if summaryOnly then
+      AppendMechanicSummary(add,window and window.mechanics,plain)
+    else
+      AppendMechanicTimeline(add,window and window.mechanics,plain)
+    end
+    if stopping then
+      add(plain and
+        "Recording is stopped. Final diagnostic snapshot is being captured." or
+        "|cff80dfffRecording is stopped. Final diagnostic snapshot is being captured.|r")
+    else
+      add(plain and
+        "Recording continues until Stop Recording is clicked." or
+        "|cff80dfffRecording continues until Stop Recording is clicked.|r")
+    end
+    return table.concat(lines,"\n")
+  end
+
   instanceUI.RenderDiagnostics=function()
-    local historyMode=(instanceUI.diagnostics or {}).mode=="HISTORY"
-    if historyMode then
+    local evidence=AzerCoreOpsDB and AzerCoreOpsDB.issueReportEvidence or {}
+    local stopping=evidence.before and not evidence.after and evidence.stopRequestedAt
+    local recording=evidence.before and not evidence.after and not stopping
+    local complete=evidence.before and evidence.after
+    local onRecording=instanceUI.diagnosticSubTab=="RECORDING"
+    local onReports=instanceUI.diagnosticSubTab=="REPORTS"
+    local historyMode=instanceUI.workspaceOverride=="HISTORY" and not onRecording and not onReports and not recording and not stopping
+    local scanMode=instanceUI.workspaceOverride=="SCAN" and not onRecording and not onReports and not recording and not stopping
+    local reports=RecordingReports()
+    local selected=reports[instanceUI.selectedRecordingReport or 1]
+    if recordingListLabel then recordingListLabel:SetText(#reports>0 and
+      string.format("Recording %d of %d\n%s",math.min(instanceUI.selectedRecordingReport or 1,#reports),#reports,tostring(selected and selected.completedAt or "")) or
+      "No completed recordings yet") end
+    local reporterInSync,addonBuild,reporterBuild=ReporterBuildInSync()
+    if onReports then
+      diagnosticTitle:SetText(selected and "SAVED ENCOUNTER RECORDING" or "SAVED REPORTS")
+    elseif not reporterInSync and not recording and not stopping then
+      diagnosticHeading:SetText("REPORTER INCOMPATIBLE")
+      diagnosticTitle:SetText("REPORTER API NOT AVAILABLE")
+      diagnosticHelp:SetText("The issue reporter API is missing or incompatible. Main="..tostring(addonBuild)..", Reporter="..tostring(reporterBuild or "unknown")..".\n\nEncounter recordings require a compatible reporter API. Copy the current IssueReportFramework.lua and /reload.")
+    elseif recording then
+      diagnosticHeading:SetText("ENCOUNTER RECORDER")
+      diagnosticTitle:SetText("LIVE ENCOUNTER EVIDENCE — RECORDING")
+      diagnosticHelp:SetText("Recording is active. The workspace refreshes encounter-state transitions automatically until Stop Recording is clicked.\n\nImportant: Stop Recording requires your character to be alive. If you wipe and die, resurrect first, then stop the recording to capture the final snapshot.")
+      if diagnosticHistoryButton then diagnosticHistoryButton:SetText("View Live Progress") end
+      if diagnosticOlder then diagnosticOlder:Hide() end
+      if diagnosticNewer then diagnosticNewer:Hide() end
+      if recoveryButton then recoveryButton:Hide() end
+    elseif stopping then
+      diagnosticHeading:SetText("ENCOUNTER RECORDER")
+      diagnosticTitle:SetText("ENCOUNTER EVIDENCE — STOPPING")
+      diagnosticHelp:SetText("Recording has stopped locally. The timer is frozen while the final diagnostic snapshot finishes.")
+      if diagnosticHistoryButton then diagnosticHistoryButton:SetText("View Live Progress") end
+      if diagnosticOlder then diagnosticOlder:Hide() end
+      if diagnosticNewer then diagnosticNewer:Hide() end
+      if recoveryButton then recoveryButton:Hide() end
+    elseif complete and not historyMode and not scanMode then
+      diagnosticHeading:SetText("ENCOUNTER RECORDER")
+      diagnosticTitle:SetText("ENCOUNTER EVIDENCE — COMPLETE")
+      diagnosticHelp:SetText("Recording complete. The initial and final snapshots are compared directly in this workspace; Build Report uses this same evidence.")
+      if diagnosticHistoryButton then diagnosticHistoryButton:SetText("View Live Progress") end
+      if diagnosticOlder then diagnosticOlder:Show() end
+      if diagnosticNewer then diagnosticNewer:Show() end
+      if recoveryButton then recoveryButton:Hide() end
+    elseif historyMode then
       diagnosticHeading:SetText("ENCOUNTER HISTORY")
       diagnosticTitle:SetText("ENCOUNTER HISTORY")
       diagnosticHelp:SetText("Server-captured encounter state changes for the current live instance.\n\nUse Refresh History after a pull, wipe or kill. No encounter state is changed by this view.")
-      if diagnosticHistoryButton then diagnosticHistoryButton:SetText("Refresh History") end
+      if diagnosticHistoryButton then diagnosticHistoryButton:SetText("Refresh Live Progress") end
       if diagnosticOlder then diagnosticOlder:Hide() end
       if diagnosticNewer then diagnosticNewer:Hide() end
       if recoveryButton then recoveryButton:Hide() end
@@ -6675,16 +7605,42 @@ local function BuildInstances()
       diagnosticHeading:SetText("ENCOUNTER SCAN")
       diagnosticTitle:SetText("LIVE ENCOUNTER EVIDENCE")
       diagnosticHelp:SetText("Enter the affected dungeon or raid. Target the boss or event NPC for extra evidence, then run the scan.\n\nThis workspace never changes encounter state, doors, creatures or lockouts.")
-      if diagnosticHistoryButton then diagnosticHistoryButton:SetText("Encounter History") end
+      if diagnosticHistoryButton then diagnosticHistoryButton:SetText("View Live Progress") end
       if diagnosticOlder then diagnosticOlder:Show() end
       if diagnosticNewer then diagnosticNewer:Show() end
       if recoveryButton then recoveryButton:Show() end
     end
-    local report=DiagnosticReport(false)
+    local showEvidence=onRecording and (recording or stopping or complete)
+    local detailedView=instanceUI.recordingView=="FULL"
+    if fullRecordingButton then
+      if onRecording or onReports then
+        fullRecordingButton:SetText(detailedView and "Standard" or "Full Recording")
+      else
+        fullRecordingButton:SetText("Full Report")
+      end
+    end
+    local report=onReports and (selected and EvidenceWorkspaceReport(false,selected,not detailedView) or "No completed encounter recordings yet. Stop a recording to save it here.") or
+      (showEvidence and EvidenceWorkspaceReport(false,nil,not detailedView) or DiagnosticReport(false))
     diagnosticText:SetText(report)
     diagnosticChild:SetHeight(math.max(500,diagnosticText:GetStringHeight()+20))
   end
   local diagnosticFooter=CreateFrame("Frame",nil,diagnosticPage); diagnosticFooter:SetPoint("BOTTOMLEFT",200,12); diagnosticFooter:SetPoint("BOTTOMRIGHT",-12,12); diagnosticFooter:SetHeight(28)
+  local function CurrentWorkspaceReport(plain,forceFull)
+    local evidence=AzerCoreOpsDB and AzerCoreOpsDB.issueReportEvidence or {}
+    local summaryOnly=not (forceFull or instanceUI.recordingView=="FULL")
+    if instanceUI.diagnosticSubTab=="REPORTS" then
+      local reports=RecordingReports()
+      local selected=reports[instanceUI.selectedRecordingReport or 1]
+      return selected and EvidenceWorkspaceReport(plain,selected,summaryOnly) or "No completed encounter recordings yet."
+    end
+    if evidence.before and instanceUI.diagnosticSubTab=="RECORDING" then
+      return EvidenceWorkspaceReport(plain,nil,summaryOnly)
+    end
+    return DiagnosticReport(plain)
+  end
+  local function OutputWorkspaceReport()
+    return CurrentWorkspaceReport(true,Settings().recordingShareExportFull~=false)
+  end
   local function RecoveryCommands()
     local lines={}
     for _,recovery in ipairs((instanceUI.diagnostics or {}).recoveries or {}) do
@@ -6700,15 +7656,38 @@ local function BuildInstances()
     local commands=RecoveryCommands(); if commands=="" then SetStatus("No recovery guidance was generated for this scan.",true); return end
     ShowSelectableReport("Temporary GM recovery commands",commands)
   end,"Copy verification, repair and recheck commands without executing them"); recoveryButton:SetPoint("LEFT",0,0)
-  Button(diagnosticFooter,"Copy",54,22,function()
-    local title=(instanceUI.diagnostics or {}).mode=="HISTORY" and "Encounter history" or "Encounter diagnostic report"
-    ShowSelectableReport(title,DiagnosticReport(true))
-  end,"Copy the complete visible report"):SetPoint("RIGHT",-126,0)
-  Button(diagnosticFooter,"Share",58,22,function() local f=EnsureShareFrame(); f:SetCapturedMessage(DiagnosticReport(true),"INSTANCE",function() return DiagnosticReport(true) end,"INSTANCE"); f:Show(); f:Raise() end,"Share the visible report through Courier"):SetPoint("RIGHT",-64,0)
+  fullRecordingButton=Button(diagnosticFooter,"Full Recording",96,22,function()
+    local evidence=AzerCoreOpsDB and AzerCoreOpsDB.issueReportEvidence or {}
+    local recordingWorkspace=evidence.before and instanceUI.diagnosticSubTab=="RECORDING"
+    local savedWorkspace=instanceUI.diagnosticSubTab=="REPORTS"
+    if recordingWorkspace or savedWorkspace then
+      instanceUI.recordingView=instanceUI.recordingView=="FULL" and "STANDARD" or "FULL"
+      if diagnosticScroll then diagnosticScroll:SetVerticalScroll(0) end
+      instanceUI.RenderDiagnostics()
+      SetStatus(instanceUI.recordingView=="FULL" and
+        "Showing the complete event-by-event recording." or
+        "Showing the concise standard recording.")
+      return
+    end
+    ShowSelectableReport("Complete diagnostic report",CurrentWorkspaceReport(true,true))
+  end,"Switch this workspace between Standard and Full Recording")
+  fullRecordingButton:SetPoint("RIGHT",-126,0)
+  Button(diagnosticFooter,"Share",58,22,function()
+    local f=EnsureShareFrame(); f:SetCapturedMessage(OutputWorkspaceReport(),"INSTANCE",OutputWorkspaceReport,"INSTANCE"); f:Show(); f:Raise()
+  end,"Share the recording through Courier; settings choose full or visible content"):SetPoint("RIGHT",-64,0)
   Button(diagnosticFooter,"Export",60,22,function()
-    local title=(instanceUI.diagnostics or {}).mode=="HISTORY" and "Export encounter history" or "Export encounter diagnostic report"
-    ShowSelectableReport(title,DiagnosticReport(true))
-  end,"Export the complete visible report"):SetPoint("RIGHT",0,0)
+    local evidence=AzerCoreOpsDB and AzerCoreOpsDB.issueReportEvidence or {}
+    if evidence.before and Settings().recordingSelectableExport==false then
+      instanceUI.recordingView="FULL"
+      if diagnosticScroll then diagnosticScroll:SetVerticalScroll(0) end
+      instanceUI.RenderDiagnostics()
+      SetStatus("Full recording displayed in the Encounter Evidence workspace.")
+      return
+    end
+    local title=evidence.before and "Export full encounter recording" or
+      ((instanceUI.diagnostics or {}).mode=="HISTORY" and "Encounter history" or "Encounter diagnostic report")
+    ShowSelectableReport(title,OutputWorkspaceReport())
+  end,"Export the recording; optionally open selectable Ctrl+C text"):SetPoint("RIGHT",0,0)
   instanceUI.RenderDiagnostics()
 
   local wotlkInstances={
@@ -6772,13 +7751,26 @@ local function ApplySettings()
   if mini then
     if main and main:IsShown() then mini:Hide() elseif s.showMini then mini:Show(); mini:Raise() else mini:Hide() end
   end
+  if instanceUI.UpdateRecordingStatusButton then instanceUI.UpdateRecordingStatusButton() end
   if auditUI.diffBox and not auditUI.diffBox:HasFocus() then auditUI.diffBox:SetText(tostring(s.defaultDifficulty or 0)) end
   if auditUI.scrollChild then RenderAudit() end
 end
 
 local function ResetPositions()
   AzerCoreOpsDB.mainPoint=nil; AzerCoreOpsDB.mainRel=nil; AzerCoreOpsDB.mainX=nil; AzerCoreOpsDB.mainY=nil; AzerCoreOpsDB.miniPoint=nil; AzerCoreOpsDB.miniRel=nil; AzerCoreOpsDB.miniX=nil; AzerCoreOpsDB.miniY=nil; AzerCoreOpsDB.minimapAngle=225
-  main:ClearAllPoints(); main:SetPoint("CENTER"); mini:ClearAllPoints(); mini:SetPoint("CENTER",UIParent,"CENTER",290,0); PositionMinimap(); ShowMain(); SetStatus("Positions reset")
+  Settings().recordingStatusX=360; Settings().recordingStatusY=40
+  Settings().recordingSettingsX=0; Settings().recordingSettingsY=0
+  main:ClearAllPoints(); main:SetPoint("CENTER")
+  mini:ClearAllPoints(); mini:SetPoint("CENTER",UIParent,"CENTER",290,0)
+  if instanceUI.recordingStatusButton then
+    instanceUI.recordingStatusButton:ClearAllPoints()
+    instanceUI.recordingStatusButton:SetPoint("CENTER",UIParent,"CENTER",360,40)
+  end
+  if instanceUI.recordingSettings then
+    instanceUI.recordingSettings:ClearAllPoints()
+    instanceUI.recordingSettings:SetPoint("CENTER",UIParent,"CENTER",0,0)
+  end
+  PositionMinimap(); ShowMain(); SetStatus("Positions reset")
 end
 
 local function OpenOptions()
@@ -6881,7 +7873,14 @@ local function BuildOptions()
   local controls={}
   local function Check(parent,store,name,label,key,y,tip)
     local c=CreateFrame("CheckButton","AZERCORE_OPS_Opt"..name,parent,"InterfaceOptionsCheckButtonTemplate"); c:SetPoint("TOPLEFT",16,y)
-    _G[c:GetName().."Text"]:SetText(label); c.tooltipText=tip; c:SetScript("OnClick",function(self) Settings()[key]=self:GetChecked() and true or false; ApplySettings() end)
+    _G[c:GetName().."Text"]:SetText(label); c.tooltipText=nil
+    c:SetScript("OnClick",function(self) Settings()[key]=self:GetChecked() and true or false; ApplySettings() end)
+    c:SetScript("OnEnter",function(self)
+      if Settings().showTooltips==false or not tip then return end
+      GameTooltip:SetOwner(self,"ANCHOR_RIGHT"); GameTooltip:SetText(label,1,.82,0)
+      GameTooltip:AddLine(tip,1,1,1,true); GameTooltip:Show()
+    end)
+    c:SetScript("OnLeave",function() GameTooltip:Hide() end)
     store[key]=c; return c
   end
   Check(pc,controls,"StartMinimized","Start minimized after login or reload","startMinimized",-70,"Apply on the next login or /reload.")
@@ -6963,6 +7962,66 @@ local function BuildOptions()
     diff:SetValue(s.defaultDifficulty); font:SetValue(s.auditFontSize); aScroll:SetVerticalScroll(0); aHorizontal:SetValue(0); aUpdateHorizontal()
   end)
   InterfaceOptions_AddCategory(a)
+
+  local r=CreateFrame("Frame","AZERCORE_OPS_RecordingOptionsPanel",UIParent)
+  r.name="Recording & Interface"; r.parent="AzerCore Ops"
+  local rc,rScroll,rHorizontal,rUpdateHorizontal=ScrollContent(r,"AZERCORE_OPS_RecordingOptionsScroll",520)
+  local rt=rc:CreateFontString(nil,"ARTWORK","GameFontNormalLarge")
+  rt:SetPoint("TOPLEFT",16,-16); rt:SetText("AzerCoreOps — Recording & Interface")
+  local rn=rc:CreateFontString(nil,"ARTWORK","GameFontHighlightSmall")
+  rn:SetPoint("TOPLEFT",rt,"BOTTOMLEFT",0,-8)
+  rn:SetText("Recorder visibility, workspace output, floating status, and help behavior.")
+
+  local recControls={}
+  local general=rc:CreateFontString(nil,"ARTWORK","GameFontNormal")
+  general:SetPoint("TOPLEFT",20,-68); general:SetText("Interface")
+  Check(rc,recControls,"GlobalTips","Show explanatory tooltips","showTooltips",-90,
+    "Turn AzerCore Ops hover help on or off globally.")
+  Check(rc,recControls,"RecorderFloat","Show floating recorder status","recordingStatusButton",-122,
+    "Display the active mode, state, detail preset and elapsed time.")
+  Check(rc,recControls,"RecorderLock","Lock floating recorder position","recordingStatusLocked",-154,
+    "Prevent accidental movement.")
+  Check(rc,recControls,"RecorderElapsed","Show elapsed recording time","recordingStatusShowElapsed",-186,
+    "Show the session timer on the floating status control.")
+
+  local output=rc:CreateFontString(nil,"ARTWORK","GameFontNormal")
+  output:SetPoint("TOPLEFT",20,-234); output:SetText("Recording workspace and output")
+  Check(rc,recControls,"FullOutput","Share and Export use full recording","recordingShareExportFull",-256,
+    "Keep the visible Standard summary concise while transmitting complete evidence.")
+  Check(rc,recControls,"SelectableOutput","Open selectable Export window","recordingSelectableExport",-288,
+    "Allow Ctrl+C copying. When disabled, Export switches Encounter Evidence to Full view.")
+
+  local info=rc:CreateFontString(nil,"ARTWORK","GameFontHighlightSmall")
+  info:SetPoint("TOPLEFT",22,-332); info:SetWidth(560); info:SetJustifyH("LEFT"); info:SetWordWrap(true)
+  info:SetTextColor(unpack(C.muted))
+  info:SetText("Standard and Full Recording now use the same Encounter Evidence frame. The footer button switches views in place. Share and Export can still use the complete event trace without changing what is displayed.")
+
+  local open=CreateFrame("Button",nil,rc,"UIPanelButtonTemplate")
+  open:SetWidth(190); open:SetHeight(26); open:SetText("Open Recording Settings")
+  open:SetPoint("TOPLEFT",20,-400)
+  open:SetScript("OnClick",function()
+    if InterfaceOptionsFrame then InterfaceOptionsFrame:Hide() end
+    if instanceUI.OpenRecordingSettings then instanceUI.OpenRecordingSettings()
+    else SetStatus("Open Instance Access > Diagnostics > Live Recording first.",true) end
+  end)
+  local resetFloat=CreateFrame("Button",nil,rc,"UIPanelButtonTemplate")
+  resetFloat:SetWidth(190); resetFloat:SetHeight(26); resetFloat:SetText("Reset Floating Recorder")
+  resetFloat:SetPoint("LEFT",open,"RIGHT",14,0)
+  resetFloat:SetScript("OnClick",function()
+    Settings().recordingStatusX=360; Settings().recordingStatusY=40
+    if instanceUI.recordingStatusButton then
+      instanceUI.recordingStatusButton:ClearAllPoints()
+      instanceUI.recordingStatusButton:SetPoint("CENTER",UIParent,"CENTER",360,40)
+    end
+    if instanceUI.UpdateRecordingStatusButton then instanceUI.UpdateRecordingStatusButton() end
+  end)
+
+  r:SetScript("OnShow",function()
+    local s=Settings()
+    for key,c in pairs(recControls) do c:SetChecked(s[key] and true or false) end
+    rScroll:SetVerticalScroll(0); rHorizontal:SetValue(0); rUpdateHorizontal()
+  end)
+  InterfaceOptions_AddCategory(r)
 end
 
 local PROJECT_LINKS = {
@@ -7021,7 +8080,7 @@ local function BuildDashboard()
   Button(quick,"Inspect Quest",150,30,function() SelectTab("Quest") end,"Open quest search and chain analysis"):SetPoint("TOPLEFT",174,-42)
   Button(quick,"Check Compatibility",150,30,function() RequestCompatibility(); OpenOptions() end,"Query the running AzerCoreOps module"):SetPoint("TOPLEFT",336,-42)
   Button(quick,"Information & Credits",170,30,function() SelectTab("Information") end,"View project links, credits, and acknowledgements"):SetPoint("TOPLEFT",498,-42)
-  local note=quick:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); note:SetPoint("TOPLEFT",12,-92); note:SetPoint("BOTTOMRIGHT",-12,12); note:SetJustifyH("LEFT"); note:SetJustifyV("TOP"); note:SetWordWrap(true); note:SetTextColor(unpack(C.white)); note:SetText("Development: v0.7.4-dev\n\nAzerCore Ops 0.7.4-dev introduces deeper instance intelligence with encounter-history context, profile-backed diagnostics, richer instance findings, and correlated Before/After evidence for upstream issue reports. Courier remains under construction and is not included as an active feature.")
+  local note=quick:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); note:SetPoint("TOPLEFT",12,-92); note:SetPoint("BOTTOMRIGHT",-12,12); note:SetJustifyH("LEFT"); note:SetJustifyV("TOP"); note:SetWordWrap(true); note:SetTextColor(unpack(C.white)); note:SetText("Development: v0.7.5f\n\nAzerCore Ops 0.7.5f introduces resumable instance-journey recording, manual-first controls, live progress, and profile-filtered encounter evidence. Courier remains under construction and is not included as an active feature.")
 end
 
 
@@ -7182,7 +8241,12 @@ local function BuildUI()
   resizeGrip:SetWidth(22); resizeGrip:SetHeight(22); resizeGrip:SetPoint("BOTTOMRIGHT",-2,2); resizeGrip:SetFrameLevel(main:GetFrameLevel()+20)
   local gripTexture=resizeGrip:CreateTexture(nil,"OVERLAY"); gripTexture:SetTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Up"); gripTexture:SetAllPoints()
   resizeGrip:RegisterForDrag("LeftButton")
-  resizeGrip:SetScript("OnEnter",function(self) gripTexture:SetTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Highlight"); GameTooltip:SetOwner(self,"ANCHOR_TOPLEFT"); GameTooltip:SetText("Resize AzerCore Ops"); GameTooltip:AddLine("Drag to scale the complete window between 75% and 135%.",1,1,1,true); GameTooltip:Show() end)
+  resizeGrip:SetScript("OnEnter",function(self)
+    gripTexture:SetTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Highlight")
+    if Settings().showTooltips==false then return end
+    GameTooltip:SetOwner(self,"ANCHOR_TOPLEFT"); GameTooltip:SetText("Resize AzerCore Ops")
+    GameTooltip:AddLine("Drag to scale the complete window between 75% and 135%.",1,1,1,true); GameTooltip:Show()
+  end)
   resizeGrip:SetScript("OnLeave",function() gripTexture:SetTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Up"); GameTooltip:Hide() end)
   resizeGrip:SetScript("OnDragStart",function(self)
     local px,py=GetCursorPosition(); local uiScale=UIParent:GetEffectiveScale()
@@ -7223,6 +8287,128 @@ local function BuildUI()
   local mt=mini:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); mt:SetPoint("CENTER"); mt:SetText(""); mt:SetTextColor(unpack(C.gold))
   mini:SetScript("OnClick",function(self) if self._dragged then self._dragged=nil; return end; ShowMain() end); mini:Hide()
 
+  local recordingStatusButton=CreateFrame("Button","AZERCORE_OPS_RecordingStatus",UIParent)
+  instanceUI.recordingStatusButton=recordingStatusButton
+  recordingStatusButton:SetWidth(164); recordingStatusButton:SetHeight(36)
+  recordingStatusButton:SetClampedToScreen(true); recordingStatusButton:SetFrameStrata("HIGH"); recordingStatusButton:SetFrameLevel(110)
+  recordingStatusButton:SetPoint("CENTER",UIParent,"CENTER",
+    tonumber(Settings().recordingStatusX) or 360,tonumber(Settings().recordingStatusY) or 40)
+  Backdrop(recordingStatusButton,C.panel)
+  recordingStatusButton:EnableMouse(true); recordingStatusButton:SetMovable(true)
+  recordingStatusButton:RegisterForDrag("LeftButton")
+  local rsIcon=recordingStatusButton:CreateTexture(nil,"ARTWORK")
+  rsIcon:SetTexture("Interface\\AddOns\\AzerCoreOps\\Media\\azercoreops-icon.tga")
+  rsIcon:SetWidth(28); rsIcon:SetHeight(28); rsIcon:SetPoint("LEFT",5,0)
+  local rsTitle=recordingStatusButton:CreateFontString(nil,"OVERLAY","GameFontNormalSmall")
+  rsTitle:SetPoint("TOPLEFT",38,-6); rsTitle:SetPoint("RIGHT",-6,0); rsTitle:SetJustifyH("LEFT")
+  local rsState=recordingStatusButton:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall")
+  rsState:SetPoint("BOTTOMLEFT",38,6); rsState:SetPoint("RIGHT",-6,0); rsState:SetJustifyH("LEFT")
+  recordingStatusButton:SetScript("OnDragStart",function(self)
+    if Settings().recordingStatusLocked then return end
+    self._dragged=true; self:StartMoving()
+  end)
+  recordingStatusButton:SetScript("OnDragStop",function(self)
+    self:StopMovingOrSizing()
+    local x,y=self:GetCenter(); local ux,uy=UIParent:GetCenter()
+    Settings().recordingStatusX=math.floor((x or ux)-ux+.5)
+    Settings().recordingStatusY=math.floor((y or uy)-uy+.5)
+  end)
+  recordingStatusButton:RegisterForClicks("LeftButtonUp","RightButtonUp")
+  local recordingStatusMenu=CreateFrame("Frame","AZERCORE_OPS_RecordingStatusMenu",UIParent,"UIDropDownMenuTemplate")
+  local function RefreshRecorderControls()
+    if instanceUI.RefreshRecordingSettings then instanceUI.RefreshRecordingSettings()
+    elseif instanceUI.UpdateEvidenceSessionUI then instanceUI.UpdateEvidenceSessionUI() end
+    if instanceUI.UpdateRecordingStatusButton then instanceUI.UpdateRecordingStatusButton() end
+  end
+  local function OpenRecorderMenu(anchor)
+    local evidence=AzerCoreOpsDB and AzerCoreOpsDB.issueReportEvidence or {}
+    local recording=evidence.before and not evidence.after
+    local busy=instanceUI.captureFlow~=nil
+    local mode=tostring(Settings().instanceRecordingMode or "MANUAL"):upper()
+    local detail=tostring(Settings().recordingDetailLevel or "STANDARD"):upper()
+    local function SetMode(value)
+      if instanceUI.SetRecordingMode then instanceUI.SetRecordingMode(value)
+      else Settings().instanceRecordingMode=value end
+      RefreshRecorderControls()
+    end
+    local function SetDetail(value)
+      if instanceUI.SetRecordingDetail then instanceUI.SetRecordingDetail(value)
+      else Settings().recordingDetailLevel=value end
+      RefreshRecorderControls()
+    end
+    local menu={
+      {text="Encounter Recorder",isTitle=true,notCheckable=true},
+      {text="Start Recording",notCheckable=true,disabled=busy or recording or mode=="OFF",func=function()
+        if instanceUI.StartRecording then instanceUI.StartRecording() end
+      end},
+      {text="Stop & Save Recording",notCheckable=true,disabled=busy or not recording,func=function()
+        if instanceUI.StopRecording then instanceUI.StopRecording() end
+      end},
+      {text="Recording mode",isTitle=true,notCheckable=true},
+      {text="Manual",checked=mode=="MANUAL",func=function() SetMode("MANUAL") end},
+      {text="Automatic Instance",checked=mode=="AUTOMATIC",func=function() SetMode("AUTOMATIC") end},
+      {text="Off",checked=mode=="OFF",func=function() SetMode("OFF") end},
+      {text="Evidence detail",isTitle=true,notCheckable=true},
+      {text="Standard",checked=detail=="STANDARD",func=function() SetDetail("STANDARD") end},
+      {text="Full Trace",checked=detail=="FULL",func=function() SetDetail("FULL") end},
+      {text="Custom",checked=detail=="CUSTOM",func=function() SetDetail("CUSTOM") end},
+      {text="Configure Custom...",notCheckable=true,func=function()
+        if instanceUI.OpenRecordingSettings then instanceUI.OpenRecordingSettings() end
+      end},
+      {text="Open Live Recording",notCheckable=true,func=function()
+        main:Show(); main:Raise(); if mini then mini:Hide() end
+        SelectTab("Instances")
+        if instanceUI.SelectDiagnosticTab then instanceUI.SelectDiagnosticTab("RECORDING") end
+      end},
+    }
+    EasyMenu(menu,recordingStatusMenu,anchor,0,0,"MENU",2)
+  end
+  recordingStatusButton:SetScript("OnClick",function(self,button)
+    if self._dragged then self._dragged=nil; return end
+    if button=="RightButton" then OpenRecorderMenu(self); return end
+    main:Show(); main:Raise(); if mini then mini:Hide() end
+    SelectTab("Instances")
+    if instanceUI.SelectDiagnosticTab then instanceUI.SelectDiagnosticTab("RECORDING") end
+  end)
+  recordingStatusButton:SetScript("OnEnter",function(self)
+    self:SetBackdropColor(unpack(C.hover))
+    if Settings().showTooltips~=false then
+      GameTooltip:SetOwner(self,"ANCHOR_LEFT"); GameTooltip:SetText("Encounter Recorder",1,.82,0)
+      GameTooltip:AddLine("Left-click: open Live Recording.",1,1,1,true)
+      GameTooltip:AddLine("Right-click: Start/Stop, mode and detail.",.75,.9,1,true)
+      GameTooltip:AddLine(Settings().recordingStatusLocked and "Position locked in settings." or "Drag to reposition.",.75,.75,.75,true)
+      GameTooltip:Show()
+    end
+  end)
+  recordingStatusButton:SetScript("OnLeave",function(self)
+    self:SetBackdropColor(unpack(C.panel)); GameTooltip:Hide()
+  end)
+  function instanceUI.UpdateRecordingStatusButton()
+    if not recordingStatusButton then return end
+    if Settings().recordingStatusButton==false then recordingStatusButton:Hide(); return end
+    local evidence=AzerCoreOpsDB and AzerCoreOpsDB.issueReportEvidence or {}
+    local mode=tostring(Settings().instanceRecordingMode or "MANUAL"):upper()
+    if mode~="MANUAL" and mode~="AUTOMATIC" and mode~="OFF" then mode="MANUAL" end
+    local state,color="READY",C.gold
+    if mode=="OFF" then state="OFF"; color=C.muted
+    elseif evidence.before and not evidence.after and evidence.stopRequestedAt then state="STOPPING"; color={1,.5,.15,1}
+    elseif evidence.before and not evidence.after then state="RECORDING"; color={0,.75,1,1}
+    elseif evidence.before and evidence.after then state="COMPLETE"; color={.25,1,.25,1} end
+    local modeLabel=mode=="AUTOMATIC" and "AUTO" or mode
+    rsTitle:SetText(modeLabel.."  |  "..state)
+    local detail=tostring(Settings().recordingDetailLevel or "STANDARD"):upper()
+    local suffix=detail=="FULL" and "Full" or (detail=="CUSTOM" and "Custom" or "Standard")
+    if Settings().recordingStatusShowElapsed and evidence.before then
+      local total=instanceUI.EvidenceElapsedSeconds and instanceUI.EvidenceElapsedSeconds() or 0
+      total=math.max(0,math.floor(total))
+      suffix=suffix.."  "..string.format("%02d:%02d",math.floor(total/60),total%60)
+    end
+    rsState:SetText(suffix)
+    recordingStatusButton:SetBackdropBorderColor(unpack(color))
+    recordingStatusButton:Show(); recordingStatusButton:Raise()
+  end
+  instanceUI.UpdateRecordingStatusButton()
+
   minimapButton=CreateFrame("Button","AZERCORE_OPS_MinimapButton",Settings().mbfCompatibility and UIParent or Minimap); minimapButton:SetWidth(24); minimapButton:SetHeight(22); minimapButton:SetFrameStrata("HIGH"); minimapButton:SetFrameLevel(100); minimapButton:RegisterForClicks("LeftButtonUp","RightButtonUp"); minimapButton:RegisterForDrag("LeftButton")
   local bg=minimapButton:CreateTexture(nil,"BACKGROUND"); bg:SetTexture("Interface\\Minimap\\UI-Minimap-Background"); bg:SetAllPoints()
   local bd=minimapButton:CreateTexture(nil,"OVERLAY"); bd:SetTexture("Interface\\Minimap\\MiniMap-TrackingBorder"); bd:SetPoint("TOPLEFT",-6,6); bd:SetPoint("BOTTOMRIGHT",6,-6)
@@ -7233,7 +8419,13 @@ local function BuildUI()
   minimapButton.tooltipText="AzerCore Ops"; minimapButton.tooltip="AzerCore Ops"
   local tx=minimapButton:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); tx:SetPoint("CENTER"); tx:SetText(""); tx:SetTextColor(unpack(C.gold))
   minimapButton:SetScript("OnClick",function(_,button) if button=="RightButton" then HideMain() elseif main:IsShown() then HideMain() else ShowMain() end end)
-  minimapButton:SetScript("OnEnter",function(self) GameTooltip:SetOwner(self,"ANCHOR_LEFT"); GameTooltip:SetText("AzerCore Ops",1,.82,0); GameTooltip:AddLine("Operations and gameplay companion",1,1,1); GameTooltip:AddLine("Left-click: open or hide",.75,.75,.75); GameTooltip:AddLine("Right-click: hide",.75,.75,.75); GameTooltip:Show() end)
+  minimapButton:SetScript("OnEnter",function(self)
+    if Settings().showTooltips==false then return end
+    GameTooltip:SetOwner(self,"ANCHOR_LEFT"); GameTooltip:SetText("AzerCore Ops",1,.82,0)
+    GameTooltip:AddLine("Operations and gameplay companion",1,1,1)
+    GameTooltip:AddLine("Left-click: open or hide",.75,.75,.75)
+    GameTooltip:AddLine("Right-click: hide",.75,.75,.75); GameTooltip:Show()
+  end)
   minimapButton:SetScript("OnLeave",function() GameTooltip:Hide() end)
   local function MaintainMinimapIcon(self)
     local parent=self:GetParent(); local inMBF=parent and parent.GetName and parent:GetName()=="MinimapButtonFrame"
@@ -7254,7 +8446,15 @@ end
 local events=CreateFrame("Frame"); events:RegisterEvent("ADDON_LOADED"); events:RegisterEvent("PLAYER_ENTERING_WORLD"); events:RegisterEvent("CHAT_MSG_SYSTEM"); events:RegisterEvent("UPDATE_INSTANCE_INFO"); events:RegisterEvent("PLAYER_TARGET_CHANGED"); events:RegisterEvent("PARTY_MEMBERS_CHANGED"); events:RegisterEvent("RAID_ROSTER_UPDATE"); events:RegisterEvent("INSPECT_TALENT_READY")
 local compatibilityRequested=false
 events:SetScript("OnEvent",function(_,event,arg1)
-  if event=="ADDON_LOADED" then if arg1~=ADDON then return end; AzerCoreOpsDB=AzerCoreOpsDB or {}; Settings(); BuildOptions(); BuildUI(); Print("v"..(Platform.AddonBuild or ADDON_VERSION).." loaded. Type /azercoreops help")
+  if event=="ADDON_LOADED" then
+    if arg1~=ADDON then return end
+    AzerCoreOpsDB=AzerCoreOpsDB or {}
+    Settings(); BuildOptions(); BuildUI()
+    local reporterCompatible,addonBuild,frameworkBuild=Platform:ReporterCompatibility()
+    if not reporterCompatible then
+      Print("WARNING: issue reporter API is missing or incompatible. Main="..tostring(addonBuild)..", reporter="..tostring(frameworkBuild or "unknown")..". Copy the current IssueReportFramework.lua, then /reload.")
+    end
+    Print("v"..(Platform.AddonBuild or ADDON_VERSION).." loaded. Type /azercoreops help")
   elseif event=="PLAYER_ENTERING_WORLD" and not compatibilityRequested then compatibilityRequested=true; SendChatMessage(CMD.version,"SAY")
   elseif event=="UPDATE_INSTANCE_INFO" and activeTab=="Instances" and instanceUI.bindPage and instanceUI.bindPage:IsShown() then RefreshMyInstances()
   elseif event=="INSPECT_TALENT_READY" then
@@ -7757,7 +8957,7 @@ events:SetScript("OnEvent",function(_,event,arg1)
       if requestId~=(tonumber(instanceUI.pendingHistoryRequest) or -1) then return end
       local purpose=instanceUI.pendingHistoryPurpose or "MANUAL"
       instanceUI.diagnostics.mode="HISTORY"
-      instanceUI.encounterHistory={entries={},stats={},loading=true,header=f,
+      instanceUI.encounterHistory={entries={},mechanics={},stats={},loading=true,header=f,
         summary=nil,error=nil,generatedAt=nil,requestId=requestId,purpose=purpose}
       if instanceUI.RenderDiagnostics then instanceUI.RenderDiagnostics() end
       SetStatus("Receiving encounter history for "..tostring(f.name or "current instance")..
@@ -7768,6 +8968,32 @@ events:SetScript("OnEvent",function(_,event,arg1)
       instanceUI.encounterHistory.entries=instanceUI.encounterHistory.entries or {}
       table.insert(instanceUI.encounterHistory.entries,f)
       if instanceUI.RenderDiagnostics then instanceUI.RenderDiagnostics() end
+    elseif kind=="MECHANIC_EVENT" then
+      local requestId=tonumber(f.request) or 0
+      if requestId~=(tonumber(instanceUI.pendingHistoryRequest) or -1) then return end
+      local detail=tostring(Settings().recordingDetailLevel or "STANDARD"):upper()
+      local event=tostring(f.event or "")
+      local traceOnly=event=="SCRIPT_CAST" or event=="AURA_APPLIED" or event=="AURA_REMOVED"
+      local keep=detail=="FULL" or (detail=="STANDARD" and not traceOnly)
+      if detail=="CUSTOM" then
+        local s=Settings()
+        local boss=event=="ENCOUNTER_START" or event=="ENCOUNTER_KILL" or event=="ENCOUNTER_END"
+        local phase=event=="PHASE_HINT"
+        local object=event=="DOOR_CLOSED" or event=="DOOR_BLOCKED" or event=="DOOR_OPENED" or
+          event=="OBJECT_OBSERVED" or event=="OBJECT_STATE" or event=="VALVE_ACTIVATED" or event=="INSTANCE_SIGNAL"
+        local lifecycle=event=="INSTANCE_ENTER" or event=="PLAYER_RETURNED" or event=="PLAYER_LEFT" or
+          event=="PLAYER_DIED" or event=="SPIRIT_RELEASED" or event=="PLAYER_RESURRECTED"
+        local trash=event=="NPC_SPAWN" or event=="NPC_DEATH"
+        local spells=event=="MECHANIC_CAST" or event=="SCRIPT_CAST" or event=="AURA_APPLIED" or event=="AURA_REMOVED"
+        keep=(boss and s.recordingCustomBoss) or (phase and s.recordingCustomPhases) or
+          (object and s.recordingCustomObjects) or (lifecycle and s.recordingCustomLifecycle) or
+          (trash and s.recordingCustomTrash) or (spells and s.recordingCustomSpells)
+      end
+      if keep then
+        instanceUI.encounterHistory.mechanics=instanceUI.encounterHistory.mechanics or {}
+        table.insert(instanceUI.encounterHistory.mechanics,f)
+        if instanceUI.RenderDiagnostics then instanceUI.RenderDiagnostics() end
+      end
     elseif kind=="ENCOUNTER_HISTORY_STATS" then
       local requestId=tonumber(f.request) or 0
       if requestId~=(tonumber(instanceUI.pendingHistoryRequest) or -1) then return end
@@ -7777,9 +9003,12 @@ events:SetScript("OnEvent",function(_,event,arg1)
     elseif kind=="ENCOUNTER_HISTORY_END" then
       local requestId=tonumber(f.request) or 0
       if requestId~=(tonumber(instanceUI.pendingHistoryRequest) or -1) then return end
+      local purpose=instanceUI.pendingHistoryPurpose or
+        (instanceUI.encounterHistory and instanceUI.encounterHistory.purpose) or "MANUAL"
       instanceUI.encounterHistory.loading=false
       instanceUI.encounterHistory.summary={count=tonumber(f.count) or 0,
-        anomalies=tonumber(f.anomalies) or 0}
+        anomalies=tonumber(f.anomalies) or 0,
+        mechanics=tonumber(f.mechanics) or #(instanceUI.encounterHistory.mechanics or {})}
       instanceUI.encounterHistory.generatedAt=date("%Y-%m-%d %H:%M:%S")
       instanceUI.encounterHistory.requestId=requestId
       instanceUI.pendingHistoryRequest=nil
@@ -7788,7 +9017,10 @@ events:SetScript("OnEvent",function(_,event,arg1)
       if instanceUI.captureFlow and
         tonumber(instanceUI.captureFlow.historyRequest)==requestId then
         instanceUI.CompleteEvidenceCapture()
-      else
+      elseif purpose=="RECORDING_LIVE" and instanceUI.stopRecordingPending then
+        instanceUI.stopRecordingPending=nil
+        instanceUI.BeginEvidenceCapture("AFTER")
+      elseif purpose~="RECORDING_LIVE" then
         SetStatus(string.format(
           "Encounter history request %d loaded: %d signals, %d suspicious",
           requestId,instanceUI.encounterHistory.summary.count,

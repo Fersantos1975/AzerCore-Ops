@@ -5,10 +5,18 @@
 
 #include <string>
 
+class Map;
+
 namespace AzerCoreOps
 {
 struct ProgressionGate;
 struct ProfilePrerequisiteCreature;
+
+struct InitialStateAssessment
+{
+    bool allowed{false};
+    std::string reason;
+};
 
 struct EncounterAssessment
 {
@@ -50,6 +58,8 @@ class InstanceDiagnosticEngine
 {
 public:
     static bool IsFresh(RecoveryContext const& context);
+    static InitialStateAssessment AssessInitialState(RecoveryContext const& context, std::uint32_t encounterId, EncounterState state);
+    static InitialStateAssessment AssessInitialState(Map* map, std::uint32_t encounterId, EncounterState state);
     static bool HasCompletedDependant(RecoveryContext const& context, std::uint32_t prerequisite);
     static EncounterAssessment AssessEncounter(RecoveryContext const& context, RecoveryEncounter const& encounter);
     static GateAssessment AssessGate(RecoveryContext const& context, ProgressionGate const& gate);

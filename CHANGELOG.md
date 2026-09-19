@@ -1,5 +1,47 @@
 # Changelog
 
+## 0.7.5f — Ulduar Intelligence and Recording Workspace
+
+- Adds the source-audited Ulduar profile for all fourteen encounters, hard-mode paths, progression gates, tracked objects, and instance signals.
+- Adds Manual, Automatic Instance, and Off recording modes with Standard, Full Trace, and Custom detail presets.
+- Adds a dedicated AzerCoreOps_Config.lua configuration layer and Recording & Interface options page.
+- Adds a movable, lockable floating recorder status control with mode, state, detail level, and elapsed time.
+- Adds a right-click floating-recorder menu for Start, Stop & Save, Manual/Automatic/Off mode, Standard/Full/Custom detail, and direct access to Custom settings.
+- Keeps the recording clock and live encounter polling active while the main addon window and Diagnostics page are hidden.
+- Switches Standard and Full Recording inside the Encounter Evidence frame instead of opening a second report window.
+- Makes Share and Export use complete evidence by default while allowing visible-summary output through settings.
+- Adds global tooltip control, movable recording settings, configurable selectable Export, and saved-session retention.
+- Condenses repeated trash/add events in Standard view while preserving the complete event-by-event recording.
+- Uses reset-aware session-relative mechanic time so a new encounter no longer collapses its timeline to `+00:00`.
+- Excludes critters, totems, pets, guardians, and other player-controlled helpers from generic spell, spawn, and death evidence while retaining boss-owned summons.
+- Keeps addon, reporter, and module revision synchronized at 0.7.5f.
+
+## 0.7.4 — Instance Intelligence and Encounter Recording
+
+### Added
+
+- Added encounter-aware Instance Intelligence with correlated encounter history and diagnostic context.
+- Added source-verified Icecrown Citadel mechanic profiles for all twelve raid encounters.
+- Added mechanic-profile context for selected bosses without treating static profile rows as runtime evidence.
+- Added richer ICC progression evidence for doors, valves, airlocks, sigils, prerequisite creatures, and script-exported runtime signals.
+- Added encounter recording with PULL, WIPE, RESET, KILL, and INITIALIZATION classification.
+- Added recording summaries with duration, transition counts, suspicious counts, and final Before/After diagnostic changes.
+
+### Changed
+
+- Hardened wipe/reset interpretation to avoid double-counting alternate transition chains.
+- Improved locality-sensitive comparison so disappeared runtime targets are reported as NOT_OBSERVED instead of false removals.
+- Excluded static MECHANIC_PROFILE context and expected final target deselection from diagnostic-change noise.
+- Improved the diagnostic recording viewport so long report content remains inside the visible panel.
+- Tightened Professor Putricide access diagnostics so boss prerequisites alone no longer imply access before the scripted valve/airlock progression completes.
+
+### Validation
+
+- Passed 39 Lua 5.1 issue-report framework regression tests.
+- Passed project preflight and worldserver compile validation.
+- Live-tested ICC encounter recording across Marrowgar, Deathwhisper, Saurfang, Rotface, Putricide wing-object progression, Gunship, Blood Prince Council, Valithria, and Sindragosa with expected transitions and zero suspicious events in the validated runs.
+- Validated ICC environmental progression evidence for gas/ooze valves, plague pipes, airlock gates, collision objects, and sigils.
+
 ## 0.7.2 — Evidence-Driven Issue Reporting
 
 ### Added

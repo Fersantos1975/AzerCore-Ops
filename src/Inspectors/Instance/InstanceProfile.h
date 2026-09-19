@@ -58,13 +58,17 @@ struct ProgressionGate
     std::vector<std::uint32_t> prerequisites;
     std::uint32_t dependant{0};
     std::string consequence;
+    std::uint32_t completionSignalDataId{0};
+    std::vector<std::uint32_t> completionSignalValues;
 };
 
 enum class ProfileObjectPolicy
 {
     Observe,
     OpenWhenReady,
-    SelectableWhenReady
+    SelectableWhenReady,
+    OneShotSelectableWhenReady,
+    EncounterRoomDoor
 };
 
 struct ProfileObject
@@ -74,6 +78,11 @@ struct ProfileObject
     std::string category;
     ProfileObjectPolicy policy{ProfileObjectPolicy::Observe};
     std::vector<std::uint32_t> prerequisites;
+    // Authoritative DoorData relationships from the instance script.
+    // Passage doors unlock when the linked encounter is DONE; room doors
+    // close during IN_PROGRESS and reopen when combat ends.
+    std::vector<std::uint32_t> passageEncounters;
+    std::vector<std::uint32_t> roomEncounters;
 };
 
 struct ExpectedCreatureRegion
@@ -96,6 +105,21 @@ struct ProfilePrerequisiteCreature
     std::vector<std::uint32_t> difficulties;
 };
 
+struct EncounterMechanic
+{
+    std::uint32_t encounter{0};
+    std::vector<std::uint32_t> creatureEntries;
+    std::string id;
+    std::string name;
+    std::string phase;
+    std::vector<std::uint32_t> spellIds;
+    bool heroicOnly{false};
+    std::string sourceBehavior;
+    // Profile-filtered NPCs whose runtime lifecycle is evidence for this mechanic.
+    // Kept separate from creatureEntries, which identifies the mechanic actors.
+    std::vector<std::uint32_t> observedCreatureEntries;
+};
+
 struct InstanceProfile
 {
     std::uint32_t mapId{0};
@@ -110,6 +134,7 @@ struct InstanceProfile
     std::vector<ProfileSignal> signals;
     std::vector<ProfileObject> objects;
     std::vector<ProfilePrerequisiteCreature> prerequisiteCreatures;
+    std::vector<EncounterMechanic> mechanics;
 };
 
 class InstanceProfileCatalog

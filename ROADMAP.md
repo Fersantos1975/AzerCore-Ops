@@ -3,7 +3,86 @@
 AzerCore Ops is an operational intelligence platform for AzerothCore built from a
 server-side C++ module and a matching World of Warcraft 3.3.5a addon.
 
-The current stable baseline is `0.6.2`.
+The next development revision is `0.7.5g-dev`. Its planned scope is lightweight recorder-health telemetry and a source-audited Trial of the Crusader profile built around that raid's authoritative `SetData` and `InstanceProgress` state machine.
+
+## 0.7.5f — Recording Workspace and Ulduar Intelligence
+
+Completed release scope:
+
+- Added resumable Manual, Automatic Instance, and Off recording modes.
+- Added Standard, Full Trace, and Custom evidence levels with bounded profile filtering.
+- Added live progress inspection without stopping an active session.
+- Added saved completed recordings with configurable retention and recall.
+- Added a movable floating recorder with continuously updated elapsed time and a right-click control menu.
+- Added a dedicated addon configuration layer, movable settings, tooltip control, and share/export preferences.
+- Added source-audited Ulduar coverage for all fourteen encounters, hard modes, progression objects, and runtime signals.
+- Expanded ICC mechanics, creature, door, valve, airlock, sigil, transport, gauntlet, and phase evidence.
+- Filtered player-controlled pets, guardians, totems, critters, and similar helpers while retaining boss-owned summons.
+- Synchronized addon, reporter, configuration, and module revisions at `0.7.5f`.
+- Passed 41 regression tests, project preflight, whitespace validation, and a full RelWithDebInfo AzerothCore rebuild.
+
+Planned for 0.7.5g:
+
+- Add low-cost recorder-health counters for accepted, filtered, evicted, and buffered evidence plus per-category totals.
+- Add the Trial of the Crusader map 649 profile across 10/25-player Normal and Heroic modes.
+- Model ToC progression through authoritative `InstanceProgress` signals, encounter creatures, spells, auras, gates, the destructible floor, heroic attempts, and tribute rewards.
+- Keep telemetry in memory and report it only on request; no recording-event database writes.
+
+## 0.7.4 — Instance Intelligence
+
+Release scope:
+
+- Correlate encounter history with current diagnostics instead of evaluating snapshots in isolation.
+- Maintain source-verified ICC mechanics profiles for all twelve encounters.
+- Record and classify encounter transitions as PULL, WIPE, RESET, KILL, or INITIALIZATION.
+- Correlate ICC doors, valves, airlocks, sigils, prerequisite creatures, and runtime profile signals.
+- Suppress static profile and expected target-deselection noise from Before/After evidence.
+- Keep mechanic profiles distinct from future live mechanic-event capture.
+- Harden progression gates so compound scripted controls, such as Putricide valve/airlock progression, are not reduced to boss-state prerequisites alone.
+
+Post-0.7.4 direction:
+
+- Continue the bounded live mechanic-event recorder filtered by the verified profile catalog.
+- Correlate actor identity, timestamps, spells, summons, game objects, and encounter phases into diagnostic evidence.
+- Expand encounter-profile validation beyond ICC without introducing map-specific assumptions into the generic engine.
+
+### Instance journey recording
+
+The recorder evolves from boss-only evidence into a resumable, profile-driven instance
+session. Manual recording remains the default; Automatic Instance and Off are explicit
+user choices.
+
+Planned lifecycle:
+
+- Bind a session to character, map, exact Instance ID, difficulty, and reset lifetime.
+- Start manually by default, or automatically when entering a profiled instance when
+  Automatic Instance mode is selected.
+- Preserve the session when a player leaves, logs out, dies, releases spirit, or becomes
+  a ghost; resume the same session when the same Instance ID is re-entered.
+- Distinguish player presence events from shared instance progression so events that
+  occur while the player is outside can be labelled accurately.
+- Finalize on verified instance completion, reset/expiry, or explicit manual stop.
+- Prevent duplicate starts and never overwrite a manual session with automation.
+
+Planned evidence and progress:
+
+- Record profile-relevant prerequisite trash, gauntlets, creatures, game objects, doors,
+  valves, transports, boss transitions, summons, deaths, spells, auras, and phases.
+- Avoid unbounded combat-log capture; profiles decide which signals are diagnostic.
+- Maintain a live checklist with Completed, In Progress, Available, Blocked, Not Reached,
+  Failed/Reset, Not Observed, and Recorded While Absent states.
+- Allow the current timeline and checklist to be opened at any time without stopping or
+  finalizing the recording.
+- Retain a bounded configurable number of completed instance sessions.
+
+Planned addon layout:
+
+- Diagnostic Scan: read-only snapshot and Before/After comparison.
+- Live Recording: session state, manual controls, live objectives, and chronological
+  activity.
+- History: server history, saved recordings, export, and retention controls.
+- A compact recording-settings control selects Manual, Automatic Instance, or Off and
+  exposes resume, completion, notification, and retention preferences.
 
 ## Completed foundation
 
