@@ -3,7 +3,8 @@
 
 AzerCoreOpsIssueReport = AzerCoreOpsIssueReport or {}
 local Report = AzerCoreOpsIssueReport
-Report.FrameworkBuild="0.7.4o-dev"
+Report.FrameworkBuild="0.7.5f"
+Report.FrameworkSchema=1
 
 local function Trim(value)
   return tostring(value or ""):gsub("^%s+",""):gsub("%s+$","")
@@ -162,6 +163,22 @@ local function LastHistorySequence(encounterHistory)
   return last
 end
 
+local function LastMechanicSequence(encounterHistory)
+  local last=0
+  for _,entry in ipairs(encounterHistory and encounterHistory.mechanics or {}) do
+    last=math.max(last,HistorySequence(entry))
+  end
+  return last
+end
+
+local function LastMechanicElapsed(encounterHistory)
+  local last=0
+  for _,entry in ipairs(encounterHistory and encounterHistory.mechanics or {}) do
+    last=math.max(last,tonumber(entry and entry.elapsed) or 0)
+  end
+  return last
+end
+
 local function SessionIdentity(diagnostics, encounterHistory)
   diagnostics=diagnostics or {}
   encounterHistory=encounterHistory or {}
@@ -176,6 +193,8 @@ local function SessionIdentity(diagnostics, encounterHistory)
     diagnosticGeneratedAt=diagnostics.generatedAt,
     historyGeneratedAt=encounterHistory.generatedAt,
     historyLastSequence=LastHistorySequence(encounterHistory),
+    mechanicLastSequence=LastMechanicSequence(encounterHistory),
+    mechanicLastElapsed=LastMechanicElapsed(encounterHistory),
   }
 end
 
@@ -341,12 +360,21 @@ function Report.HistoryWindow(before, after)
   local startSequence=tonumber(previous.historyLastSequence) or
     LastHistorySequence(before and before.encounterHistory or {})
   local history=after and after.encounterHistory or {}
+  local startMechanicSequence=tonumber(previous.mechanicLastSequence) or
+    LastMechanicSequence(before and before.encounterHistory or {})
+  local startMechanicElapsed=tonumber(previous.mechanicLastElapsed) or
+    LastMechanicElapsed(before and before.encounterHistory or {})
   local window={
-    schema=1,
+    schema=2,
     startSequence=startSequence,
     endSequence=LastHistorySequence(history),
+    startMechanicSequence=startMechanicSequence,
+    endMechanicSequence=LastMechanicSequence(history),
+    startMechanicElapsed=startMechanicElapsed,
     entries={},
+    mechanics={},
     count=0,
+    mechanicCount=0,
     anomalies=0,
   }
 
@@ -360,6 +388,20 @@ function Report.HistoryWindow(before, after)
     end
   end
   window.count=#window.entries
+  local mechanicCounterReset=false
+  for _,entry in ipairs(history.mechanics or {}) do
+    if HistorySequence(entry)>startMechanicSequence then
+      local copy=Copy(entry)
+      local rawElapsed=tonumber(copy.elapsed) or 0
+      -- Encounter elapsed resets when a new boss pull starts. Once a reset is
+      -- detected, the complete new window uses the new counter directly.
+      if rawElapsed<startMechanicElapsed then mechanicCounterReset=true end
+      copy.sessionElapsed=mechanicCounterReset and rawElapsed or
+        (rawElapsed-startMechanicElapsed)
+      table.insert(window.mechanics,copy)
+    end
+  end
+  window.mechanicCount=#window.mechanics
   return window
 end
 
