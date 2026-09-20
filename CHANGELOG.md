@@ -1,4 +1,42 @@
+
+## 0.7.5j - Evidence Review Usability
+- Remove the experimental Copy Full path after large Full Trace testing showed that a single legacy WoW 3.3.5 EditBox could stall for roughly 20 seconds.
+- Keep Export responsive through bounded 12,000-character pages and explicit Select Part copying.
+- Bound Courier Share rendering to a 12,000-character preview while retaining the complete normalized report internally for chat splitting/posting.
+- Confirm the corrected Share path opens responsively in game with the large recording workload.
+
+- Paginate the Encounter Evidence workspace so long Standard and Full Trace recordings remain lightweight and fully navigable.
+- Show the active view explicitly as STANDARD or FULL TRACE, with page number and visible mechanic time range.
+- Follow the newest evidence page while recording, but preserve an older page when the user navigates back.
+- Keep paged selectable exports bounded and responsive; the experimental whole-report EditBox path was removed after live performance testing.
+- Preserve the 0.7.5i incremental history/rendering performance fixes and evidence fidelity.
+
 # Changelog
+
+## 0.7.5i — Responsive Export and Active-Encounter Filtering
+
+### Changed
+
+- Live Recording requests only mechanic events newer than the last received sequence instead of retransmitting the complete accumulated mechanic buffer on every refresh.
+- Encounter History accepts an optional mechanic-sequence cursor while preserving full-history behavior for existing callers.
+- The addon retains the existing live timeline while appending incremental mechanic batches.
+- Live refreshes preserve the user's scroll position instead of forcing the evidence view to the top.
+- Streamed encounter entries, mechanic events, and statistics are collected without rerendering the Diagnostics frame for every individual row.
+- The evidence frame renders once when the streamed batch completes and only when the Live Recording controls are visible.
+- Large selectable exports are split into bounded 12,000-character parts with Previous/Next controls, avoiding a single enormous EditBox and automatic full-report selection.
+- Export actions continue to receive the complete report even while the selectable view is paged.
+- Generic `SCRIPT_CAST` evidence is accepted only from creatures assigned to the active encounter profile, preventing unrelated ICC actors from polluting a boss recording.
+- Blood Council `NOT_STARTED -> FAIL` is treated as expected only while the Blood Prince Trash prerequisite remains incomplete; it becomes suspicious after the prerequisite is complete.
+- Encounter History now presents a derived Current Encounter State and explicitly labels initialization rows as a historical session-start snapshot.
+- Module, addon, configuration, reporter, and TOC revisions are synchronized at `0.7.5i`.
+
+### Validation
+
+- Passed Lua 5.1 syntax validation.
+- Passed 41 issue-report framework regression tests.
+- Passed project preflight and whitespace validation.
+- The 0.7.5g live-recording hitch regression passed in game; full recording remained responsive.
+- The 0.7.5i module rebuild and in-game paged-export/active-encounter regression remain required before publication.
 
 ## 0.7.5f — Ulduar Intelligence and Recording Workspace
 

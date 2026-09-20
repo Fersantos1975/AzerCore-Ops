@@ -11,6 +11,7 @@
 #include "Player.h"
 #include "Protocol/ChatProtocol.h"
 
+#include <sstream>
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
@@ -518,7 +519,14 @@ bool EncounterHistory::LatestTransition(
 
 bool EncounterHistory::Show(ChatHandler* handler, Acore::ChatCommands::Tail requestArg)
 {
+    std::string requestText = std::string(requestArg);
     std::uint32_t requestId = ParseRequestId(requestArg);
+    std::uint64_t afterMechanicSequence = 0;
+    {
+        std::istringstream args(requestText);
+        std::uint64_t ignoredRequestId = 0;
+        args >> ignoredRequestId >> afterMechanicSequence;
+    }
     if (!handler || !handler->GetPlayer())
     {
         Protocol::SendEncounterHistoryError(
@@ -603,7 +611,8 @@ bool EncounterHistory::Show(ChatHandler* handler, Acore::ChatCommands::Tail requ
     }
 
     std::uint32_t mechanicEvents =
-        MechanicEventRecorder::Show(handler, requestId, map);
+        MechanicEventRecorder::Show(
+            handler, requestId, map, afterMechanicSequence);
 
     Protocol::SendEncounterHistoryEnd(
         handler,
