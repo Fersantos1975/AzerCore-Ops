@@ -202,6 +202,29 @@ EncounterMechanic const* FindObservedMechanic(
     return found == profile->mechanics.end() ? nullptr : &*found;
 }
 
+bool IsObservedEncounterCreature(
+    InstanceProfile const* profile,
+    Map* map,
+    std::uint32_t encounterId,
+    std::uint32_t creatureEntry)
+{
+    if (!profile || !map || !creatureEntry)
+        return false;
+
+    return std::any_of(
+        profile->mechanics.begin(),
+        profile->mechanics.end(),
+        [map, encounterId, creatureEntry](EncounterMechanic const& mechanic)
+        {
+            return mechanic.encounter == encounterId &&
+                (!mechanic.heroicOnly || map->IsHeroic()) &&
+                std::find(
+                    mechanic.observedCreatureEntries.begin(),
+                    mechanic.observedCreatureEntries.end(),
+                    creatureEntry) != mechanic.observedCreatureEntries.end();
+        });
+}
+
 void RecordSpellCast(Unit* caster, SpellInfo const* spellInfo)
 {
     if (!caster || !spellInfo || IsPlayerControlledHelper(caster))
@@ -260,19 +283,27 @@ void RecordSpellCast(Unit* caster, SpellInfo const* spellInfo)
         break;
     }
 
-    if (!profileMatched && caster->ToCreature() && !caster->ToCreature()->IsTrigger())
+    Creature* casterCreature = caster->ToCreature();
+    bool belongsToActiveEncounter = casterCreature &&
+        IsObservedEncounterCreature(
+            profile,
+            map,
+            active->second.encounterId,
+            casterCreature->GetEntry());
+
+    if (!profileMatched && belongsToActiveEncounter && !casterCreature->IsTrigger())
     {
         MechanicEvent event;
         event.type = "SCRIPT_CAST";
-        event.creatureEntry = caster->ToCreature()->GetEntry();
+        event.creatureEntry = casterCreature->GetEntry();
         event.creatureGuid = caster->GetGUID().GetCounter();
         event.creatureName = caster->GetName();
         event.mechanicId = "profile-spell-" + std::to_string(spellInfo->Id);
-        event.mechanicName = "Profiled Instance Script Spell";
+        event.mechanicName = "Active Encounter Script Spell";
         auto phase = PhasesByInstance[instanceId].find(active->second.encounterId);
         if (phase != PhasesByInstance[instanceId].end())
             event.phase = phase->second;
-        event.detail = "Observed profiled-instance encounter cast not yet assigned to a named profile mechanic; spell ID " +
+        event.detail = "Observed active-encounter cast not yet assigned to a named profile mechanic; spell ID " +
             std::to_string(spellInfo->Id);
         Append(instanceId, active->second, std::move(event));
     }
@@ -973,7 +1004,8 @@ void MechanicEventRecorder::Clear(std::uint32_t instanceId)
 std::uint32_t MechanicEventRecorder::Show(
     ChatHandler* handler,
     std::uint32_t requestId,
-    Map* map)
+    Map* map,
+    std::uint64_t afterSequence)
 {
     if (!handler || !map || !map->GetInstanceId())
         return 0;
@@ -993,6 +1025,9 @@ std::uint32_t MechanicEventRecorder::Show(
 
     for (MechanicEvent const& event : snapshot)
     {
+        if (event.sequence <= afterSequence)
+            continue;
+
         if (event.mechanicId == "instance-journey" &&
             event.creatureGuid &&
             event.creatureGuid != requesterGuid)

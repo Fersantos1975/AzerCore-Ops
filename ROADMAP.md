@@ -3,7 +3,31 @@
 AzerCore Ops is an operational intelligence platform for AzerothCore built from a
 server-side C++ module and a matching World of Warcraft 3.3.5a addon.
 
-The next development revision is `0.7.5g-dev`. Its planned scope is lightweight recorder-health telemetry and a source-audited Trial of the Crusader profile built around that raid's authoritative `SetData` and `InstanceProgress` state machine.
+The current release candidate is `0.7.5j`. It preserves the verified live-recording performance work, makes very large selectable exports responsive, and prevents unrelated instance actors from entering an active boss trace.
+
+## 0.7.5i — Responsive Export and Active-Encounter Filtering
+
+Release-candidate scope:
+
+- Add an optional mechanic-sequence cursor to Encounter History requests.
+- Return only mechanic events newer than the addon's last received sequence during live refreshes.
+- Preserve accumulated live history and the user's scroll position while a refresh is in flight.
+- Batch streamed entries, mechanics, and statistics and render the evidence frame once when the response completes.
+- Preserve full-history behavior for diagnostics, completed reports, Share, Export, and callers that do not provide a sequence cursor.
+- Split large selectable Export text into bounded parts with Previous/Next navigation and no automatic whole-report selection.
+- Keep action callbacks bound to the complete report rather than the currently visible export part.
+- Restrict unnamed fallback script casts to profiled creatures belonging to the active encounter.
+- Allow Blood Council's pre-initialization FAIL only while Blood Prince Trash remains incomplete.
+- Show a derived Current Encounter State and label initialization rows as a historical session-start snapshot.
+- Synchronize module, addon, configuration, reporter, and TOC revisions at `0.7.5i`.
+- Complete rebuild, Windows addon deployment, and in-game export/filter regression testing before publication.
+
+Planned after 0.7.5i:
+
+- Add low-cost recorder-health counters for accepted, filtered, evicted, and buffered evidence plus per-category totals.
+- Keep telemetry in memory and report it only on request; do not add recording-event database writes or continuous telemetry polling.
+- Add the Trial of the Crusader map 649 profile across 10/25-player Normal and Heroic modes.
+- Model ToC progression through authoritative `InstanceProgress` signals, encounter creatures, spells, auras, gates, the destructible floor, heroic attempts, and tribute rewards.
 
 ## 0.7.5f — Recording Workspace and Ulduar Intelligence
 
@@ -20,13 +44,6 @@ Completed release scope:
 - Filtered player-controlled pets, guardians, totems, critters, and similar helpers while retaining boss-owned summons.
 - Synchronized addon, reporter, configuration, and module revisions at `0.7.5f`.
 - Passed 41 regression tests, project preflight, whitespace validation, and a full RelWithDebInfo AzerothCore rebuild.
-
-Planned for 0.7.5g:
-
-- Add low-cost recorder-health counters for accepted, filtered, evicted, and buffered evidence plus per-category totals.
-- Add the Trial of the Crusader map 649 profile across 10/25-player Normal and Heroic modes.
-- Model ToC progression through authoritative `InstanceProgress` signals, encounter creatures, spells, auras, gates, the destructible floor, heroic attempts, and tribute rewards.
-- Keep telemetry in memory and report it only on request; no recording-event database writes.
 
 ## 0.7.4 — Instance Intelligence
 

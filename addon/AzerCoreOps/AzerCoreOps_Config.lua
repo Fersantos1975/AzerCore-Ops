@@ -2,7 +2,7 @@
 -- Loaded before the main addon so settings and migrations have one owner.
 AzerCoreOpsConfig = AzerCoreOpsConfig or {}
 AzerCoreOpsConfig.Schema = 1
-AzerCoreOpsConfig.Build = "0.7.5f"
+AzerCoreOpsConfig.Build = "0.7.5j"
 AzerCoreOpsConfig.Defaults = {
   startMinimized=true,showMinimap=true,showMini=true,mbfCompatibility=true,scale=1,roleMode="AUTOMATIC",
   characterRaid="ICC",characterRaidDifficulty="10N",characterRaidLocked=true,

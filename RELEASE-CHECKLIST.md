@@ -7,6 +7,7 @@ Use this checklist before tagging or publishing any AzerCore Ops release.
 - [ ] Version matches in `CMakeLists.txt`, `addon/AzerCoreOps/AzerCoreOps.toc`, addon runtime metadata, `CHANGELOG.md`, and `RELEASE-NOTES.md`.
 - [ ] Release channel and capability list are accurate.
 - [ ] README identifies the correct current release.
+- [ ] `docs/PROJECT-STATUS.md` reflects the latest completed, validated, pending, and publication state.
 - [ ] README installation commands use portable placeholders rather than machine-specific paths.
 - [ ] No credentials, personal filesystem paths, private hostnames, or local network addresses are present.
 - [ ] Changelog and release notes describe only functionality included in the release.

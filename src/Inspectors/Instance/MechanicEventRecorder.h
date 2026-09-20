@@ -24,7 +24,7 @@ public:
     static void OnPlayerReleasedGhost(Player* player);
     static void OnPlayerResurrect(Player* player);
     static void Clear(std::uint32_t instanceId);
-    static std::uint32_t Show(ChatHandler* handler, std::uint32_t requestId, Map* map);
+    static std::uint32_t Show(ChatHandler* handler, std::uint32_t requestId, Map* map, std::uint64_t afterSequence = 0);
 };
 }
 

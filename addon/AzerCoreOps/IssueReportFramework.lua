@@ -3,7 +3,7 @@
 
 AzerCoreOpsIssueReport = AzerCoreOpsIssueReport or {}
 local Report = AzerCoreOpsIssueReport
-Report.FrameworkBuild="0.7.5f"
+Report.FrameworkBuild="0.7.5j"
 Report.FrameworkSchema=1
 
 local function Trim(value)

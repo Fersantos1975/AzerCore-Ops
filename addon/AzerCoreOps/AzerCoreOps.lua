@@ -1,6 +1,6 @@
 local ADDON = ...
 
--- AzerCore Ops Platform 0.7.5f
+-- AzerCore Ops Platform 0.7.5j
 -- Target: WoW 3.3.5a / AzerothCore. All server commands live here so that
 -- branch-specific command names can be changed without touching the UI.
 local CMD = {
@@ -39,7 +39,7 @@ local CMD = {
 
 local DS = AzerCoreOpsDesign
 local Platform = AzerCoreOpsPlatform
-Platform.AddonBuild="0.7.5f"
+Platform.AddonBuild="0.7.5j"
 local C = {
   bg=DS.Colors.Background,
   panel=DS.Colors.Surface,
@@ -121,7 +121,7 @@ local ShowSelectableReport
 local EnsureShareFrame
 local ApplyPlayerTargetIdentity
 local defaults=(AzerCoreOpsConfig and AzerCoreOpsConfig.Defaults) or {}
-local ADDON_VERSION="0.7.5f"
+local ADDON_VERSION="0.7.5j"
 local PROTOCOL_VERSION="1"
 Platform.ReporterSchemaVersion=1
 
@@ -3994,10 +3994,25 @@ EnsureShareFrame=function()
     local kind=(UnitExists("target") and UnitIsPlayer("target")) and "Player" or (UnitExists("target") and "Non-player" or "No target")
     targetText:SetText("Target: "..tostring(name).." ("..kind..")")
   end
+  local function courierPreviewText(text)
+    local limit=12000
+    if string.len(text or "")<=limit then return text or "" end
+    local preview=string.sub(text,1,limit)
+    local splitAt
+    local searchFrom=1
+    while true do
+      local found=string.find(preview,"\n",searchFrom,true)
+      if not found then break end
+      splitAt=found
+      searchFrom=found+1
+    end
+    if splitAt and splitAt>=math.floor(limit*.6) then preview=string.sub(preview,1,splitAt) end
+    return preview.."\n\n[Courier preview bounded for performance. The complete report is retained for posting.]"
+  end
   local function applyMessage(text,kind,lockIt)
     text=CourierNormalizeText(text)
     f.message=text; f.reportKind=kind
-    edit:SetText(text); edit:SetCursorPosition(0); edit:ClearFocus()
+    edit:SetText(courierPreviewText(text)); edit:SetCursorPosition(0); edit:ClearFocus()
     if lockIt~=false then f.locked=true; f.captured=(text~="") end
     f.postPending=false
     f.editing=false; edit:EnableKeyboard(false); edit:EnableMouse(false)
@@ -4015,7 +4030,14 @@ EnsureShareFrame=function()
   local function toggleEdit()
     f.editing=not f.editing
     edit:EnableKeyboard(f.editing); edit:EnableMouse(f.editing)
-    if f.editing then edit:SetFocus(); edit:SetCursorPosition(string.len(edit:GetText() or "")); f.editButton:SetText("Done"); setLocal("Editing enabled.")
+    if f.editing then
+      if string.len(f.message or "")>12000 then
+        f.message=edit:GetText() or ""
+        setLocal("Editing enabled for the bounded preview; posting will use the edited preview.")
+      else
+        setLocal("Editing enabled.")
+      end
+      edit:SetFocus(); edit:SetCursorPosition(string.len(edit:GetText() or "")); f.editButton:SetText("Done")
     else f.message=edit:GetText() or ""; edit:ClearFocus(); f.editButton:SetText("Edit"); setLocal("Editing finished; message remains locked.") end
     refreshHighlights()
   end
@@ -4031,7 +4053,7 @@ EnsureShareFrame=function()
     f.destination=channel; refreshHighlights(); setLocal((channel=="WHISPER" and "Whisper" or channel).." selected.")
   end
   local function post()
-    f.message=edit:GetText() or ""
+    if f.editing then f.message=edit:GetText() or "" end
     local target=nil
     if f.destination=="WHISPER" then
       if not (UnitExists("target") and UnitIsPlayer("target")) then setLocal("Whisper requires a player target.",true); return end
@@ -5895,25 +5917,65 @@ ShowSelectableReport=function(title, report, actionLabel, actionFn)
   if not exportFrame then
     exportFrame=CreateFrame("Frame","AZERCORE_OPS_ExportFrame",UIParent); exportFrame:SetWidth(610); exportFrame:SetHeight(410); exportFrame:SetPoint("CENTER"); exportFrame:SetFrameStrata("FULLSCREEN_DIALOG"); Backdrop(exportFrame); Movable(exportFrame,"export")
     exportFrame.title=Label(exportFrame,"AzerCoreOps report"); exportFrame.title:SetPoint("TOPLEFT",14,-14)
-    local help=exportFrame:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); help:SetPoint("TOPLEFT",14,-34); help:SetText("Select any text and press Ctrl+C. Ctrl+A selects the complete report."); help:SetTextColor(unpack(C.white))
+    local help=exportFrame:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); help:SetPoint("TOPLEFT",14,-34); help:SetText("Large reports are paged. Select the current part and press Ctrl+C."); help:SetTextColor(unpack(C.white))
     local scroll=CreateFrame("ScrollFrame","AZERCORE_OPS_ExportScroll",exportFrame,"UIPanelScrollFrameTemplate"); scroll:SetPoint("TOPLEFT",14,-58); scroll:SetPoint("BOTTOMRIGHT",-34,45); Backdrop(scroll,C.panel)
     exportEdit=CreateFrame("EditBox",nil,scroll); exportEdit:SetMultiLine(true); exportEdit:SetAutoFocus(false); exportEdit:SetFontObject(ChatFontNormal); exportEdit:SetWidth(545); exportEdit:SetTextInsets(6,6,6,6); exportEdit:SetScript("OnEscapePressed",function() exportFrame:Hide() end); scroll:SetScrollChild(exportEdit)
     scroll:EnableMouseWheel(true); scroll:SetScript("OnMouseWheel",function(self,delta) self:SetVerticalScroll(math.max(0,self:GetVerticalScroll()-delta*60)) end)
-    Button(exportFrame,"Select All",90,24,function() exportEdit:SetFocus(); exportEdit:HighlightText() end):SetPoint("BOTTOMLEFT",14,12)
-    exportActionButton=Button(exportFrame,"Action",110,24,function() end); exportActionButton:SetPoint("BOTTOM",0,12); exportActionButton:Hide()
+
+    exportFrame.SplitPages=function(fullReport)
+      local pages, remaining = {}, fullReport or ""
+      local pageLimit = 12000
+      if remaining == "" then return {""} end
+      while #remaining > pageLimit do
+        local splitAt
+        local probe = string.sub(remaining,1,pageLimit)
+        local searchFrom = 1
+        while true do
+          local found = string.find(probe,"\n",searchFrom,true)
+          if not found then break end
+          splitAt = found
+          searchFrom = found+1
+        end
+        if not splitAt or splitAt < math.floor(pageLimit*.6) then splitAt=pageLimit end
+        table.insert(pages,string.sub(remaining,1,splitAt))
+        remaining=string.sub(remaining,splitAt+1)
+      end
+      table.insert(pages,remaining)
+      return pages
+    end
+    exportFrame.RenderPage=function()
+      exportFrame.copyFullActive=false
+      local page=exportFrame.pages[exportFrame.pageIndex] or ""
+      exportEdit:SetText(page)
+      exportEdit:SetHeight(math.max(310,select(2,page:gsub("\n","\n"))*16+40))
+      exportFrame.pageLabel:SetText(string.format("Part %d of %d",exportFrame.pageIndex,#exportFrame.pages))
+      if exportFrame.pageIndex>1 then exportFrame.previousButton:Enable() else exportFrame.previousButton:Disable() end
+      if exportFrame.pageIndex<#exportFrame.pages then exportFrame.nextButton:Enable() else exportFrame.nextButton:Disable() end
+      scroll:SetVerticalScroll(0)
+    end
+
+    Button(exportFrame,"Select Part",90,24,function() exportEdit:SetFocus(); exportEdit:HighlightText() end):SetPoint("BOTTOMLEFT",14,12)
+    exportFrame.previousButton=Button(exportFrame,"< Previous",90,24,function() if exportFrame.pageIndex>1 then exportFrame.pageIndex=exportFrame.pageIndex-1; exportFrame.RenderPage() end end); exportFrame.previousButton:SetPoint("BOTTOMLEFT",112,12)
+    exportFrame.nextButton=Button(exportFrame,"Next >",90,24,function() if exportFrame.pageIndex<#exportFrame.pages then exportFrame.pageIndex=exportFrame.pageIndex+1; exportFrame.RenderPage() end end); exportFrame.nextButton:SetPoint("BOTTOMLEFT",210,12)
+    exportFrame.pageLabel=exportFrame:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); exportFrame.pageLabel:SetPoint("TOPRIGHT",-42,-35); exportFrame.pageLabel:SetWidth(100); exportFrame.pageLabel:SetJustifyH("RIGHT"); exportFrame.pageLabel:SetTextColor(unpack(C.gold))
+    exportActionButton=Button(exportFrame,"Action",110,24,function() end); exportActionButton:SetPoint("BOTTOM",90,12); exportActionButton:Hide()
     Button(exportFrame,"Close",90,24,function() exportFrame:Hide() end):SetPoint("BOTTOMRIGHT",-14,12)
   end
+  exportFrame.fullReport=report or ""
+  exportFrame.copyFullActive=false
+  exportFrame.pages=exportFrame.SplitPages(exportFrame.fullReport)
+  exportFrame.pageIndex=1
   exportFrame.title:SetText(title or "AzerCoreOps report")
   if actionLabel and actionFn then
     exportActionButton:SetText(actionLabel)
-    exportActionButton:SetScript("OnClick",function()
-      actionFn(exportEdit and exportEdit:GetText() or "")
-    end)
+    exportActionButton:SetScript("OnClick",function() actionFn(exportFrame.fullReport) end)
     exportActionButton:Show()
   else
     exportActionButton:Hide()
   end
-  exportEdit:SetText(report or ""); exportEdit:SetHeight(math.max(310,select(2,(report or ""):gsub("\n","\n"))*16+40)); exportFrame:Show(); exportEdit:SetFocus(); exportEdit:HighlightText()
+  exportFrame.RenderPage()
+  exportFrame:Show()
+  if #exportFrame.pages==1 then exportEdit:SetFocus(); exportEdit:HighlightText() else exportEdit:ClearFocus() end
 end
 
 local function InstanceAuditReportText()
@@ -6376,9 +6438,13 @@ local function BuildInstances()
     instanceUI.encounterHistory={entries=previous.entries or {},stats=previous.stats or {},loading=true,
       header=previous.header,summary=previous.summary,error=nil,generatedAt=previous.generatedAt,
       requestId=requestId,purpose=instanceUI.pendingHistoryPurpose}
-    if diagnosticScroll then diagnosticScroll:SetVerticalScroll(0) end
-    if instanceUI.RenderDiagnostics then instanceUI.RenderDiagnostics() end
-    SendCommand(CMD.instanceHistory.." "..tostring(requestId))
+    if diagnosticScroll and instanceUI.pendingHistoryPurpose~="RECORDING_LIVE" then diagnosticScroll:SetVerticalScroll(0) end
+    if instanceUI.RenderDiagnostics and instanceUI.pendingHistoryPurpose~="RECORDING_LIVE" then instanceUI.RenderDiagnostics() end
+    local historyCommand=CMD.instanceHistory.." "..tostring(requestId)
+    if instanceUI.pendingHistoryPurpose=="RECORDING_LIVE" then
+      historyCommand=historyCommand.." "..tostring(tonumber(instanceUI.recordingLastMechanicSequence) or 0)
+    end
+    SendCommand(historyCommand)
     After(15,function()
       if tonumber(instanceUI.pendingHistoryRequest)~=requestId then return end
       instanceUI.pendingHistoryRequest=nil
@@ -6511,6 +6577,7 @@ local function BuildInstances()
       }
       instanceUI.evidenceSessionStartClock=GetTime()
       instanceUI.evidenceSessionElapsed=nil
+      instanceUI.recordingLastMechanicSequence=0
     elseif not AzerCoreOpsDB.issueReportEvidence.before then
       SetStatus("Capture Before evidence first.",true)
       return
@@ -6615,6 +6682,7 @@ local function BuildInstances()
       AzerCoreOpsDB.issueReportEvidence={sessionId=instanceUI.evidenceSessionGeneration}
       instanceUI.evidenceSessionStartClock=nil
       instanceUI.evidenceSessionElapsed=nil
+      instanceUI.recordingLastMechanicSequence=0
       instanceUI.UpdateEvidenceSessionUI()
       instanceUI.stopRecordingPending=nil
       instanceUI.workspaceOverride=nil
@@ -7195,10 +7263,14 @@ local function BuildInstances()
     local entries=h.entries or {}
     local stats=h.stats or {}
     local initial,live={},{}
+    local currentById,currentOrder={},{}
     local lines={}
     local function add(value) table.insert(lines,value) end
 
     for _,entry in ipairs(entries) do
+      local key=tostring(entry.id or entry.name or "?")
+      if not currentById[key] then table.insert(currentOrder,key) end
+      currentById[key]=entry
       if tostring(entry.class or "") == "INITIALIZATION" then
         table.insert(initial,entry)
       else
@@ -7272,6 +7344,20 @@ local function BuildInstances()
       add("")
     end
 
+    if #currentOrder>0 then
+      add(plain and
+        "CURRENT ENCOUNTER STATE" or
+        "|cffffd100CURRENT ENCOUNTER STATE|r")
+      for _,key in ipairs(currentOrder) do
+        local entry=currentById[key]
+        add(string.format(
+          "%s  ->  %s",
+          tostring(entry.name or ("Encounter "..tostring(entry.id or "?"))),
+          EncounterHistoryStateLabel(entry.newname,entry.new,plain)))
+      end
+      add("")
+    end
+
     add(plain and
       "LIVE TRANSITIONS" or
       "|cffffd100LIVE TRANSITIONS|r")
@@ -7311,8 +7397,11 @@ local function BuildInstances()
 
     if #initial>0 then
       add(plain and
-        "INITIAL STATE" or
-        "|cffffd100INITIAL STATE|r")
+        "SESSION START SNAPSHOT (HISTORICAL)" or
+        "|cffffd100SESSION START SNAPSHOT (HISTORICAL)|r")
+      add(plain and
+        "States captured when server history began; these are not the current states." or
+        "|cffb0b0b0States captured when server history began; these are not the current states.|r")
 
       for _,entry in ipairs(initial) do
         add(string.format(
@@ -7548,6 +7637,47 @@ local function BuildInstances()
     return table.concat(lines,"\n")
   end
 
+  local evidenceOlder, evidenceNewer, evidencePageLabel
+  local EVIDENCE_PAGE_LIMIT=10000
+  local function SplitEvidencePages(report)
+    local pages,remaining={},report or ""
+    if remaining=="" then return {""} end
+    while #remaining>EVIDENCE_PAGE_LIMIT do
+      local probe=string.sub(remaining,1,EVIDENCE_PAGE_LIMIT)
+      local splitAt
+      local searchFrom=1
+      while true do
+        local found=string.find(probe,"\n",searchFrom,true)
+        if not found then break end
+        splitAt=found
+        searchFrom=found+1
+      end
+      if not splitAt or splitAt<math.floor(EVIDENCE_PAGE_LIMIT*.6) then splitAt=EVIDENCE_PAGE_LIMIT end
+      table.insert(pages,string.sub(remaining,1,splitAt))
+      remaining=string.sub(remaining,splitAt+1)
+    end
+    table.insert(pages,remaining)
+    return pages
+  end
+  local function EvidencePageRange(page)
+    local first,last
+    for stamp in tostring(page or ""):gmatch("%+(%d%d:%d%d:?%d?%d?)") do
+      local value="+"..stamp
+      if not first then first=value end
+      last=value
+    end
+    if first and last then return first.." - "..last end
+    return "summary"
+  end
+  local function SelectEvidencePage(delta)
+    local pages=instanceUI.evidencePages or {""}
+    local index=math.max(1,math.min(#pages,(instanceUI.evidencePageIndex or #pages)+delta))
+    instanceUI.evidencePageIndex=index
+    instanceUI.evidenceFollowNewest=index==#pages
+    if diagnosticScroll then diagnosticScroll:SetVerticalScroll(0) end
+    instanceUI.RenderDiagnostics()
+  end
+
   instanceUI.RenderDiagnostics=function()
     local evidence=AzerCoreOpsDB and AzerCoreOpsDB.issueReportEvidence or {}
     local stopping=evidence.before and not evidence.after and evidence.stopRequestedAt
@@ -7611,17 +7741,41 @@ local function BuildInstances()
       if recoveryButton then recoveryButton:Show() end
     end
     local showEvidence=onRecording and (recording or stopping or complete)
+    local evidenceWorkspace=showEvidence or onReports
     local detailedView=instanceUI.recordingView=="FULL"
     if fullRecordingButton then
-      if onRecording or onReports then
-        fullRecordingButton:SetText(detailedView and "Standard" or "Full Recording")
+      if evidenceWorkspace then
+        fullRecordingButton:SetText(detailedView and "Standard Recording" or "Full Recording")
       else
         fullRecordingButton:SetText("Full Report")
       end
     end
     local report=onReports and (selected and EvidenceWorkspaceReport(false,selected,not detailedView) or "No completed encounter recordings yet. Stop a recording to save it here.") or
       (showEvidence and EvidenceWorkspaceReport(false,nil,not detailedView) or DiagnosticReport(false))
-    diagnosticText:SetText(report)
+    if evidenceWorkspace then
+      local pages=SplitEvidencePages(report)
+      instanceUI.evidencePages=pages
+      local follow=instanceUI.evidenceFollowNewest
+      local index=tonumber(instanceUI.evidencePageIndex)
+      if not index then index=#pages end
+      if recording and follow~=false then index=#pages end
+      index=math.max(1,math.min(#pages,index))
+      instanceUI.evidencePageIndex=index
+      instanceUI.evidenceFollowNewest=index==#pages
+      local page=pages[index] or ""
+      local viewName=detailedView and "FULL TRACE" or "STANDARD"
+      diagnosticText:SetText(string.format("|cff80dfffVIEW: %s|r  |  |cffffd100PAGE %d OF %d|r  |  %s\n\n%s",
+        viewName,index,#pages,EvidencePageRange(page),page))
+      if evidencePageLabel then evidencePageLabel:SetText(string.format("%s  |  %d/%d  |  %s",viewName,index,#pages,EvidencePageRange(page))) end
+      if evidenceOlder then if index>1 then evidenceOlder:Enable() else evidenceOlder:Disable() end; evidenceOlder:Show() end
+      if evidenceNewer then if index<#pages then evidenceNewer:Enable() else evidenceNewer:Disable() end; evidenceNewer:Show() end
+      if evidencePageLabel then evidencePageLabel:Show() end
+    else
+      diagnosticText:SetText(report)
+      if evidenceOlder then evidenceOlder:Hide() end
+      if evidenceNewer then evidenceNewer:Hide() end
+      if evidencePageLabel then evidencePageLabel:Hide() end
+    end
     diagnosticChild:SetHeight(math.max(500,diagnosticText:GetStringHeight()+20))
   end
   local diagnosticFooter=CreateFrame("Frame",nil,diagnosticPage); diagnosticFooter:SetPoint("BOTTOMLEFT",200,12); diagnosticFooter:SetPoint("BOTTOMRIGHT",-12,12); diagnosticFooter:SetHeight(28)
@@ -7656,12 +7810,20 @@ local function BuildInstances()
     local commands=RecoveryCommands(); if commands=="" then SetStatus("No recovery guidance was generated for this scan.",true); return end
     ShowSelectableReport("Temporary GM recovery commands",commands)
   end,"Copy verification, repair and recheck commands without executing them"); recoveryButton:SetPoint("LEFT",0,0)
-  fullRecordingButton=Button(diagnosticFooter,"Full Recording",96,22,function()
+  evidenceOlder=Button(diagnosticFooter,"< Older",64,22,function() SelectEvidencePage(-1) end,"Open the previous evidence page without changing the recording")
+  evidenceOlder:SetPoint("LEFT",0,0); evidenceOlder:Hide()
+  evidenceNewer=Button(diagnosticFooter,"Newer >",64,22,function() SelectEvidencePage(1) end,"Open the next evidence page")
+  evidenceNewer:SetPoint("LEFT",evidenceOlder,"RIGHT",4,0); evidenceNewer:Hide()
+  evidencePageLabel=diagnosticFooter:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall")
+  evidencePageLabel:SetPoint("LEFT",evidenceNewer,"RIGHT",6,0); evidencePageLabel:SetWidth(205); evidencePageLabel:SetJustifyH("LEFT"); evidencePageLabel:SetTextColor(unpack(C.gold)); evidencePageLabel:Hide()
+  fullRecordingButton=Button(diagnosticFooter,"Full Recording",112,22,function()
     local evidence=AzerCoreOpsDB and AzerCoreOpsDB.issueReportEvidence or {}
     local recordingWorkspace=evidence.before and instanceUI.diagnosticSubTab=="RECORDING"
     local savedWorkspace=instanceUI.diagnosticSubTab=="REPORTS"
     if recordingWorkspace or savedWorkspace then
       instanceUI.recordingView=instanceUI.recordingView=="FULL" and "STANDARD" or "FULL"
+      instanceUI.evidencePageIndex=nil
+      instanceUI.evidenceFollowNewest=true
       if diagnosticScroll then diagnosticScroll:SetVerticalScroll(0) end
       instanceUI.RenderDiagnostics()
       SetStatus(instanceUI.recordingView=="FULL" and
@@ -8080,7 +8242,7 @@ local function BuildDashboard()
   Button(quick,"Inspect Quest",150,30,function() SelectTab("Quest") end,"Open quest search and chain analysis"):SetPoint("TOPLEFT",174,-42)
   Button(quick,"Check Compatibility",150,30,function() RequestCompatibility(); OpenOptions() end,"Query the running AzerCoreOps module"):SetPoint("TOPLEFT",336,-42)
   Button(quick,"Information & Credits",170,30,function() SelectTab("Information") end,"View project links, credits, and acknowledgements"):SetPoint("TOPLEFT",498,-42)
-  local note=quick:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); note:SetPoint("TOPLEFT",12,-92); note:SetPoint("BOTTOMRIGHT",-12,12); note:SetJustifyH("LEFT"); note:SetJustifyV("TOP"); note:SetWordWrap(true); note:SetTextColor(unpack(C.white)); note:SetText("Development: v0.7.5f\n\nAzerCore Ops 0.7.5f introduces resumable instance-journey recording, manual-first controls, live progress, and profile-filtered encounter evidence. Courier remains under construction and is not included as an active feature.")
+  local note=quick:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall"); note:SetPoint("TOPLEFT",12,-92); note:SetPoint("BOTTOMRIGHT",-12,12); note:SetJustifyH("LEFT"); note:SetJustifyV("TOP"); note:SetWordWrap(true); note:SetTextColor(unpack(C.white)); note:SetText("Development: v0.7.5j\n\nAzerCore Ops 0.7.5j adds lightweight evidence paging, explicit Standard/Full Trace view status, responsive paged Export, and bounded Courier preview rendering for large reports.")
 end
 
 
@@ -8957,9 +9119,14 @@ events:SetScript("OnEvent",function(_,event,arg1)
       if requestId~=(tonumber(instanceUI.pendingHistoryRequest) or -1) then return end
       local purpose=instanceUI.pendingHistoryPurpose or "MANUAL"
       instanceUI.diagnostics.mode="HISTORY"
-      instanceUI.encounterHistory={entries={},mechanics={},stats={},loading=true,header=f,
-        summary=nil,error=nil,generatedAt=nil,requestId=requestId,purpose=purpose}
-      if instanceUI.RenderDiagnostics then instanceUI.RenderDiagnostics() end
+      local previous=instanceUI.encounterHistory or {}
+      local live=purpose=="RECORDING_LIVE"
+      instanceUI.encounterHistory={
+        entries=live and (previous.entries or {}) or {},
+        mechanics=live and (previous.mechanics or {}) or {},
+        stats={},
+        loading=true,header=f,summary=nil,error=nil,generatedAt=nil,
+        requestId=requestId,purpose=purpose}
       SetStatus("Receiving encounter history for "..tostring(f.name or "current instance")..
         " (request "..tostring(requestId)..")...")
     elseif kind=="ENCOUNTER_HISTORY_ENTRY" then
@@ -8967,10 +9134,13 @@ events:SetScript("OnEvent",function(_,event,arg1)
       if requestId~=(tonumber(instanceUI.pendingHistoryRequest) or -1) then return end
       instanceUI.encounterHistory.entries=instanceUI.encounterHistory.entries or {}
       table.insert(instanceUI.encounterHistory.entries,f)
-      if instanceUI.RenderDiagnostics then instanceUI.RenderDiagnostics() end
     elseif kind=="MECHANIC_EVENT" then
       local requestId=tonumber(f.request) or 0
       if requestId~=(tonumber(instanceUI.pendingHistoryRequest) or -1) then return end
+      local sequence=tonumber(f.seq) or 0
+      if sequence>(tonumber(instanceUI.recordingLastMechanicSequence) or 0) then
+        instanceUI.recordingLastMechanicSequence=sequence
+      end
       local detail=tostring(Settings().recordingDetailLevel or "STANDARD"):upper()
       local event=tostring(f.event or "")
       local traceOnly=event=="SCRIPT_CAST" or event=="AURA_APPLIED" or event=="AURA_REMOVED"
@@ -8992,14 +9162,12 @@ events:SetScript("OnEvent",function(_,event,arg1)
       if keep then
         instanceUI.encounterHistory.mechanics=instanceUI.encounterHistory.mechanics or {}
         table.insert(instanceUI.encounterHistory.mechanics,f)
-        if instanceUI.RenderDiagnostics then instanceUI.RenderDiagnostics() end
       end
     elseif kind=="ENCOUNTER_HISTORY_STATS" then
       local requestId=tonumber(f.request) or 0
       if requestId~=(tonumber(instanceUI.pendingHistoryRequest) or -1) then return end
       instanceUI.encounterHistory.stats=instanceUI.encounterHistory.stats or {}
       table.insert(instanceUI.encounterHistory.stats,f)
-      if instanceUI.RenderDiagnostics then instanceUI.RenderDiagnostics() end
     elseif kind=="ENCOUNTER_HISTORY_END" then
       local requestId=tonumber(f.request) or 0
       if requestId~=(tonumber(instanceUI.pendingHistoryRequest) or -1) then return end
@@ -9013,7 +9181,9 @@ events:SetScript("OnEvent",function(_,event,arg1)
       instanceUI.encounterHistory.requestId=requestId
       instanceUI.pendingHistoryRequest=nil
       instanceUI.pendingHistoryPurpose=nil
-      if instanceUI.RenderDiagnostics then instanceUI.RenderDiagnostics() end
+      if instanceUI.RenderDiagnostics and (purpose~="RECORDING_LIVE" or diagnosticControls:IsShown()) then
+        instanceUI.RenderDiagnostics()
+      end
       if instanceUI.captureFlow and
         tonumber(instanceUI.captureFlow.historyRequest)==requestId then
         instanceUI.CompleteEvidenceCapture()

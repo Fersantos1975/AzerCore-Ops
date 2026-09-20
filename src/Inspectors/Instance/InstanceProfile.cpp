@@ -42,7 +42,7 @@ std::vector<InstanceProfile> const& InstanceProfileCatalog::All()
             },
             {
                 {2, {NOT_STARTED, TO_BE_DECIDED}, "Gunship is initialized by the post-Deathwhisper script", {1}},
-                {7, {NOT_STARTED, TO_BE_DECIDED}, "Blood Council is initialized after its trash event completes", {14}},
+                {7, {NOT_STARTED, FAIL, TO_BE_DECIDED}, "Blood Council may remain NOT_STARTED or report FAIL until its trash event completes", {14}},
                 {11, {NOT_STARTED, TO_BE_DECIDED}, "Sindragosa is initialized by the Frostwing gauntlet and frostwyrm events", {13}},
                 {12, {NOT_STARTED, TO_BE_DECIDED}, "The Lich King is initialized after all three wing sigils are complete", {6, 8, 11}},
                 {13, {NOT_STARTED, TO_BE_DECIDED}, "Sindragosa's gauntlet is initialized after Frostwing progression", {10}},
